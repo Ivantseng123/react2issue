@@ -1,182 +1,141 @@
-# Slack Issue Bot
+# react2issue
 
 [繁體中文](README.md)
 
-Slack emoji reactions trigger automatic GitHub issue creation with AI-powered codebase triage.
-
-## How It Works
-
-1. Someone posts a bug report or feature request in a Slack channel
-2. A team member reacts with a configured emoji (e.g., `:bug:` or `:rocket:`)
-3. The bot replies **in the message thread**:
-   - Shows repo selector (searchable dropdown or buttons)
-   - Shows branch selector (if enabled)
-   - Clones/pulls the GitHub repo
-   - Runs AI diagnosis engine to analyze the codebase
-   - **Rejection check** — if the report is too vague, replies asking for clarification instead of creating an issue
-   - Creates a GitHub issue with clickable file links and posts the URL in thread
-
-## Features
-
-- **Thread-based interaction** — all bot messages stay in the original message's thread
-- **Multi-repo support** — one channel can map to multiple repos via button or searchable dropdown
-- **Branch selection** — optionally pick which branch to analyze
-- **Cross-repo awareness** — reads README/CLAUDE.md/agent.md to understand repo context and relationships
-- **Rejection mechanism** — refuses to create issues when the report is too vague (no related files, too many unknowns, or low confidence)
-- **GitHub file links** — file references in issues are clickable links to the actual source
-- **LLM fallback chain** — multiple providers with per-provider retry and timeout
-- **CLI provider** — integrate any CLI tool (claude, opencode, etc.) with your own subscription, zero API cost
-- **Lite mode** — grep-only triage with zero LLM cost
-- **Rate limiting** — per-user and per-channel throttling
-- **Auto-bind** — bot auto-registers when joining a channel, no manual config needed
-- **Response caching** — identical messages within TTL return cached results
-
-## Prerequisites
-
-| Item | How to Get |
-|------|-----------|
-| Go 1.22+ | [go.dev/dl](https://go.dev/dl/) |
-| Slack App | [api.slack.com/apps](https://api.slack.com/apps) |
-| GitHub PAT | GitHub Settings > Developer settings > Personal access tokens |
-| LLM Provider | CLI tool / API key (Anthropic/OpenAI) / Ollama (free) |
-
-### Slack App Setup
-
-1. Create a new app at [api.slack.com/apps](https://api.slack.com/apps)
-2. **OAuth & Permissions** — add Bot Token Scopes:
-   - `reaction_read`, `channels:history`, `chat:write`, `users:read`, `channels:read`
-   - For private channels: `groups:history`, `groups:read`
-3. **Socket Mode** — enable it
-4. **Basic Information** — generate an App-Level Token with scope `connections:write` (gives you the `xapp-` token)
-5. **Event Subscriptions** — subscribe to `reaction_added` bot event
-   - For auto-bind: also subscribe to `member_joined_channel`, `member_left_channel`
-6. **Install to Workspace** — copy the `xoxb-` Bot Token
+Slack reaction → AI codebase triage → GitHub Issue. Single Go binary, Socket Mode (no public URL needed).
 
 ## Quick Start
 
 ```bash
 cp config.example.yaml config.yaml
-# Edit config.yaml with your tokens
-
-# Run
+# Fill in Slack / GitHub / LLM tokens
 go run ./cmd/bot/
-# or
-./run.sh
+```
+
+## Flow
+
+```
+reaction event → dedup + rate limit → repo/branch selection (in thread)
+  → pre-grep (original keywords) → agent loop (LLM calls tools) → triage card
+  → confidence=low? reject : files=0? issue without triage : full issue
+  → post issue URL in thread
 ```
 
 ## Configuration
 
-See `config.example.yaml` for all options. Key sections:
+See `config.example.yaml` for all options.
 
 ```yaml
-auto_bind: true                       # Auto-register when bot joins a channel
+auto_bind: true                       # auto-register when bot joins a channel
 
-channel_defaults:                     # Defaults for auto-bound channels
+channel_defaults:
   branch_select: true
   default_labels: ["from-slack"]
 
-channels:                             # Static channel config (optional)
+channels:                             # static binding (optional with auto_bind)
   C05XXXXXX:
-    repos:                            # Multiple repos -> button selector in Slack
-      - "org/backend"
-      - "org/frontend"
-    branch_select: true               # Show branch picker
-    default_labels: ["from-slack"]
+    repos: ["org/backend", "org/frontend"]
+    branch_select: true
 
-reactions:                            # Emoji mappings
-  bug:
-    type: "bug"
-    issue_labels: ["bug", "triage"]
-    issue_title_prefix: "[Bug]"
-  rocket:
-    type: "feature"
-    issue_labels: ["enhancement"]
-    issue_title_prefix: "[Feature]"
+reactions:
+  bug:    { type: "bug",     issue_labels: ["bug", "triage"], issue_title_prefix: "[Bug]" }
+  rocket: { type: "feature", issue_labels: ["enhancement"],   issue_title_prefix: "[Feature]" }
 
 llm:
+  timeout: 60s                        # global default
   providers:
-    - name: "cli"
-      command: "claude"               # Any CLI tool with --print support
+    - name: "cli"                     # CLI provider: any tool with --print or stdin
+      command: "claude"
       args: ["--print", "{prompt}"]
-      timeout: 5m                     # CLI needs more time than API
+      timeout: 5m
       max_retries: 3
-
-    - name: "claude"                  # API fallback
+    - name: "claude"                  # Anthropic API
       api_key: "sk-ant-..."
       model: "claude-sonnet-4-20250514"
       base_url: "https://api.anthropic.com"
       max_retries: 3
-  timeout: 60s                        # Global default (per-provider overrides this)
+    - name: "openai"                  # OpenAI-compatible API
+      api_key: "sk-..."
+      model: "gpt-4o"
+      base_url: "https://api.openai.com"
+    - name: "ollama"                  # Local LLM
+      model: "llama3"
+      base_url: "http://localhost:11434"
 
 diagnosis:
-  mode: "full"                        # "full" (uses LLM) or "lite" (grep only)
-  max_turns: 5                        # Max agent loop iterations
-  max_tokens: 100000                  # Token budget limit
-  cache_ttl: 10m                      # Response cache TTL (0 = no caching)
+  mode: "full"                        # "full" | "lite" (grep only, 0 tokens)
+  max_turns: 5                        # agent loop turn limit
+  max_tokens: 100000                  # token budget
+  cache_ttl: 10m                      # cache identical messages (0 = no cache)
   prompt:
-    language: "English"               # AI output language (empty = English)
-    extra_rules: []                   # Extra rules appended to the system prompt
+    language: "English"               # output language (empty = English)
+    extra_rules: []                   # appended to system prompt verbatim
 ```
 
 ### extra_rules
 
-`extra_rules` is a string array. Each entry is appended verbatim to the end of the AI system prompt. Use it to customize AI behavior for your team or project:
+String array, appended verbatim to the system prompt. Customize AI behavior:
 
 ```yaml
 extra_rules:
   - "List all related file names with full paths"
   - "If the change involves database updates, mention migration in Direction"
   - "If related unit test files are found, include them"
-  - "Always mention if the change requires a config update"
 ```
-
-### Diagnosis Modes
-
-| Mode | LLM Cost | Description |
-|------|----------|-------------|
-| `full` | tokens per trigger | Agent loop: LLM uses tools (grep, read_file, etc.) in multi-turn conversation until diagnosis complete |
-| `lite` | **0 tokens** | Grep only, creates issue with file references for engineer's own AI |
-
-### Rejection & Graceful Degradation
-
-The core value of this tool is **structuring Slack conversations into issues**, lowering the barrier for non-engineers to create useful issues. AI triage is a bonus, not a requirement.
-
-| Situation | Behavior |
-|-----------|----------|
-| AI analysis succeeds (files found, confidence OK) | Create issue with full AI Triage section |
-| AI finds no files / too many open questions, but confidence is not low | Create issue, **skip AI Triage section** (keep original message + Channel + Reporter only) |
-| `confidence = low` | **Reject** (likely wrong repo or completely irrelevant) |
-
-When rejected, the bot replies in thread asking the reporter to verify the repo or refine their description.
 
 ### CLI Provider
 
-Integrate any CLI tool that supports stdin or `--print` mode, using your own subscription at zero API cost:
+`{prompt}` is a placeholder — embedded in args when < 32KB, otherwise piped via stdin. No `{prompt}` in args = always stdin.
 
 ```yaml
-# Example: Claude Code CLI
-- name: "cli"
-  command: "claude"
-  args: ["--print", "{prompt}"]
-  timeout: 5m
-
-# Example: other CLI tools (prompt via stdin)
+# Any tool that reads from stdin works
 - name: "cli"
   command: "my-ai-tool"
   args: []
   timeout: 3m
 ```
 
-`{prompt}` is a placeholder — when prompt < 32KB it's embedded in args, otherwise sent via stdin. If args contain no `{prompt}`, stdin is always used.
-
-### Environment Variable Overrides
+### Environment Variables
 
 ```bash
-export SLACK_BOT_TOKEN="xoxb-..."
-export SLACK_APP_TOKEN="xapp-..."
-export GITHUB_TOKEN="ghp_..."
-export LLM_CLAUDE_API_KEY="sk-ant-..."
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+GITHUB_TOKEN=ghp_...
+LLM_CLAUDE_API_KEY=sk-ant-...    # format: LLM_{NAME}_API_KEY
 ```
+
+## Rejection / Degradation
+
+| Situation | Behavior |
+|-----------|----------|
+| Triage succeeds | Issue + AI triage section |
+| `files=0` or `questions>=5`, confidence not low | Issue, skip triage section |
+| `confidence=low` | Reject (likely wrong repo) |
+
+## Diagnosis Engine
+
+Agent loop — LLM decides which tools to call:
+
+```
+1. Pre-grep (free)
+   Original keyword git grep → catches non-English hits
+
+2. Agent Loop (max_turns rounds)
+   LLM sees pre-grep results + 6 tools → calls tools → engine executes → results back
+   → until LLM produces triage card or turns exhausted (forced finish)
+
+3. Output: triage card JSON
+   summary / files / direction / open_questions / confidence
+```
+
+| Tool | Description |
+|------|-------------|
+| `grep` | `git grep -rli` file search |
+| `read_file` | Read file content (cap 200 lines) |
+| `list_files` | `git ls-files` (cap 500) |
+| `read_context` | Read README.md / CLAUDE.md / agent.md |
+| `search_code` | Regex search + context lines |
+| `git_log` | Recent commits |
 
 ## Issue Output Example
 
@@ -186,24 +145,60 @@ export LLM_CLAUDE_API_KEY="sk-ant-..."
 > Login page crashes when clicking submit with empty password
 
 ### AI Triage
-
-The login form submission handler lacks empty field validation before calling the auth API
+Login form submission lacks empty field validation before calling auth API
 
 ### Related Files
-
-- [`LoginPage.vue`](https://github.com/example/webapp/blob/main/src/pages/LoginPage.vue) — Login page component with form submit logic
-- [`auth.api.js`](https://github.com/example/webapp/blob/main/src/api/auth.api.js) — Auth API calls, may need input validation
-- [`validation.js`](https://github.com/example/webapp/blob/main/src/utils/validation.js) — Existing form validation utils, can be referenced
+- [`LoginPage.vue`](https://github.com/example/webapp/blob/main/src/pages/LoginPage.vue) — Login page with form submit logic
+- [`auth.api.js`](https://github.com/example/webapp/blob/main/src/api/auth.api.js) — Auth API calls
+- [`validation.js`](https://github.com/example/webapp/blob/main/src/utils/validation.js) — Form validation utils, reference for patterns
 
 ### Direction
-
-- Add empty field validation in LoginPage.vue before form submit, reference validation.js for patterns
-- Check if auth.api.js has server-side validation as a fallback
+- Add empty field validation in LoginPage.vue before submit, reference validation.js
+- Check if auth.api.js has server-side validation as fallback
 
 ### Needs Clarification
+- All browsers or specific ones?
+- Error message displayed or page just freezes?
+```
 
-- Does the crash happen on all browsers or just specific ones?
-- Is there an error message displayed, or does the page just freeze?
+## Slack App Setup
+
+Bot Token Scopes:
+- `reaction_read`, `channels:history`, `chat:write`, `users:read`, `channels:read`
+- Private channels: `groups:history`, `groups:read`
+
+Event Subscriptions:
+- `reaction_added`
+- Auto-bind: `member_joined_channel`, `member_left_channel`
+
+Socket Mode enabled, App-Level Token scope `connections:write`.
+
+## Architecture
+
+```
+cmd/bot/main.go           # entry point, Socket Mode event loop
+internal/
+  bot/workflow.go          # reaction → repo/branch selection → rejection → issue
+  diagnosis/
+    engine.go              # agent loop + cache + lite mode
+    loop.go                # pre-grep → LLM tool calls → forced finish
+    tools.go               # grep, read_file, list_files, read_context, search_code, git_log
+    cache.go               # in-memory TTL cache
+  llm/
+    provider.go            # ConversationProvider, ChatFallbackChain
+    claude.go              # Anthropic native tool use
+    openai.go              # OpenAI function calling
+    cli.go                 # JSON-in-text tool simulation
+    ollama.go              # JSON-in-text tool simulation
+    prompt.go              # system prompt + tool descriptions
+  slack/
+    client.go              # PostMessage, PostSelector, PostExternalSelector
+    handler.go             # dedup, rate limit, concurrency
+  github/
+    issue.go               # issue body formatter + file permalinks
+    repo.go                # clone, fetch, branch, checkout
+    discovery.go           # GitHub API repo listing + cache
+  config/config.go         # YAML config + env overrides
 ```
 
 ## Testing
@@ -212,63 +207,13 @@ The login form submission handler lacks empty field validation before calling th
 go test ./...   # 76 tests
 ```
 
-## Docker
+## Build
 
 ```bash
-docker build -t slack-issue-bot .
-docker run -v $(pwd)/config.yaml:/config.yaml slack-issue-bot
+./run.sh
+# or
+go build -o bot ./cmd/bot/ && ./bot -config config.yaml
 ```
-
-## Architecture
-
-```
-Slack reaction -> Socket Mode -> Handler (dedup + rate limit + concurrency)
-  -> Workflow (repo/branch selection via thread buttons)
-    -> Diagnosis Engine
-    -> Rejection check (files=0, questions>=5, confidence=low)
-    -> GitHub Issue (clickable file links) -> Post URL in thread
-```
-
-### Diagnosis Engine
-
-The engine uses an **agent loop** — an LLM-driven multi-turn conversation where the model decides which tools to use and when it has enough information to produce a triage card.
-
-```
-1. Pre-grep (free, no LLM call)
-   Extract keywords from the original Slack message and run git grep.
-   This catches non-English terms (e.g. Chinese) that the LLM might miss
-   when translating to English identifiers.
-
-2. Agent Loop (up to max_turns, default 5)
-   The LLM sees the pre-grep results + available tools and decides:
-   +----------------------------------------------------+
-   |  LLM: "I want to read sectionInfo.vue"             |
-   |  Engine: executes read_file, returns content        |
-   |  LLM: "I need to grep for unitno"                  |
-   |  Engine: executes grep, returns file list           |
-   |  LLM: "I have enough info -> triage card"          |
-   +----------------------------------------------------+
-
-3. Output: Triage Card (JSON)
-   summary, related files, direction, open questions, confidence level
-```
-
-**Available tools (6):**
-
-| Tool | Purpose |
-|------|---------|
-| `grep` | Find which files mention a term (broad discovery) |
-| `read_file` | Read file content with line numbers |
-| `list_files` | List repo file tree (`git ls-files`) |
-| `read_context` | Read README.md, CLAUDE.md, agent.md for repo context |
-| `search_code` | Regex search with surrounding context lines |
-| `git_log` | View recent commits |
-
-**Why agent loop instead of a fixed pipeline:**
-- LLM adapts its strategy per report — a clear report might need 2 turns, a vague one uses all 5
-- Non-English messages are handled naturally — the LLM translates as part of its reasoning
-- The pre-grep ensures original-language keyword hits are never missed
-- Repos with better documentation (README, CLAUDE.md) produce more accurate triage
 
 ## License
 
