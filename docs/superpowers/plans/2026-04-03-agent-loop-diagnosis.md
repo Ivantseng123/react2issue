@@ -276,7 +276,7 @@ func TestChatFallbackChain_DefaultRetries(t *testing.T) {
 
 - [ ] **Step 3: Run tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./internal/llm/ -run TestChatFallback -v`
+Run: `cd . && go test ./internal/llm/ -run TestChatFallback -v`
 Expected: All 5 tests PASS
 
 - [ ] **Step 4: Commit**
@@ -509,7 +509,7 @@ func ParseLLMTextResponse(text string) (DiagnoseResponse, error) {
 
 - [ ] **Step 2: Run tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go build ./...`
+Run: `cd . && go build ./...`
 Expected: Build succeeds (may have compile errors in other files referencing old Provider — fix in later tasks)
 
 - [ ] **Step 3: Commit**
@@ -999,12 +999,12 @@ func (o *OllamaProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 
 The existing `buildArgs` tests remain valid. Just update the import if needed (the function signature hasn't changed).
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./internal/llm/ -run TestBuildArgs -v`
+Run: `cd . && go test ./internal/llm/ -run TestBuildArgs -v`
 Expected: PASS
 
 - [ ] **Step 4: Add uuid dependency**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go get github.com/google/uuid`
+Run: `cd . && go get github.com/google/uuid`
 
 - [ ] **Step 5: Commit**
 
@@ -1035,7 +1035,7 @@ type DiagnosisConfig struct {
 
 - [ ] **Step 2: Run tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./internal/config/ -v`
+Run: `cd . && go test ./internal/config/ -v`
 Expected: PASS
 
 - [ ] **Step 3: Commit**
@@ -1637,7 +1637,7 @@ func containsStr(s, sub string) bool {
 
 - [ ] **Step 3: Run tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./internal/diagnosis/ -run TestGrep -v && go test ./internal/diagnosis/ -run TestRead -v && go test ./internal/diagnosis/ -run TestList -v && go test ./internal/diagnosis/ -run TestSearch -v && go test ./internal/diagnosis/ -run TestGitLog -v`
+Run: `cd . && go test ./internal/diagnosis/ -run TestGrep -v && go test ./internal/diagnosis/ -run TestRead -v && go test ./internal/diagnosis/ -run TestList -v && go test ./internal/diagnosis/ -run TestSearch -v && go test ./internal/diagnosis/ -run TestGitLog -v`
 Expected: All PASS
 
 - [ ] **Step 4: Commit**
@@ -1896,7 +1896,7 @@ func TestCache_DifferentKeys(t *testing.T) {
 
 - [ ] **Step 3: Run tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./internal/diagnosis/ -run TestCache -v`
+Run: `cd . && go test ./internal/diagnosis/ -run TestCache -v`
 Expected: All PASS
 
 - [ ] **Step 4: Commit**
@@ -2295,7 +2295,7 @@ func lookPath(cmd string) (string, error) {
 
 - [ ] **Step 3: Run tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./internal/diagnosis/ -run TestRunLoop -v`
+Run: `cd . && go test ./internal/diagnosis/ -run TestRunLoop -v`
 Expected: All PASS
 
 - [ ] **Step 4: Commit**
@@ -2592,7 +2592,7 @@ func TestEngine_FindFiles(t *testing.T) {
 
 - [ ] **Step 3: Run all diagnosis tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./internal/diagnosis/ -v`
+Run: `cd . && go test ./internal/diagnosis/ -v`
 Expected: All PASS
 
 - [ ] **Step 4: Commit**
@@ -2694,12 +2694,12 @@ In `workflow.go`'s `createIssue()`, add at the start of the function, right afte
 
 - [ ] **Step 3: Build and verify**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go build ./...`
+Run: `cd . && go build ./...`
 Expected: Build succeeds with no errors
 
 - [ ] **Step 4: Run all tests**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./...`
+Run: `cd . && go test ./...`
 Expected: All tests PASS
 
 - [ ] **Step 5: Commit**
@@ -2780,7 +2780,7 @@ Update the diagnosis description to mention the agent loop approach.
 
 - [ ] **Step 4: Run final test suite**
 
-Run: `cd /Users/ivantseng/local_file/slack-issue-bot && go test ./... -v`
+Run: `cd . && go test ./... -v`
 Expected: All tests PASS
 
 - [ ] **Step 5: Commit**

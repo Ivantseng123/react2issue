@@ -1,6 +1,6 @@
 #!/bin/bash
-cd /Users/ivantseng/local_file/slack-issue-bot
+cd "$(dirname "$0")"
 echo "Building..."
 go build -o bot ./cmd/bot/ || exit 1
-echo "Starting slack-issue-bot..."
+echo "Starting react2issue..."
 exec ./bot -config config.yaml
