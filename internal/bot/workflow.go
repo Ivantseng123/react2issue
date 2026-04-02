@@ -14,8 +14,6 @@ import (
 	slackclient "slack-issue-bot/internal/slack"
 )
 
-const repoSelectCallbackID = "repo_select"
-
 // pendingIssue stores context between the reaction event and the repo selection callback.
 type pendingIssue struct {
 	Event       slackclient.ReactionEvent
@@ -107,7 +105,7 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		ChannelName: channelName,
 	}
 
-	selectorTS, err := w.slack.PostRepoSelector(event.ChannelID, repos, repoSelectCallbackID)
+	selectorTS, err := w.slack.PostRepoSelector(event.ChannelID, repos)
 	if err != nil {
 		w.notifyError(event.ChannelID, "Failed to show repo selector: %v", err)
 		return
@@ -120,38 +118,60 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 	w.mu.Unlock()
 }
 
-// HandleRepoSelection is called when a user clicks a repo button.
-func (w *Workflow) HandleRepoSelection(channelID, selectedRepo, selectorMsgTS string) {
+// NumberEmojiToIndex maps Slack number emoji names to indices.
+var numberEmojis = []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
+
+// HandleRepoSelectionReaction is called when a user reacts with a number emoji
+// on a repo selector message.
+func (w *Workflow) HandleRepoSelectionReaction(channelID, messageTS, reaction, userID string) {
+	// Find the pending issue by selector message TS
 	w.mu.Lock()
 	var pi *pendingIssue
 	var foundKey string
 	for key, p := range w.pending {
-		if p.SelectorTS == selectorMsgTS && p.Event.ChannelID == channelID {
+		if p.SelectorTS == messageTS && p.Event.ChannelID == channelID {
 			pi = p
 			foundKey = key
 			break
 		}
 	}
-	if foundKey != "" {
-		delete(w.pending, foundKey)
-	}
-	w.mu.Unlock()
-
 	if pi == nil {
-		slog.Warn("no pending issue found for repo selection", "selectorTS", selectorMsgTS)
+		w.mu.Unlock()
+		return // not a selector message, ignore
+	}
+
+	// Map emoji to repo index
+	idx := -1
+	for i, e := range numberEmojis {
+		if e == reaction {
+			idx = i
+			break
+		}
+	}
+
+	repos := pi.ChannelCfg.GetRepos()
+	if idx < 0 || idx >= len(repos) {
+		w.mu.Unlock()
+		return // invalid emoji
+	}
+
+	// Only process if user is the one who triggered (not the bot's pre-added reactions)
+	if userID == "" {
+		w.mu.Unlock()
 		return
 	}
 
-	// Replace the button message with a confirmation
-	w.slack.UpdateMessage(channelID, selectorMsgTS,
+	delete(w.pending, foundKey)
+	w.mu.Unlock()
+
+	selectedRepo := repos[idx]
+
+	// Update the selector message
+	w.slack.UpdateMessage(channelID, messageTS,
 		fmt.Sprintf(":white_check_mark: Selected repo: `%s`", selectedRepo))
 
+	slog.Info("repo selected via reaction", "repo", selectedRepo, "user", userID)
 	w.createIssue(pi.Event, pi.ReactionCfg, pi.ChannelCfg, selectedRepo, pi.Message, pi.Reporter, pi.ChannelName)
-}
-
-// RepoSelectCallbackID returns the callback ID used for repo selection buttons.
-func (w *Workflow) RepoSelectCallbackID() string {
-	return repoSelectCallbackID
 }
 
 func (w *Workflow) createIssue(

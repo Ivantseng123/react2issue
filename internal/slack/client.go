@@ -70,32 +70,32 @@ func (c *Client) GetChannelName(channelID string) string {
 	return "#" + info.Name
 }
 
-// PostRepoSelector sends a message with buttons for the user to pick a repo.
-// Returns the message timestamp (for later updating the message).
-func (c *Client) PostRepoSelector(channelID string, repos []string, actionPrefix string) (string, error) {
-	var buttons []slack.BlockElement
+// PostRepoSelector sends a message asking the user to pick a repo by reacting with a number emoji.
+// Returns the message timestamp.
+func (c *Client) PostRepoSelector(channelID string, repos []string) (string, error) {
+	numberEmojis := []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
+
+	var sb strings.Builder
+	sb.WriteString(":point_right: *Which repo should this issue go to?*\n\n")
 	for i, repo := range repos {
-		// Each button needs a unique action_id
-		actionID := fmt.Sprintf("%s_%d", actionPrefix, i)
-		buttons = append(buttons, slack.NewButtonBlockElement(
-			actionID,
-			repo,
-			slack.NewTextBlockObject(slack.PlainTextType, repo, false, false),
-		))
+		if i < len(numberEmojis) {
+			sb.WriteString(fmt.Sprintf(":%s:  `%s`\n", numberEmojis[i], repo))
+		}
 	}
+	sb.WriteString("\n_React with the number emoji to select._")
 
-	section := slack.NewSectionBlock(
-		slack.NewTextBlockObject(slack.MarkdownType, ":point_right: Which repo should this issue go to?", false, false),
-		nil, nil,
-	)
-	actions := slack.NewActionBlock("repo_selector", buttons...)
-
-	_, ts, err := c.api.PostMessage(channelID,
-		slack.MsgOptionBlocks(section, actions),
-	)
+	_, ts, err := c.api.PostMessage(channelID, slack.MsgOptionText(sb.String(), false))
 	if err != nil {
 		return "", fmt.Errorf("post repo selector: %w", err)
 	}
+
+	// Pre-add the number reactions so user just clicks one
+	for i := range repos {
+		if i < len(numberEmojis) {
+			c.api.AddReaction(numberEmojis[i], slack.ItemRef{Channel: channelID, Timestamp: ts})
+		}
+	}
+
 	return ts, nil
 }
 

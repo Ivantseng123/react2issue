@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/slack-go/slack"
@@ -110,6 +109,10 @@ func main() {
 					innerEvent := eventsAPIEvent.InnerEvent
 					switch ev := innerEvent.Data.(type) {
 					case *slackevents.ReactionAddedEvent:
+						// First: check if this is a repo selection reaction (number emoji on selector message)
+						go wf.HandleRepoSelectionReaction(ev.Item.Channel, ev.Item.Timestamp, ev.Reaction, ev.User)
+
+						// Then: check if this is a trigger reaction (bug/rocket on a regular message)
 						handler.HandleReaction(slackclient.ReactionEvent{
 							EventID:   evt.Request.EnvelopeID,
 							Reaction:  ev.Reaction,
@@ -117,24 +120,6 @@ func main() {
 							MessageTS: ev.Item.Timestamp,
 							UserID:    ev.User,
 						})
-					}
-				}
-
-			case socketmode.EventTypeInteractive:
-				socketClient.Ack(*evt.Request)
-				callback, ok := evt.Data.(slack.InteractionCallback)
-				if !ok {
-					continue
-				}
-				if callback.Type == slack.InteractionTypeBlockActions {
-					for _, action := range callback.ActionCallback.BlockActions {
-						if strings.HasPrefix(action.ActionID, wf.RepoSelectCallbackID()) {
-							go wf.HandleRepoSelection(
-								callback.Channel.ID,
-								action.Value,
-								callback.Message.Timestamp,
-							)
-						}
 					}
 				}
 			}
