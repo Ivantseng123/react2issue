@@ -48,6 +48,8 @@ func NewFallbackChain(providers []Provider, maxRetries int) *FallbackChain {
 	return &FallbackChain{providers: providers, maxRetries: maxRetries}
 }
 
+func (fc *FallbackChain) Name() string { return "fallback-chain" }
+
 func (fc *FallbackChain) Diagnose(ctx context.Context, req DiagnoseRequest) (DiagnoseResponse, error) {
 	var errs []string
 	for _, p := range fc.providers {
