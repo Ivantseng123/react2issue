@@ -2,9 +2,11 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"slack-issue-bot/internal/config"
 	"slack-issue-bot/internal/diagnosis"
@@ -13,12 +15,27 @@ import (
 	slackclient "slack-issue-bot/internal/slack"
 )
 
+const repoSelectCallbackID = "repo_select"
+
+// pendingIssue stores context between the reaction event and the repo selection callback.
+type pendingIssue struct {
+	Event       slackclient.ReactionEvent
+	ReactionCfg config.ReactionConfig
+	ChannelCfg  config.ChannelConfig
+	Message     string
+	Reporter    string
+	ChannelName string
+}
+
 type Workflow struct {
 	cfg         *config.Config
 	slack       *slackclient.Client
 	issueClient *ghclient.IssueClient
 	repoCache   *ghclient.RepoCache
 	diagEngine  *diagnosis.Engine
+
+	mu      sync.Mutex
+	pending map[string]*pendingIssue // key: channelID:messageTS
 }
 
 func NewWorkflow(
@@ -34,12 +51,11 @@ func NewWorkflow(
 		issueClient: issueClient,
 		repoCache:   repoCache,
 		diagEngine:  diagEngine,
+		pending:     make(map[string]*pendingIssue),
 	}
 }
 
 func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
-	ctx := context.Background()
-
 	channelCfg, ok := w.cfg.Channels[event.ChannelID]
 	if !ok {
 		slog.Debug("channel not configured, ignoring", "channel", event.ChannelID)
@@ -52,12 +68,11 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		return
 	}
 
-	slog.Info("processing reaction event",
-		"channel", event.ChannelID,
-		"reaction", event.Reaction,
-		"type", reactionCfg.Type,
-		"repo", channelCfg.Repo,
-	)
+	repos := channelCfg.GetRepos()
+	if len(repos) == 0 {
+		slog.Warn("no repos configured for channel", "channel", event.ChannelID)
+		return
+	}
 
 	message, err := w.slack.FetchMessage(event.ChannelID, event.MessageTS)
 	if err != nil {
@@ -68,9 +83,85 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 	reporter := w.slack.ResolveUser(event.UserID)
 	channelName := w.slack.GetChannelName(event.ChannelID)
 
-	repoPath, err := w.repoCache.EnsureRepo(channelCfg.Repo)
+	slog.Info("processing reaction event",
+		"channel", event.ChannelID,
+		"reaction", event.Reaction,
+		"type", reactionCfg.Type,
+		"repos", repos,
+	)
+
+	// Single repo: proceed directly
+	if len(repos) == 1 {
+		w.createIssue(event, reactionCfg, channelCfg, repos[0], message, reporter, channelName)
+		return
+	}
+
+	// Multiple repos: store context and send selector buttons
+	key := event.ChannelID + ":" + event.MessageTS
+	pi := &pendingIssue{
+		Event:       event,
+		ReactionCfg: reactionCfg,
+		ChannelCfg:  channelCfg,
+		Message:     message,
+		Reporter:    reporter,
+		ChannelName: channelName,
+	}
+
+	w.mu.Lock()
+	w.pending[key] = pi
+	w.mu.Unlock()
+
+	metadata, _ := json.Marshal(map[string]string{
+		"channel_id": event.ChannelID,
+		"message_ts": event.MessageTS,
+	})
+
+	if err := w.slack.PostRepoSelector(event.ChannelID, repos, repoSelectCallbackID, string(metadata)); err != nil {
+		w.notifyError(event.ChannelID, "Failed to show repo selector: %v", err)
+	}
+}
+
+// HandleRepoSelection is called when a user clicks a repo button.
+func (w *Workflow) HandleRepoSelection(channelID, messageTS, selectedRepo, selectorMsgTS string) {
+	// Parse the pending key from the action
+	key := channelID + ":" + messageTS
+
+	w.mu.Lock()
+	pi, ok := w.pending[key]
+	if ok {
+		delete(w.pending, key)
+	}
+	w.mu.Unlock()
+
+	if !ok {
+		slog.Warn("no pending issue found for repo selection", "key", key)
+		return
+	}
+
+	// Replace the button message with a confirmation
+	w.slack.UpdateMessage(pi.Event.ChannelID, selectorMsgTS,
+		fmt.Sprintf(":white_check_mark: Selected repo: `%s`", selectedRepo))
+
+	w.createIssue(pi.Event, pi.ReactionCfg, pi.ChannelCfg, selectedRepo, pi.Message, pi.Reporter, pi.ChannelName)
+}
+
+// RepoSelectCallbackID returns the callback ID used for repo selection buttons.
+func (w *Workflow) RepoSelectCallbackID() string {
+	return repoSelectCallbackID
+}
+
+func (w *Workflow) createIssue(
+	event slackclient.ReactionEvent,
+	reactionCfg config.ReactionConfig,
+	channelCfg config.ChannelConfig,
+	repoRef string,
+	message, reporter, channelName string,
+) {
+	ctx := context.Background()
+
+	repoPath, err := w.repoCache.EnsureRepo(repoRef)
 	if err != nil {
-		w.notifyError(event.ChannelID, "Failed to access repo %s: %v", channelCfg.Repo, err)
+		w.notifyError(event.ChannelID, "Failed to access repo %s: %v", repoRef, err)
 		return
 	}
 
@@ -94,20 +185,19 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		if diagErr != nil {
 			slog.Warn("AI diagnosis failed, falling back to lite mode", "error", diagErr)
 			w.slack.PostMessage(event.ChannelID, ":warning: AI diagnosis unavailable, creating issue with file references only")
-			mode = "lite" // fallback
+			mode = "lite"
 		}
 	}
 
-	// Lite mode: grep-only, produce handoff spec for user's own AI
 	if mode == "lite" {
 		relevantFiles := w.diagEngine.FindFiles(diagInput)
-		diagResp = llm.DiagnoseResponse{} // no AI summary
+		diagResp = llm.DiagnoseResponse{}
 		diagResp.Files = relevantFiles
 	}
 
-	parts := strings.SplitN(channelCfg.Repo, "/", 2)
+	parts := strings.SplitN(repoRef, "/", 2)
 	if len(parts) != 2 {
-		w.notifyError(event.ChannelID, "Invalid repo format: %s (expected owner/repo)", channelCfg.Repo)
+		w.notifyError(event.ChannelID, "Invalid repo format: %s (expected owner/repo)", repoRef)
 		return
 	}
 	owner, repo := parts[0], parts[1]
@@ -135,7 +225,7 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		slog.Error("failed to post issue URL to slack", "error", err)
 	}
 
-	slog.Info("workflow completed", "issueURL", issueURL)
+	slog.Info("workflow completed", "issueURL", issueURL, "repo", repoRef)
 }
 
 func (w *Workflow) notifyError(channelID string, format string, args ...any) {

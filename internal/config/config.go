@@ -32,8 +32,20 @@ type SlackConfig struct {
 }
 
 type ChannelConfig struct {
-	Repo          string   `yaml:"repo"`
+	Repo          string   `yaml:"repo"`          // Single repo (backward compatible)
+	Repos         []string `yaml:"repos"`         // Multiple repos
 	DefaultLabels []string `yaml:"default_labels"`
+}
+
+// GetRepos returns the list of repos, handling both single and multi config.
+func (c ChannelConfig) GetRepos() []string {
+	if len(c.Repos) > 0 {
+		return c.Repos
+	}
+	if c.Repo != "" {
+		return []string{c.Repo}
+	}
+	return nil
 }
 
 type ReactionConfig struct {

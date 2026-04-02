@@ -7,9 +7,17 @@ slack:
   app_token: "xapp-your-app-token"
 
 channels:
-  # Map Slack channel IDs to GitHub repos
+  # Single repo per channel:
   # C05XXXXXX:
   #   repo: "org/backend-repo"
+  #   default_labels: ["from-slack"]
+
+  # Multiple repos per channel (bot shows buttons to pick):
+  # C05YYYYYY:
+  #   repos:
+  #     - "org/backend"
+  #     - "org/frontend"
+  #     - "org/infra"
   #   default_labels: ["from-slack"]
 
 reactions:

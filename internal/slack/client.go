@@ -70,6 +70,48 @@ func (c *Client) GetChannelName(channelID string) string {
 	return "#" + info.Name
 }
 
+// PostRepoSelector sends a message with buttons for the user to pick a repo.
+// callbackID is used to route the button click back. metadata encodes context.
+func (c *Client) PostRepoSelector(channelID string, repos []string, callbackID, metadata string) error {
+	var buttons []slack.BlockElement
+	for _, repo := range repos {
+		buttons = append(buttons, slack.NewButtonBlockElement(
+			callbackID,
+			repo, // value sent back on click
+			slack.NewTextBlockObject(slack.PlainTextType, repo, false, false),
+		))
+	}
+
+	section := slack.NewSectionBlock(
+		slack.NewTextBlockObject(slack.MarkdownType, ":point_right: Which repo should this issue go to?", false, false),
+		nil, nil,
+	)
+	actions := slack.NewActionBlock(callbackID, buttons...)
+
+	_, _, err := c.api.PostMessage(channelID,
+		slack.MsgOptionBlocks(section, actions),
+		slack.MsgOptionMetadata(slack.SlackMetadata{
+			EventType:    callbackID,
+			EventPayload: map[string]interface{}{"data": metadata},
+		}),
+	)
+	if err != nil {
+		return fmt.Errorf("post repo selector: %w", err)
+	}
+	return nil
+}
+
+// UpdateMessage replaces an existing message (used to clear buttons after selection).
+func (c *Client) UpdateMessage(channelID, messageTS, text string) error {
+	_, _, _, err := c.api.UpdateMessage(channelID, messageTS,
+		slack.MsgOptionText(text, false),
+	)
+	if err != nil {
+		return fmt.Errorf("update message: %w", err)
+	}
+	return nil
+}
+
 func ExtractKeywords(message string) []string {
 	stopWords := map[string]bool{
 		"the": true, "a": true, "an": true, "is": true, "are": true,
