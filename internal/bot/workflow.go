@@ -118,59 +118,32 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 	w.mu.Unlock()
 }
 
-// NumberEmojiToIndex maps Slack number emoji names to indices.
-var numberEmojis = []string{"one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
-
-// HandleRepoSelectionReaction is called when a user reacts with a number emoji
-// on a repo selector message.
-func (w *Workflow) HandleRepoSelectionReaction(channelID, messageTS, reaction, userID string) {
-	// Find the pending issue by selector message TS
+// HandleRepoSelection is called when a user clicks a repo button.
+func (w *Workflow) HandleRepoSelection(channelID, selectedRepo, selectorMsgTS string) {
 	w.mu.Lock()
 	var pi *pendingIssue
 	var foundKey string
 	for key, p := range w.pending {
-		if p.SelectorTS == messageTS && p.Event.ChannelID == channelID {
+		if p.SelectorTS == selectorMsgTS && p.Event.ChannelID == channelID {
 			pi = p
 			foundKey = key
 			break
 		}
 	}
+	if foundKey != "" {
+		delete(w.pending, foundKey)
+	}
+	w.mu.Unlock()
+
 	if pi == nil {
-		w.mu.Unlock()
-		return // not a selector message, ignore
-	}
-
-	// Map emoji to repo index
-	idx := -1
-	for i, e := range numberEmojis {
-		if e == reaction {
-			idx = i
-			break
-		}
-	}
-
-	repos := pi.ChannelCfg.GetRepos()
-	if idx < 0 || idx >= len(repos) {
-		w.mu.Unlock()
-		return // invalid emoji
-	}
-
-	// Only process if user is the one who triggered (not the bot's pre-added reactions)
-	if userID == "" {
-		w.mu.Unlock()
+		slog.Warn("no pending issue found for repo selection", "selectorTS", selectorMsgTS)
 		return
 	}
 
-	delete(w.pending, foundKey)
-	w.mu.Unlock()
-
-	selectedRepo := repos[idx]
-
-	// Update the selector message
-	w.slack.UpdateMessage(channelID, messageTS,
+	w.slack.UpdateMessage(channelID, selectorMsgTS,
 		fmt.Sprintf(":white_check_mark: Selected repo: `%s`", selectedRepo))
 
-	slog.Info("repo selected via reaction", "repo", selectedRepo, "user", userID)
+	slog.Info("repo selected", "repo", selectedRepo)
 	w.createIssue(pi.Event, pi.ReactionCfg, pi.ChannelCfg, selectedRepo, pi.Message, pi.Reporter, pi.ChannelName)
 }
 
