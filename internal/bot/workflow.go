@@ -323,7 +323,7 @@ func (w *Workflow) createIssue(pi *pendingIssue, branch string) {
 		diagResp.Files = relevantFiles
 	}
 
-	// --- Rejection check ---
+	// --- Rejection check (only confidence=low) ---
 	if reason := w.shouldReject(diagResp); reason != "" {
 		slog.Info("issue rejected", "reason", reason, "repo", pi.SelectedRepo)
 		w.slack.PostMessage(pi.Event.ChannelID,
@@ -333,6 +333,12 @@ func (w *Workflow) createIssue(pi *pendingIssue, branch string) {
 			w.handler.ClearMessageDedup(pi.Event.ChannelID, pi.Event.MessageTS)
 		}
 		return
+	}
+
+	// --- Skip triage check (files=0 or too many questions, but not rejected) ---
+	if w.shouldSkipTriage(diagResp) {
+		slog.Info("skipping AI triage section", "files", len(diagResp.Files), "open_questions", len(diagResp.OpenQuestions), "repo", pi.SelectedRepo)
+		diagResp = llm.DiagnoseResponse{} // Clear triage — issue will have only the original message
 	}
 
 	parts := strings.SplitN(pi.SelectedRepo, "/", 2)
@@ -409,20 +415,28 @@ func (w *Workflow) storePending(selectorTS string, pi *pendingIssue) {
 	}()
 }
 
+// shouldReject returns a rejection reason if the issue should NOT be created.
+// Only rejects on confidence=low (likely wrong repo / completely irrelevant).
 func (w *Workflow) shouldReject(resp llm.DiagnoseResponse) string {
 	if resp.Summary == "" {
 		return ""
-	}
-	if len(resp.Files) == 0 {
-		return "找不到相關的程式碼檔案"
-	}
-	if len(resp.OpenQuestions) >= maxOpenQuestions {
-		return "問題描述的範圍太廣，待釐清的項目過多"
 	}
 	if strings.EqualFold(resp.Confidence, "low") {
 		return "問題與此 repo 的程式碼關聯性不足"
 	}
 	return ""
+}
+
+// shouldSkipTriage returns true if the AI triage section should be omitted
+// from the issue (files=0 or too many open questions, but not rejected).
+func (w *Workflow) shouldSkipTriage(resp llm.DiagnoseResponse) bool {
+	if len(resp.Files) == 0 {
+		return true
+	}
+	if len(resp.OpenQuestions) >= maxOpenQuestions {
+		return true
+	}
+	return false
 }
 
 func (w *Workflow) notifyError(channelID, threadTS string, format string, args ...any) {
