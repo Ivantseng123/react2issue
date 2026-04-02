@@ -1,0 +1,113 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
+
+	"slack-issue-bot/internal/bot"
+	"slack-issue-bot/internal/config"
+	"slack-issue-bot/internal/diagnosis"
+	ghclient "slack-issue-bot/internal/github"
+	"slack-issue-bot/internal/llm"
+	slackclient "slack-issue-bot/internal/slack"
+)
+
+func main() {
+	configPath := flag.String("config", "config.yaml", "path to config file")
+	flag.Parse()
+
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	sc := slackclient.NewClient(cfg.Slack.BotToken)
+
+	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
+	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token)
+
+	var providers []llm.Provider
+	for _, p := range cfg.LLM.Providers {
+		switch p.Name {
+		case "claude":
+			providers = append(providers, llm.NewClaudeProvider(p.APIKey, p.Model, p.BaseURL, cfg.LLM.Timeout))
+		case "openai":
+			providers = append(providers, llm.NewOpenAIProvider(p.APIKey, p.Model, p.BaseURL, cfg.LLM.Timeout))
+		case "ollama":
+			providers = append(providers, llm.NewOllamaProvider(p.Model, p.BaseURL, cfg.LLM.Timeout))
+		default:
+			slog.Warn("unknown LLM provider, skipping", "name", p.Name)
+		}
+	}
+	fallbackChain := llm.NewFallbackChain(providers, cfg.LLM.MaxRetries)
+
+	diagEngine := diagnosis.NewEngine(fallbackChain, 10)
+
+	wf := bot.NewWorkflow(cfg, sc, issueClient, repoCache, diagEngine)
+
+	handler := slackclient.NewHandler(5, 5*time.Minute, wf.HandleReaction)
+
+	// Health check endpoint
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		})
+		addr := fmt.Sprintf(":%d", cfg.Server.Port)
+		slog.Info("health check listening", "addr", addr)
+		if err := http.ListenAndServe(addr, mux); err != nil {
+			slog.Error("health check server error", "error", err)
+		}
+	}()
+
+	// Socket Mode
+	api := slack.New(
+		cfg.Slack.BotToken,
+		slack.OptionAppLevelToken(cfg.Slack.AppToken),
+	)
+	socketClient := socketmode.New(api)
+
+	go func() {
+		for evt := range socketClient.Events {
+			switch evt.Type {
+			case socketmode.EventTypeEventsAPI:
+				socketClient.Ack(*evt.Request)
+				eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
+				if !ok {
+					continue
+				}
+				if eventsAPIEvent.Type == slackevents.CallbackEvent {
+					innerEvent := eventsAPIEvent.InnerEvent
+					switch ev := innerEvent.Data.(type) {
+					case *slackevents.ReactionAddedEvent:
+						handler.HandleReaction(slackclient.ReactionEvent{
+							EventID:   evt.Request.EnvelopeID,
+							Reaction:  ev.Reaction,
+							ChannelID: ev.Item.Channel,
+							MessageTS: ev.Item.Timestamp,
+							UserID:    ev.User,
+						})
+					}
+				}
+			}
+		}
+	}()
+
+	slog.Info("bot starting in socket mode", "channels", len(cfg.Channels), "reactions", len(cfg.Reactions))
+	if err := socketClient.Run(); err != nil {
+		slog.Error("socket mode error", "error", err)
+		os.Exit(1)
+	}
+}
