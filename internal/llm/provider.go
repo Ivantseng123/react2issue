@@ -19,9 +19,10 @@ type FileRef struct {
 }
 
 type DiagnoseRequest struct {
-	Type      string // "bug" or "feature"
-	Message   string // Original Slack message
-	RepoFiles []File // Relevant code files
+	Type      string        // "bug" or "feature"
+	Message   string        // Original Slack message
+	RepoFiles []File        // Relevant code files
+	Prompt    PromptOptions // User-configurable prompt settings
 }
 
 type DiagnoseResponse struct {

@@ -33,7 +33,7 @@ func (o *OllamaProvider) Diagnose(ctx context.Context, req DiagnoseRequest) (Dia
 		"model":  o.model,
 		"stream": false,
 		"messages": []map[string]string{
-			{"role": "system", "content": SystemPrompt(req.Type)},
+			{"role": "system", "content": SystemPrompt(req.Type, req.Prompt)},
 			{"role": "user", "content": prompt},
 		},
 	}

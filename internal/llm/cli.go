@@ -37,7 +37,7 @@ func (c *CLIProvider) Diagnose(ctx context.Context, req DiagnoseRequest) (Diagno
 		return DiagnoseResponse{}, fmt.Errorf("%s not found in PATH: %w", c.command, err)
 	}
 
-	systemMsg := SystemPrompt(req.Type)
+	systemMsg := SystemPrompt(req.Type, req.Prompt)
 	userMsg := BuildPrompt(req.Type, req.Message, req.RepoFiles)
 	fullPrompt := systemMsg + "\n\n" + userMsg
 

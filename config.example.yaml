@@ -80,3 +80,8 @@ rate_limit:
 # "lite" = grep only + handoff spec (zero cost, user runs own AI)
 diagnosis:
   mode: "full"
+  prompt:
+    language: "繁體中文"            # LLM response language
+    extra_rules:
+      - "列出所有相關的檔案名稱與完整路徑"
+      - "在 files 欄位中盡量包含所有可能相關的檔案"

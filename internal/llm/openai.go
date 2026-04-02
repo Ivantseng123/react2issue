@@ -34,7 +34,7 @@ func (o *OpenAIProvider) Diagnose(ctx context.Context, req DiagnoseRequest) (Dia
 	body := map[string]any{
 		"model": o.model,
 		"messages": []map[string]string{
-			{"role": "system", "content": SystemPrompt(req.Type)},
+			{"role": "system", "content": SystemPrompt(req.Type, req.Prompt)},
 			{"role": "user", "content": prompt},
 		},
 		"max_tokens": 2048,

@@ -38,7 +38,7 @@ func (c *ClaudeProvider) Diagnose(ctx context.Context, req DiagnoseRequest) (Dia
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
-		"system": SystemPrompt(req.Type),
+		"system": SystemPrompt(req.Type, req.Prompt),
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {

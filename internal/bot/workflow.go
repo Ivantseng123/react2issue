@@ -175,6 +175,10 @@ func (w *Workflow) createIssue(
 		Message:  message,
 		RepoPath: repoPath,
 		Keywords: keywords,
+		Prompt: llm.PromptOptions{
+			Language:   w.cfg.Diagnosis.Prompt.Language,
+			ExtraRules: w.cfg.Diagnosis.Prompt.ExtraRules,
+		},
 	}
 
 	var diagResp llm.DiagnoseResponse

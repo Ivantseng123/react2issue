@@ -5,9 +5,16 @@ import (
 	"strings"
 )
 
-func SystemPrompt(diagType string) string {
+// PromptOptions holds user-configurable prompt settings from config.
+type PromptOptions struct {
+	Language   string
+	ExtraRules []string
+}
+
+func SystemPrompt(diagType string, opts PromptOptions) string {
+	var base string
 	if diagType == "bug" {
-		return `You are a senior software engineer diagnosing bugs. Given a bug report and relevant source code files, analyze the potential root cause.
+		base = `You are a senior software engineer diagnosing bugs. Given a bug report and relevant source code files, analyze the potential root cause.
 
 Respond in JSON format:
 {
@@ -16,9 +23,9 @@ Respond in JSON format:
   "suggestions": ["Suggested fix 1", "Suggested fix 2"]
 }
 
-Be concise. Focus on the most likely cause. Include 2-5 relevant files max.`
-	}
-	return `You are a senior software engineer analyzing feature requests. Given a feature request and the current codebase, identify where and how to implement it.
+Be concise. Focus on the most likely cause. List ALL related file paths with full paths.`
+	} else {
+		base = `You are a senior software engineer analyzing feature requests. Given a feature request and the current codebase, identify where and how to implement it.
 
 Respond in JSON format:
 {
@@ -28,7 +35,20 @@ Respond in JSON format:
   "complexity": "low|medium|high"
 }
 
-Be concise. Focus on actionable locations. Include 2-5 relevant files max.`
+Be concise. Focus on actionable locations. List ALL related file paths with full paths.`
+	}
+
+	// Append language instruction
+	if opts.Language != "" {
+		base += fmt.Sprintf("\n\nIMPORTANT: You MUST respond entirely in %s. All text in the JSON values must be in %s.", opts.Language, opts.Language)
+	}
+
+	// Append user-defined extra rules
+	for _, rule := range opts.ExtraRules {
+		base += "\n" + rule
+	}
+
+	return base
 }
 
 func BuildPrompt(diagType, message string, repoFiles []File) string {

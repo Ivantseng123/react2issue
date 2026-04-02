@@ -17,6 +17,7 @@ type DiagnoseInput struct {
 	Message  string
 	RepoPath string
 	Keywords []string
+	Prompt   llm.PromptOptions
 }
 
 type Engine struct {
@@ -61,6 +62,7 @@ func (e *Engine) Diagnose(ctx context.Context, input DiagnoseInput) (llm.Diagnos
 		Type:      input.Type,
 		Message:   input.Message,
 		RepoFiles: repoFiles,
+		Prompt:    input.Prompt,
 	}
 
 	resp, err := e.llmProvider.Diagnose(ctx, req)

@@ -85,7 +85,13 @@ type RateLimitConfig struct {
 }
 
 type DiagnosisConfig struct {
-	Mode string `yaml:"mode"` // "full" = use LLM, "lite" = grep only + handoff spec
+	Mode   string `yaml:"mode"`   // "full" = use LLM, "lite" = grep only + handoff spec
+	Prompt PromptConfig `yaml:"prompt"`
+}
+
+type PromptConfig struct {
+	Language    string   `yaml:"language"`     // Response language (e.g. "繁體中文", "English")
+	ExtraRules  []string `yaml:"extra_rules"`  // Additional instructions appended to system prompt
 }
 
 func Load(path string) (*Config, error) {
