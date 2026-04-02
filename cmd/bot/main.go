@@ -56,7 +56,17 @@ func main() {
 
 	wf := bot.NewWorkflow(cfg, sc, issueClient, repoCache, diagEngine)
 
-	handler := slackclient.NewHandler(5, 5*time.Minute, wf.HandleReaction)
+	handler := slackclient.NewHandler(slackclient.HandlerConfig{
+		MaxConcurrent:   5,
+		DedupTTL:        5 * time.Minute,
+		PerUserLimit:    cfg.RateLimit.PerUser,
+		PerChannelLimit: cfg.RateLimit.PerChannel,
+		RateWindow:      cfg.RateLimit.Window,
+		OnEvent:         wf.HandleReaction,
+		OnRejected: func(event slackclient.ReactionEvent, reason string) {
+			sc.PostMessage(event.ChannelID, fmt.Sprintf(":no_entry: %s — please wait before triggering again.", reason))
+		},
+	})
 
 	// Health check endpoint
 	go func() {

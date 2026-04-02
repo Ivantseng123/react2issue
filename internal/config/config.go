@@ -17,6 +17,8 @@ type Config struct {
 	GitHub    GitHubConfig              `yaml:"github"`
 	LLM       LLMConfig                `yaml:"llm"`
 	RepoCache RepoCacheConfig           `yaml:"repo_cache"`
+	RateLimit RateLimitConfig           `yaml:"rate_limit"`
+	Diagnosis DiagnosisConfig           `yaml:"diagnosis"`
 }
 
 type ServerConfig struct {
@@ -60,6 +62,16 @@ type LLMProvider struct {
 type RepoCacheConfig struct {
 	Dir    string        `yaml:"dir"`
 	MaxAge time.Duration `yaml:"max_age"`
+}
+
+type RateLimitConfig struct {
+	PerUser    int           `yaml:"per_user"`    // Max triggers per user per window
+	PerChannel int           `yaml:"per_channel"` // Max triggers per channel per window
+	Window     time.Duration `yaml:"window"`      // Time window for rate limits
+}
+
+type DiagnosisConfig struct {
+	Mode string `yaml:"mode"` // "full" = use LLM, "lite" = grep only + handoff spec
 }
 
 func Load(path string) (*Config, error) {

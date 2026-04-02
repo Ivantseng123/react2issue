@@ -9,6 +9,7 @@ import (
 	"slack-issue-bot/internal/config"
 	"slack-issue-bot/internal/diagnosis"
 	ghclient "slack-issue-bot/internal/github"
+	"slack-issue-bot/internal/llm"
 	slackclient "slack-issue-bot/internal/slack"
 )
 
@@ -74,16 +75,34 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 	}
 
 	keywords := slackclient.ExtractKeywords(message)
-	diagResp, diagErr := w.diagEngine.Diagnose(ctx, diagnosis.DiagnoseInput{
+	diagInput := diagnosis.DiagnoseInput{
 		Type:     reactionCfg.Type,
 		Message:  message,
 		RepoPath: repoPath,
 		Keywords: keywords,
-	})
+	}
 
-	if diagErr != nil {
-		slog.Warn("AI diagnosis failed, creating issue without diagnosis", "error", diagErr)
-		w.slack.PostMessage(event.ChannelID, ":warning: AI diagnosis unavailable, creating issue without diagnosis")
+	var diagResp llm.DiagnoseResponse
+	mode := w.cfg.Diagnosis.Mode
+	if mode == "" {
+		mode = "full"
+	}
+
+	if mode == "full" {
+		var diagErr error
+		diagResp, diagErr = w.diagEngine.Diagnose(ctx, diagInput)
+		if diagErr != nil {
+			slog.Warn("AI diagnosis failed, falling back to lite mode", "error", diagErr)
+			w.slack.PostMessage(event.ChannelID, ":warning: AI diagnosis unavailable, creating issue with file references only")
+			mode = "lite" // fallback
+		}
+	}
+
+	// Lite mode: grep-only, produce handoff spec for user's own AI
+	if mode == "lite" {
+		relevantFiles := w.diagEngine.FindFiles(diagInput)
+		diagResp = llm.DiagnoseResponse{} // no AI summary
+		diagResp.Files = relevantFiles
 	}
 
 	parts := strings.SplitN(channelCfg.Repo, "/", 2)

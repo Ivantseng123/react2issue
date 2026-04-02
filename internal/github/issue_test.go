@@ -64,7 +64,7 @@ func TestFormatIssueBody_Feature(t *testing.T) {
 	}
 }
 
-func TestFormatIssueBody_NoDiagnosis(t *testing.T) {
+func TestFormatIssueBody_NoDiagnosis_NoFiles(t *testing.T) {
 	body := FormatIssueBody(IssueInput{
 		Type:     "bug",
 		Channel:  "#backend",
@@ -75,7 +75,38 @@ func TestFormatIssueBody_NoDiagnosis(t *testing.T) {
 	if !strings.Contains(body, "Something broke") {
 		t.Error("body should contain original message")
 	}
-	if !strings.Contains(body, "AI diagnosis was unavailable") {
-		t.Error("body should note diagnosis was unavailable")
+	if !strings.Contains(body, "Handoff Spec") {
+		t.Error("body should contain handoff spec section")
+	}
+	if !strings.Contains(body, "Investigate this bug report") {
+		t.Error("body should contain bug investigation prompt")
+	}
+}
+
+func TestFormatIssueBody_LiteMode_WithFiles(t *testing.T) {
+	body := FormatIssueBody(IssueInput{
+		Type:     "feature",
+		Channel:  "#product",
+		Reporter: "ivan",
+		Message:  "Need batch export",
+		Diagnosis: llm.DiagnoseResponse{
+			// Summary is empty = lite mode
+			Files: []llm.FileRef{
+				{Path: "src/export/single.go", Description: "matched keywords"},
+			},
+		},
+	})
+
+	if !strings.Contains(body, "Potentially Related Files") {
+		t.Error("body should list related files")
+	}
+	if !strings.Contains(body, "src/export/single.go") {
+		t.Error("body should contain file path")
+	}
+	if !strings.Contains(body, "Handoff Spec") {
+		t.Error("body should contain handoff spec")
+	}
+	if !strings.Contains(body, "Analyze this feature request") {
+		t.Error("body should contain feature analysis prompt")
 	}
 }

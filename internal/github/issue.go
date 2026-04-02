@@ -73,8 +73,29 @@ func FormatIssueBody(input IssueInput) string {
 	hasDiagnosis := input.Diagnosis.Summary != ""
 
 	if !hasDiagnosis {
-		sb.WriteString("### AI Diagnosis\n\n")
-		sb.WriteString("_AI diagnosis was unavailable for this issue._\n")
+		// Lite mode: no LLM was called, but we may have file references from grep
+		if len(input.Diagnosis.Files) > 0 {
+			sb.WriteString("### Potentially Related Files\n\n")
+			for _, f := range input.Diagnosis.Files {
+				if f.LineNumber > 0 {
+					sb.WriteString(fmt.Sprintf("- `%s:%d`\n", f.Path, f.LineNumber))
+				} else {
+					sb.WriteString(fmt.Sprintf("- `%s`\n", f.Path))
+				}
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("### Handoff Spec\n\n")
+		sb.WriteString("_No centralized AI diagnosis was run. Use the prompt below with your own AI to investigate:_\n\n")
+		sb.WriteString("```\n")
+		if input.Type == "bug" {
+			sb.WriteString(fmt.Sprintf("Investigate this bug report in the codebase:\n\n\"%s\"\n\n", input.Message))
+			sb.WriteString("Check the files listed above. Identify the root cause and suggest a fix.\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("Analyze this feature request against the codebase:\n\n\"%s\"\n\n", input.Message))
+			sb.WriteString("Check the files listed above. Identify where to implement and estimate complexity.\n")
+		}
+		sb.WriteString("```\n")
 		return sb.String()
 	}
 

@@ -70,6 +70,17 @@ func (e *Engine) Diagnose(ctx context.Context, input DiagnoseInput) (llm.Diagnos
 	return resp, nil
 }
 
+// FindFiles returns relevant file references without calling the LLM.
+// Used in lite mode to produce a handoff spec.
+func (e *Engine) FindFiles(input DiagnoseInput) []llm.FileRef {
+	files, _ := e.findRelevantFiles(input.RepoPath, input.Keywords)
+	var refs []llm.FileRef
+	for _, f := range files {
+		refs = append(refs, llm.FileRef{Path: f, Description: "matched keywords from Slack message"})
+	}
+	return refs
+}
+
 func (e *Engine) findRelevantFiles(repoPath string, keywords []string) ([]string, error) {
 	seen := make(map[string]int)
 	for _, kw := range keywords {
