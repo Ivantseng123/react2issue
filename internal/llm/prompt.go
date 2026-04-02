@@ -11,63 +11,74 @@ type PromptOptions struct {
 	ExtraRules []string
 }
 
-func SystemPrompt(diagType string, opts PromptOptions) string {
-	var base string
-	if diagType == "bug" {
-		base = `You are a senior software engineer diagnosing bugs. Given a bug report and relevant source code files, analyze the potential root cause.
-
-Respond in JSON format:
-{
-  "summary": "Brief description of the likely root cause",
-  "files": [{"path": "file/path.go", "line_number": 42, "description": "Why this location is relevant"}],
-  "suggestions": ["Suggested fix 1", "Suggested fix 2"]
-}
-
-Be concise. Focus on the most likely cause. List ALL related file paths with full paths.`
-	} else {
-		base = `You are a senior software engineer analyzing feature requests. Given a feature request and the current codebase, identify where and how to implement it.
-
-Respond in JSON format:
-{
-  "summary": "What existing functionality is related",
-  "files": [{"path": "file/path.go", "line_number": 42, "description": "Why this is a good place to add the feature"}],
-  "suggestions": ["Implementation approach 1", "Implementation approach 2"],
-  "complexity": "low|medium|high"
-}
-
-Be concise. Focus on actionable locations. List ALL related file paths with full paths.`
-	}
-
-	// Append language instruction
-	if opts.Language != "" {
-		base += fmt.Sprintf("\n\nIMPORTANT: You MUST respond entirely in %s. All text in the JSON values must be in %s.", opts.Language, opts.Language)
-	}
-
-	// Append user-defined extra rules
-	for _, rule := range opts.ExtraRules {
-		base += "\n" + rule
-	}
-
-	return base
-}
-
-func BuildPrompt(diagType, message string, repoFiles []File) string {
+// AgentSystemPrompt builds the system prompt for the agent-loop diagnosis.
+func AgentSystemPrompt(diagType string, opts PromptOptions) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("## %s Report\n\n", capitalize(diagType)))
-	sb.WriteString(fmt.Sprintf("**Message:** %s\n\n", message))
 
-	if len(repoFiles) > 0 {
-		sb.WriteString("## Relevant Source Files\n\n")
-		for _, f := range repoFiles {
-			sb.WriteString(fmt.Sprintf("### %s\n```\n%s\n```\n\n", f.Path, f.Content))
-		}
+	sb.WriteString(`You are a code triage assistant. You have tools to investigate a repository and must produce a triage card.
+
+Rules:
+- Start with grep or search_code to find relevant code. Do NOT skip this step.
+- If the report is in a non-English language, translate key terms to English identifiers before searching.
+- Use read_context to understand the repo structure if initial searches miss.
+- Read at most 5 files total — pick the most relevant ones.
+- Do NOT guess variable names, field names, UI labels, or component positions.
+- Set confidence to "low" if you cannot find clearly related code, "medium" if partially related, "high" if strongly related.
+- open_questions: ONLY things the reporter/PM can answer (e.g. "which module?", "what screen?"). Do NOT include code-visibility issues like "file was truncated".
+
+`)
+
+	sb.WriteString(agentOutputSchema(diagType))
+
+	if opts.Language != "" {
+		sb.WriteString(fmt.Sprintf("\n\nRespond in %s. All JSON string values in %s.", opts.Language, opts.Language))
+	}
+	for _, rule := range opts.ExtraRules {
+		sb.WriteString("\n" + rule)
 	}
 	return sb.String()
 }
 
-func capitalize(s string) string {
-	if len(s) == 0 {
-		return s
+func agentOutputSchema(diagType string) string {
+	if diagType == "bug" {
+		return `When you have gathered enough information, respond with ONLY this JSON (no markdown fences):
+{
+  "summary": "One sentence: what area of code is likely involved",
+  "files": [{"path": "exact/path", "line_number": 0, "description": "Why relevant (one sentence)"}],
+  "suggestions": ["What to investigate (max 2 items)"],
+  "open_questions": ["Anything you cannot determine from code alone"],
+  "confidence": "low|medium|high"
+}
+line_number: use 0 if unsure. files: max 5.`
 	}
-	return strings.ToUpper(s[:1]) + s[1:]
+	return `When you have gathered enough information, respond with ONLY this JSON (no markdown fences):
+{
+  "summary": "One sentence: what existing code relates to this request",
+  "files": [{"path": "exact/path", "line_number": 0, "description": "Why relevant (one sentence)"}],
+  "suggestions": ["Where to start (max 2 items)"],
+  "complexity": "low|medium|high",
+  "open_questions": ["Anything you cannot determine from code alone"],
+  "confidence": "low|medium|high"
+}
+line_number: use 0 if unsure. files: max 5.`
+}
+
+// CLIToolPromptSuffix returns additional prompt text for CLI/Ollama providers
+// that do not support native tool calling. It describes how to invoke tools
+// using a JSON-in-text format.
+func CLIToolPromptSuffix(tools []ToolDef) string {
+	if len(tools) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("\n\n## Available Tools\n\n")
+	sb.WriteString("To call a tool, write a line starting with TOOL_CALL followed by JSON:\n")
+	sb.WriteString("TOOL_CALL {\"name\": \"<tool_name>\", \"args\": {<arguments>}}\n\n")
+	sb.WriteString("Wait for the result before making the next call. Available tools:\n\n")
+
+	for _, t := range tools {
+		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", t.Name, t.Description))
+	}
+	return sb.String()
 }
