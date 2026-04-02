@@ -166,29 +166,29 @@ export LLM_CLAUDE_API_KEY="sk-ant-..."
 ## Issue 輸出範例
 
 ```markdown
-**Channel:** #backend-bugs | **Reporter:** Ivan Tseng
+**Channel:** #dev-general | **Reporter:** Alice
 
-> 再保系統分保結果畫面，Item資料新增顯示出單單位(通訊處)欄位
+> 使用者登入頁面，輸入空白密碼按送出後頁面直接當掉
 
 ### AI Triage
 
-分保結果畫面的 Item 視圖需新增「出單單位(通訊處)」欄位，可參考 sectionInfo.vue 的做法
+登入表單的送出處理缺少空欄位驗證，在呼叫 auth API 前未檢查密碼是否為空
 
 ### Related Files
 
-- [`cedingResult.vue`](https://github.com/org/repo/blob/main/src/pages/ceding/cedingResult.vue) — 分保結果主頁面，含 Item 視圖表格
-- [`sectionInfo.vue`](https://github.com/org/repo/blob/main/src/pages/contract/section/sectionInfo.vue) — 已有出單單位欄位的範例
-- [`Result.vue`](https://github.com/org/repo/blob/main/src/pages/ceding/Result.vue) — 分保結果元件
+- [`LoginPage.vue`](https://github.com/example/webapp/blob/main/src/pages/LoginPage.vue) — 登入頁面元件，含表單送出邏輯
+- [`auth.api.js`](https://github.com/example/webapp/blob/main/src/api/auth.api.js) — 認證 API 呼叫，可能需要加入輸入驗證
+- [`validation.js`](https://github.com/example/webapp/blob/main/src/utils/validation.js) — 現有的表單驗證工具，可參考其做法
 
 ### Direction
 
-- 在 cedingResult.vue 的 Item 視圖表格 headers 新增出單單位欄位，可參考 sectionInfo.vue 的做法
-- 確認後端 API 回傳的 Item 資料是否已包含出單單位欄位
+- 在 LoginPage.vue 的表單送出前加入空欄位驗證，可參考 validation.js 的做法
+- 確認 auth.api.js 是否有 server-side 驗證作為後備
 
 ### Needs Clarification
 
-- 出單單位欄位的資料來源為何？
-- 此欄位是否僅在 Item 視圖顯示，還是所有視圖都需要？
+- 這個問題是否在所有瀏覽器都會發生？
+- 當掉時有沒有顯示錯誤訊息，還是頁面直接卡住？
 ```
 
 ## 測試

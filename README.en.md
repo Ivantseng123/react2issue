@@ -165,22 +165,23 @@ export LLM_CLAUDE_API_KEY="sk-ant-..."
 ## Issue Output Example
 
 ```markdown
-**Channel:** #backend-bugs | **Reporter:** Ivan Tseng
+**Channel:** #dev-general | **Reporter:** Alice
 
 > Login page crashes when clicking submit with empty password
 
 ### AI Triage
 
-The login form submission handler in LoginPage.vue doesn't validate empty fields before calling the auth API
+The login form submission handler lacks empty field validation before calling the auth API
 
 ### Related Files
 
-- [`LoginPage.vue`](https://github.com/org/repo/blob/main/src/pages/LoginPage.vue) — Login form component with submit handler
-- [`auth.api.js`](https://github.com/org/repo/blob/main/src/api/auth.api.js) — Auth API calls, may need input validation
+- [`LoginPage.vue`](https://github.com/example/webapp/blob/main/src/pages/LoginPage.vue) — Login page component with form submit logic
+- [`auth.api.js`](https://github.com/example/webapp/blob/main/src/api/auth.api.js) — Auth API calls, may need input validation
+- [`validation.js`](https://github.com/example/webapp/blob/main/src/utils/validation.js) — Existing form validation utils, can be referenced
 
 ### Direction
 
-- Add empty field validation in LoginPage.vue before the API call
+- Add empty field validation in LoginPage.vue before form submit, reference validation.js for patterns
 - Check if auth.api.js has server-side validation as a fallback
 
 ### Needs Clarification
