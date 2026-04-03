@@ -12,6 +12,7 @@ import (
 	"slack-issue-bot/internal/diagnosis"
 	ghclient "slack-issue-bot/internal/github"
 	"slack-issue-bot/internal/llm"
+	"slack-issue-bot/internal/mantis"
 	slackclient "slack-issue-bot/internal/slack"
 )
 
@@ -39,6 +40,7 @@ type Workflow struct {
 	repoCache     *ghclient.RepoCache
 	repoDiscovery *ghclient.RepoDiscovery
 	diagEngine    *diagnosis.Engine
+	mantisClient  *mantis.Client
 
 	mu           sync.Mutex
 	pending      map[string]*pendingIssue // keyed by selectorTS
@@ -52,6 +54,7 @@ func NewWorkflow(
 	repoCache *ghclient.RepoCache,
 	repoDiscovery *ghclient.RepoDiscovery,
 	diagEngine *diagnosis.Engine,
+	mantisClient *mantis.Client,
 ) *Workflow {
 	return &Workflow{
 		cfg:           cfg,
@@ -60,6 +63,7 @@ func NewWorkflow(
 		repoCache:     repoCache,
 		repoDiscovery: repoDiscovery,
 		diagEngine:    diagEngine,
+		mantisClient:  mantisClient,
 		pending:       make(map[string]*pendingIssue),
 		autoBound:     make(map[string]bool),
 	}
@@ -114,6 +118,9 @@ func (w *Workflow) HandleReaction(event slackclient.ReactionEvent) {
 		w.notifyError(event.ChannelID, event.MessageTS, "Failed to read the original message: %v", err)
 		return
 	}
+
+	// Enrich message: expand Mantis URLs with title + description
+	message = enrichMessage(message, w.mantisClient)
 
 	reporter := w.slack.ResolveUser(event.UserID)
 	channelName := w.slack.GetChannelName(event.ChannelID)

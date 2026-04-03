@@ -22,6 +22,8 @@ func (c *Client) API() *slack.Client {
 	return c.api
 }
 
+// FetchMessage retrieves a message and enriches it with file attachment content.
+// Text files are downloaded and inlined. Images are noted with filename + permalink.
 func (c *Client) FetchMessage(channelID, messageTS string) (string, error) {
 	params := &slack.GetConversationHistoryParameters{
 		ChannelID: channelID,
@@ -36,7 +38,63 @@ func (c *Client) FetchMessage(channelID, messageTS string) (string, error) {
 	if len(history.Messages) == 0 {
 		return "", fmt.Errorf("message not found at ts=%s", messageTS)
 	}
-	return history.Messages[0].Text, nil
+
+	msg := history.Messages[0]
+	text := msg.Text
+
+	// Process file attachments
+	for _, f := range msg.Files {
+		if isTextFile(f.Filetype, f.Mimetype) {
+			content, dlErr := c.downloadFile(f.URLPrivateDownload)
+			if dlErr != nil {
+				slog.Warn("failed to download slack file", "name", f.Name, "error", dlErr)
+				text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
+				continue
+			}
+			// Cap at 500 lines
+			lines := strings.Split(content, "\n")
+			if len(lines) > 500 {
+				content = strings.Join(lines[:500], "\n") + "\n... [truncated]"
+			}
+			text += fmt.Sprintf("\n\n--- 附件: %s ---\n```\n%s\n```", f.Name, content)
+		} else if isImageFile(f.Filetype, f.Mimetype) {
+			text += fmt.Sprintf("\n\n[圖片: %s](%s)", f.Name, f.Permalink)
+		} else {
+			text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
+		}
+	}
+
+	return text, nil
+}
+
+func (c *Client) downloadFile(url string) (string, error) {
+	if url == "" {
+		return "", fmt.Errorf("empty download URL")
+	}
+	buf := new(strings.Builder)
+	err := c.api.GetFile(url, buf)
+	if err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func isTextFile(filetype, mimetype string) bool {
+	textTypes := []string{"text", "csv", "tsv", "log", "json", "xml", "yaml", "yml",
+		"html", "css", "javascript", "python", "go", "java", "ruby", "shell",
+		"markdown", "sql", "plain", "snippet"}
+	for _, t := range textTypes {
+		if strings.Contains(filetype, t) || strings.Contains(mimetype, "text/") {
+			return true
+		}
+	}
+	return false
+}
+
+func isImageFile(filetype, mimetype string) bool {
+	return strings.HasPrefix(mimetype, "image/") ||
+		filetype == "png" || filetype == "jpg" || filetype == "jpeg" ||
+		filetype == "gif" || filetype == "webp" || filetype == "svg"
 }
 
 func (c *Client) ResolveUser(userID string) string {

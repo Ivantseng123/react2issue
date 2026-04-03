@@ -19,6 +19,7 @@ import (
 	"slack-issue-bot/internal/diagnosis"
 	ghclient "slack-issue-bot/internal/github"
 	"slack-issue-bot/internal/llm"
+	"slack-issue-bot/internal/mantis"
 	slackclient "slack-issue-bot/internal/slack"
 )
 
@@ -84,7 +85,17 @@ func main() {
 		CacheTTL:  cfg.Diagnosis.CacheTTL,
 	})
 
-	wf := bot.NewWorkflow(cfg, sc, issueClient, repoCache, repoDiscovery, diagEngine)
+	mantisClient := mantis.NewClient(
+		cfg.Integrations.Mantis.BaseURL,
+		cfg.Integrations.Mantis.APIToken,
+		cfg.Integrations.Mantis.Username,
+		cfg.Integrations.Mantis.Password,
+	)
+	if mantisClient.IsConfigured() {
+		slog.Info("mantis integration enabled", "url", cfg.Integrations.Mantis.BaseURL)
+	}
+
+	wf := bot.NewWorkflow(cfg, sc, issueClient, repoCache, repoDiscovery, diagEngine, mantisClient)
 
 	slackHandler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   5,

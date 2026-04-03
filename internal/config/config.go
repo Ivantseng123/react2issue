@@ -21,6 +21,18 @@ type Config struct {
 	RepoCache       RepoCacheConfig           `yaml:"repo_cache"`
 	RateLimit       RateLimitConfig           `yaml:"rate_limit"`
 	Diagnosis       DiagnosisConfig           `yaml:"diagnosis"`
+	Integrations    IntegrationsConfig        `yaml:"integrations"`
+}
+
+type IntegrationsConfig struct {
+	Mantis MantisConfig `yaml:"mantis"`
+}
+
+type MantisConfig struct {
+	BaseURL  string `yaml:"base_url"`
+	APIToken string `yaml:"api_token"`  // Mantis REST API token (preferred)
+	Username string `yaml:"username"`   // Basic auth fallback
+	Password string `yaml:"password"`   // Basic auth fallback
 }
 
 type ServerConfig struct {
@@ -134,6 +146,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
 		cfg.GitHub.Token = v
+	}
+	if v := os.Getenv("MANTIS_API_TOKEN"); v != "" {
+		cfg.Integrations.Mantis.APIToken = v
 	}
 	// LLM provider API keys: LLM_<NAME>_API_KEY
 	for i, p := range cfg.LLM.Providers {
