@@ -201,6 +201,27 @@ func TestRunLoop_ForcedFinish(t *testing.T) {
 	}
 }
 
+// TestEstimateMessages_WithImages verifies that images add tokensPerImage tokens each.
+func TestEstimateMessages_WithImages(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Content: "hello", Images: []llm.ImageContent{
+			{Name: "a.png", MimeType: "image/png", Data: make([]byte, 100)},
+			{Name: "b.jpg", MimeType: "image/jpeg", Data: make([]byte, 100)},
+		}},
+	}
+	withImages := estimateMessages(msgs)
+
+	msgsNoImg := []llm.Message{
+		{Role: "user", Content: "hello"},
+	}
+	withoutImages := estimateMessages(msgsNoImg)
+
+	expected := withoutImages + 2*1600
+	if withImages != expected {
+		t.Errorf("expected %d tokens with images, got %d", expected, withImages)
+	}
+}
+
 // TestEstimateTokens checks the simple rune-based estimator.
 func TestEstimateTokens(t *testing.T) {
 	if got := estimateTokens("hello"); got != 5 {

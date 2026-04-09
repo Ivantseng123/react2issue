@@ -60,7 +60,7 @@ func (c *Cache) Stop() {
 }
 
 // Key builds a deterministic cache key from the diagnosis parameters.
-func (c *Cache) Key(repo, branch, message, language string, extraRules []string) string {
+func (c *Cache) Key(repo, branch, message, language string, extraRules []string, imageCount int) string {
 	sorted := make([]string, len(extraRules))
 	copy(sorted, extraRules)
 	sort.Strings(sorted)
@@ -71,6 +71,7 @@ func (c *Cache) Key(repo, branch, message, language string, extraRules []string)
 		message,
 		language,
 		strings.Join(sorted, "|"),
+		fmt.Sprintf("images:%d", imageCount),
 	}, "\x00")
 
 	h := sha256.Sum256([]byte(raw))
