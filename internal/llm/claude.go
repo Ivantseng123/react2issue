@@ -3,6 +3,7 @@ package llm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,29 @@ func NewClaudeProvider(apiKey, model, baseURL string, timeout time.Duration) *Cl
 
 func (c *ClaudeProvider) Name() string { return "claude" }
 
+func buildClaudeUserContent(m Message) any {
+	if len(m.Images) == 0 {
+		return m.Content
+	}
+
+	var blocks []map[string]any
+	for _, img := range m.Images {
+		blocks = append(blocks, map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": img.MimeType,
+				"data":       base64.StdEncoding.EncodeToString(img.Data),
+			},
+		})
+	}
+	blocks = append(blocks, map[string]any{
+		"type": "text",
+		"text": m.Content,
+	})
+	return blocks
+}
+
 func (c *ClaudeProvider) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
 	// Build messages array for Claude Messages API.
 	var msgs []map[string]any
@@ -37,7 +61,7 @@ func (c *ClaudeProvider) Chat(ctx context.Context, req ChatRequest) (ChatRespons
 		case "user":
 			msgs = append(msgs, map[string]any{
 				"role":    "user",
-				"content": m.Content,
+				"content": buildClaudeUserContent(m),
 			})
 		case "assistant":
 			// Build content blocks: text + tool_use

@@ -21,6 +21,12 @@ type FileRef struct {
 	Description string
 }
 
+type ImageContent struct {
+	Name     string // original filename, for logging/fallback
+	MimeType string // "image/png", "image/jpeg"
+	Data     []byte // raw image bytes
+}
+
 type DiagnoseResponse struct {
 	Summary       string
 	Files         []FileRef
@@ -44,8 +50,9 @@ type ToolCall struct {
 }
 
 type Message struct {
-	Role       string     // "assistant", "user", "tool_result"
+	Role       string         // "assistant", "user", "tool_result"
 	Content    string
+	Images     []ImageContent // vision images (only first user message)
 	ToolCalls  []ToolCall
 	ToolCallID string // For tool_result messages
 }

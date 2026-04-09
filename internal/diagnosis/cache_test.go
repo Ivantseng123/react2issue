@@ -11,7 +11,7 @@ func TestCacheSetGet(t *testing.T) {
 	c := NewCache(5 * time.Minute)
 	defer c.Stop()
 
-	key := c.Key("org/repo", "main", "login broken", "en", nil)
+	key := c.Key("org/repo", "main", "login broken", "en", nil, 0)
 	resp := llm.DiagnoseResponse{
 		Summary:    "login bug",
 		Confidence: "high",
@@ -49,7 +49,7 @@ func TestCacheExpiry(t *testing.T) {
 	c := NewCache(50 * time.Millisecond)
 	defer c.Stop()
 
-	key := c.Key("org/repo", "main", "test", "", nil)
+	key := c.Key("org/repo", "main", "test", "", nil, 0)
 	c.Set(key, llm.DiagnoseResponse{Summary: "cached"})
 
 	// Should hit immediately.
@@ -69,13 +69,14 @@ func TestCacheDifferentKeys(t *testing.T) {
 	c := NewCache(5 * time.Minute)
 	defer c.Stop()
 
-	k1 := c.Key("org/repo", "main", "bug in login", "en", nil)
-	k2 := c.Key("org/repo", "main", "bug in logout", "en", nil)
-	k3 := c.Key("org/repo", "dev", "bug in login", "en", nil)
-	k4 := c.Key("org/repo", "main", "bug in login", "zh-TW", nil)
-	k5 := c.Key("org/repo", "main", "bug in login", "en", []string{"rule1"})
+	k1 := c.Key("org/repo", "main", "bug in login", "en", nil, 0)
+	k2 := c.Key("org/repo", "main", "bug in logout", "en", nil, 0)
+	k3 := c.Key("org/repo", "dev", "bug in login", "en", nil, 0)
+	k4 := c.Key("org/repo", "main", "bug in login", "zh-TW", nil, 0)
+	k5 := c.Key("org/repo", "main", "bug in login", "en", []string{"rule1"}, 0)
+	k6 := c.Key("org/repo", "main", "bug in login", "en", nil, 3) // different image count
 
-	keys := []string{k1, k2, k3, k4, k5}
+	keys := []string{k1, k2, k3, k4, k5, k6}
 	seen := make(map[string]bool)
 	for _, k := range keys {
 		if seen[k] {

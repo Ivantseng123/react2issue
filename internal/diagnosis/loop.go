@@ -11,13 +11,14 @@ import (
 
 // LoopInput defines the parameters for a single agent-loop run.
 type LoopInput struct {
-	Type      string          // "bug" or "feature"
-	Message   string          // Original Slack message
-	RepoPath  string          // Path to cloned repo
-	Keywords  []string        // Pre-extracted keywords from message (for pre-grep)
+	Type      string            // "bug" or "feature"
+	Message   string            // Original Slack message
+	Images    []llm.ImageContent // Images attached to the first user message
+	RepoPath  string            // Path to cloned repo
+	Keywords  []string          // Pre-extracted keywords from message (for pre-grep)
 	Prompt    llm.PromptOptions
-	MaxTurns  int             // Default 5
-	MaxTokens int             // Default 100000
+	MaxTurns  int               // Default 5
+	MaxTokens int               // Default 100000
 }
 
 // estimateTokens gives a rough token count based on rune length.
@@ -25,11 +26,14 @@ func estimateTokens(text string) int {
 	return len([]rune(text))
 }
 
+const tokensPerImage = 1600
+
 // estimateMessages sums token estimates for all messages in the conversation.
 func estimateMessages(msgs []llm.Message) int {
 	total := 0
 	for _, m := range msgs {
 		total += estimateTokens(m.Content)
+		total += len(m.Images) * tokensPerImage
 	}
 	return total
 }
@@ -47,7 +51,7 @@ func RunLoop(ctx context.Context, chain llm.ConversationProvider, tools []Tool, 
 	toolDefs := ToolDefs(tools)
 	toolMap := ToolMap(tools)
 
-	baseSystem := llm.AgentSystemPrompt(input.Type, input.Prompt)
+	baseSystem := llm.AgentSystemPrompt(input.Type, input.Prompt, len(input.Images) > 0)
 
 	typeLabel := "Bug"
 	if input.Type == "feature" {
@@ -72,7 +76,7 @@ func RunLoop(ctx context.Context, chain llm.ConversationProvider, tools []Tool, 
 	}
 
 	messages := []llm.Message{
-		{Role: "user", Content: fmt.Sprintf("## %s Report\n\nRepository: %s\n\n> %s%s", typeLabel, input.RepoPath, input.Message, preGrepSection)},
+		{Role: "user", Content: fmt.Sprintf("## %s Report\n\nRepository: %s\n\n> %s%s", typeLabel, input.RepoPath, input.Message, preGrepSection), Images: input.Images},
 	}
 
 	var discoveredFiles []llm.FileRef

@@ -16,6 +16,7 @@ import (
 type DiagnoseInput struct {
 	Type     string
 	Message  string
+	Images   []llm.ImageContent
 	RepoPath string
 	Keywords []string
 	Prompt   llm.PromptOptions
@@ -68,7 +69,7 @@ func NewEngine(chain llm.ConversationProvider, cfg EngineConfig) *Engine {
 // Diagnose runs the agent-loop diagnosis. Results are cached by message + prompt.
 func (e *Engine) Diagnose(ctx context.Context, input DiagnoseInput) (llm.DiagnoseResponse, error) {
 	cacheKey := e.cache.Key(input.RepoPath, "", input.Message,
-		input.Prompt.Language, input.Prompt.ExtraRules)
+		input.Prompt.Language, input.Prompt.ExtraRules, len(input.Images))
 
 	if cached, ok := e.cache.Get(cacheKey); ok {
 		slog.Info("diagnosis cache hit", "repo", input.RepoPath)
@@ -78,6 +79,7 @@ func (e *Engine) Diagnose(ctx context.Context, input DiagnoseInput) (llm.Diagnos
 	resp, err := RunLoop(ctx, e.chain, e.tools, LoopInput{
 		Type:      input.Type,
 		Message:   input.Message,
+		Images:    input.Images,
 		RepoPath:  input.RepoPath,
 		Keywords:  input.Keywords,
 		Prompt:    input.Prompt,
