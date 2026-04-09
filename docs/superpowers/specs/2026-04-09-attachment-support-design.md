@@ -1,10 +1,12 @@
-# Attachment Support: xlsx/csv + jpg/png Vision
+# Attachment Support: xlsx + jpg/png Vision
 
 ## Summary
 
 Add support for Slack message attachments so the diagnosis engine can leverage richer context:
 - **xlsx**: parse into TSV text, inline into message (like existing text file handling)
 - **jpg/png**: download bytes, send to LLM via vision API for AI triage analysis
+
+Note: csv is already supported by the existing `isTextFile` handler — no changes needed.
 
 ## Motivation
 
@@ -46,6 +48,10 @@ type FetchedMessage struct {
 ```
 
 `FetchMessage` returns `FetchedMessage` instead of `string`.
+
+**Binary downloads**: `downloadBytes` uses `c.api.GetFile(url, buf)` with a `bytes.Buffer` (not `strings.Builder`). This reuses the existing Slack API auth — no separate HTTP call needed.
+
+**Image permalinks in Text**: jpg/png images BOTH get extracted to `Images` (for LLM vision) AND keep a `[圖片: name](permalink)` annotation in `Text` (for GitHub issue body readability). This ensures the issue body always has image context even though image bytes are not passed to `IssueInput`.
 
 ### LLM layer — `Message` extension
 
@@ -101,7 +107,24 @@ Slack reaction
                       - Ollama: images -> [圖片: name] text fallback
 ```
 
-Key decision: images are sent **only once** in the first user message of the agent loop, not repeated in subsequent turns (saves tokens).
+Key decisions:
+- Images are sent **only once** in the first user message of the agent loop, not repeated in subsequent turns (saves tokens).
+- `ImageData` (Slack layer, has `Permalink`) is converted to `ImageContent` (LLM layer, no `Permalink`) in `workflow.createIssue()` before passing to `DiagnoseInput`.
+
+### Token estimation
+
+`estimateMessages` in `loop.go` must account for image tokens. Approximation: each image adds a flat 1600 tokens (Claude's cost for a typical screenshot). This is rough but sufficient for the 80% budget threshold check — prevents the agent loop from unknowingly blowing the token budget.
+
+### Diagnosis cache key
+
+`Engine.Diagnose` cache key (in `engine.go`) must include whether images are present. Simple approach: append `len(images)` to the existing cache key inputs. Same text + different images = different cache entry.
+
+### System prompt update
+
+Add a line to `AgentSystemPrompt` in `prompt.go` when images are present:
+```
+If screenshots or images are attached, use them to understand the reported behavior, error messages, or UI state. Reference what you see in the images when relevant to your triage.
+```
 
 ## Files Changed
 
@@ -116,6 +139,7 @@ Key decision: images are sent **only once** in the first user message of the age
 | `llm/openai.go` | user message with images -> content blocks array |
 | `llm/cli.go` | images -> write temp files + `--file` flags + defer cleanup |
 | `llm/ollama.go` | images -> text annotation fallback |
+| `llm/prompt.go` | conditional image guidance in system prompt |
 | `go.mod` | add `github.com/xuri/excelize/v2` |
 
 ## Provider Implementation Details
@@ -151,8 +175,10 @@ With images:
 
 1. Collect all images from messages, write to temp files (`/tmp/slack-issue-bot-*.{ext}`)
 2. `defer` cleanup: remove all temp files after Chat() returns
-3. Add `--file /tmp/xxx.png` flags to CLI args
+3. Add `--file /tmp/xxx.png` flags to CLI args (prepended before other args)
 4. Final command: `claude --print --file /tmp/a.png --file /tmp/b.jpg "{prompt}"`
+
+Note: `--file` is specific to `claude --print`. If the configured CLI tool does not support `--file` (e.g. a different CLI), images silently fall back to text annotation (same as Ollama). Detection: if the command name does not contain "claude", skip `--file` and append `[圖片: name]` to the prompt text instead.
 
 ### Ollama (`ollama.go`)
 
@@ -174,6 +200,8 @@ func parseXlsx(data []byte, maxRows int) (string, error) {
 }
 ```
 
+**Multi-sheet behavior**: iterate all non-empty sheets. The 200-row cap is **per sheet**. Each sheet gets its own header in the output. Empty sheets are skipped.
+
 Output format — TSV in code block (consistent with existing text file handling):
 ```
 --- 附件: report.xlsx (Sheet: Sheet1, 顯示前 200/1048 行) ---
@@ -183,6 +211,12 @@ Output format — TSV in code block (consistent with existing text file handling
 值1\t值2\t值3
 ... [truncated, showing first 200 of 1048 rows]
 ```
+```
+--- (Sheet: Sheet2, 50 行) ---
+```
+```
+...
+```
 
 TSV chosen over markdown table because: fewer tokens, no header separator needed, consistent with existing code block format.
 
@@ -191,8 +225,13 @@ TSV chosen over markdown table because: fewer tokens, no header separator needed
 | Item | Limit | Rationale |
 |------|-------|-----------|
 | Image file size | 20 MB per image | Claude API limit |
+| Image count | 5 per message | Token budget; excess images fallback to text annotation |
 | xlsx row count | 200 rows per sheet | Token budget; user confirmed |
 | Text file lines | 500 lines (existing) | Unchanged |
+
+### Image type scope
+
+Only **jpg/png** are sent to the LLM as vision content. Other image types already handled by `isImageFile` (gif, webp, svg) continue with the existing `[圖片: name](permalink)` text annotation — no change.
 
 ## Error Handling
 
@@ -219,3 +258,4 @@ All errors are non-fatal — the workflow continues with whatever content was su
 - Unit test: Claude/OpenAI provider content blocks serialization with images
 - Unit test: CLI provider temp file lifecycle (created, used in args, cleaned up)
 - Unit test: Ollama fallback text for images
+- Integration test: FetchedMessage with images flows through DiagnoseInput → RunLoop first message has images, subsequent messages do not
