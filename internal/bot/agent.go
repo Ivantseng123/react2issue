@@ -44,6 +44,7 @@ func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 func (r *AgentRunner) Run(ctx context.Context, workDir, prompt string) (string, error) {
 	var errs []string
 	for i, agent := range r.agents {
+		slog.Info("trying agent", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
 		output, err := r.runOne(ctx, agent, workDir, prompt)
 		if err != nil {
 			slog.Warn("agent failed", "command", agent.Command, "index", i, "error", err)
@@ -53,6 +54,7 @@ func (r *AgentRunner) Run(ctx context.Context, workDir, prompt string) (string, 
 		slog.Info("agent succeeded", "command", agent.Command, "output_len", len(output))
 		return output, nil
 	}
+	slog.Error("all agents exhausted", "errors", strings.Join(errs, "; "))
 	return "", fmt.Errorf("all agents failed: %s", strings.Join(errs, "; "))
 }
 

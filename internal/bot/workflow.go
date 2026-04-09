@@ -340,8 +340,19 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		return
 	}
 
+	slog.Info("thread context read", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
+
 	// 3. Download attachments.
 	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
+	if len(downloads) > 0 {
+		for _, d := range downloads {
+			if d.Failed {
+				slog.Warn("attachment download failed", "name", d.Name)
+			} else {
+				slog.Info("attachment downloaded", "name", d.Name, "type", d.Type, "path", d.Path)
+			}
+		}
+	}
 
 	// 4. Enrich messages (Mantis URLs).
 	var threadMsgs []ThreadMessage
@@ -394,6 +405,9 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		Prompt:           w.cfg.Prompt,
 	})
 
+	slog.Info("prompt built", "length", len(prompt), "thread_msgs", len(threadMsgs), "attachments", len(attachments))
+	slog.Debug("prompt content", "prompt", prompt)
+
 	// 8. Spawn agent — agent explores codebase, creates GitHub issue (or rejects).
 	output, err := w.agentRunner.Run(ctx, repoPath, prompt)
 	if err != nil {
@@ -402,21 +416,27 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		return
 	}
 
-	// 9. Parse result.
+	slog.Info("agent output received", "length", len(output))
+	slog.Debug("agent raw output", "output", output)
+
+	// 9. Parse result — extract issue URL or rejection/error.
 	result, err := ParseAgentOutput(output)
 	if err != nil {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "分析工具暫時不可用: %v", err)
+		slog.Warn("agent output parse failed", "error", err)
+		w.notifyError(pt.ChannelID, pt.ThreadTS, "分析完成但無法取得結果，請稍後再試")
 		w.clearDedup(pt)
 		return
 	}
 
-	// 10. Report to Slack.
+	slog.Info("triage result", "status", result.Status, "issueURL", result.IssueURL, "message", result.Message)
+
+	// 10. Report to Slack — only one message.
+	branchInfo := ""
+	if pt.SelectedBranch != "" {
+		branchInfo = fmt.Sprintf(" (branch: `%s`)", pt.SelectedBranch)
+	}
 	switch result.Status {
 	case "CREATED":
-		branchInfo := ""
-		if pt.SelectedBranch != "" {
-			branchInfo = fmt.Sprintf(" (branch: `%s`)", pt.SelectedBranch)
-		}
 		w.slack.PostMessage(pt.ChannelID,
 			fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, result.IssueURL),
 			pt.ThreadTS)

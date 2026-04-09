@@ -27,7 +27,7 @@ internal/
   bot/
     workflow.go              # Orchestrator: trigger → interact → spawn agent → parse → issue
     agent.go                 # AgentRunner: spawn CLI agent with fallback chain
-    parser.go                # Parse agent output (markdown + ===TRIAGE_METADATA=== + JSON)
+    parser.go                # Parse agent output (===TRIAGE_RESULT=== CREATED/REJECTED/ERROR)
     prompt.go                # Build minimal user prompt for CLI agent
     enrich.go                # Expand Mantis URLs in messages
   slack/
@@ -52,7 +52,7 @@ Instead of implementing a custom agent loop with tools, the bot spawns external 
 Agents are configured in YAML. If the active agent fails (timeout, not found, error), the bot tries the next agent in the fallback chain.
 
 ### Output Format
-Agent output is split by `===TRIAGE_METADATA===`: markdown body (used as issue content) + JSON metadata (issue_type, confidence, files, suggested_title). The parser uses the last occurrence of the separator.
+Agent creates the GitHub issue directly via `gh issue create` and outputs a result marker. The parser looks for `===TRIAGE_RESULT===` followed by `CREATED: {url}`, `REJECTED: {reason}`, or `ERROR: {message}`. If the marker is missing, the parser falls back to extracting a GitHub issue URL from the output.
 
 ### Rejection vs Degradation
 - `confidence=low` → reject (likely wrong repo)

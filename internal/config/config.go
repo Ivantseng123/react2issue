@@ -9,6 +9,7 @@ import (
 )
 
 type Config struct {
+	LogLevel          string                   `yaml:"log_level"`
 	Server            ServerConfig             `yaml:"server"`
 	Slack             SlackConfig              `yaml:"slack"`
 	GitHub            GitHubConfig             `yaml:"github"`

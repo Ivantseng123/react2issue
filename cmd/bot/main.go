@@ -25,6 +25,7 @@ func main() {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()
 
+	// Use INFO until config is loaded.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	cfg, err := config.Load(*configPath)
@@ -32,6 +33,9 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	// Re-init logger with configured level.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})))
 
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken)
 
@@ -204,5 +208,18 @@ func main() {
 	if err := sm.Run(); err != nil {
 		slog.Error("socket mode error", "error", err)
 		os.Exit(1)
+	}
+}
+
+func parseLogLevel(level string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
