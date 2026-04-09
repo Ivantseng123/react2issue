@@ -383,6 +383,7 @@ func (w *Workflow) createIssue(pi *pendingIssue, branch string) {
 	diagInput := diagnosis.DiagnoseInput{
 		Type:     pi.ReactionCfg.Type,
 		Message:  pi.Message,
+		Images:   toImageContent(pi.Images),
 		RepoPath: repoPath,
 		Keywords: keywords,
 		Prompt: llm.PromptOptions{
@@ -533,4 +534,16 @@ func (w *Workflow) notifyError(channelID, threadTS string, format string, args .
 	msg := fmt.Sprintf(format, args...)
 	slog.Error("workflow error", "message", msg)
 	w.slack.PostMessage(channelID, fmt.Sprintf(":x: %s", msg), threadTS)
+}
+
+func toImageContent(images []slackclient.ImageData) []llm.ImageContent {
+	result := make([]llm.ImageContent, len(images))
+	for i, img := range images {
+		result[i] = llm.ImageContent{
+			Name:     img.Name,
+			MimeType: img.MimeType,
+			Data:     img.Data,
+		}
+	}
+	return result
 }
