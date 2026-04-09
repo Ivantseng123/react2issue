@@ -12,7 +12,7 @@ type PromptOptions struct {
 }
 
 // AgentSystemPrompt builds the system prompt for the agent-loop diagnosis.
-func AgentSystemPrompt(diagType string, opts PromptOptions) string {
+func AgentSystemPrompt(diagType string, opts PromptOptions, hasImages bool) string {
 	var sb strings.Builder
 
 	sb.WriteString(`You are a code triage assistant investigating a REMOTE repository via tools.
@@ -38,6 +38,12 @@ Output rules:
 - open_questions: ONLY things the reporter/PM can answer (e.g. "which module?", "what screen?"). Do NOT include code-visibility issues like "file was truncated".
 
 `)
+
+	if hasImages {
+		sb.WriteString(`If screenshots or images are attached, use them to understand the reported behavior, error messages, or UI state. Reference what you see in the images when relevant to your triage.
+
+`)
+	}
 
 	sb.WriteString(agentOutputSchema(diagType))
 

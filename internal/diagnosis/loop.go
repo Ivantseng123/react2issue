@@ -51,7 +51,7 @@ func RunLoop(ctx context.Context, chain llm.ConversationProvider, tools []Tool, 
 	toolDefs := ToolDefs(tools)
 	toolMap := ToolMap(tools)
 
-	baseSystem := llm.AgentSystemPrompt(input.Type, input.Prompt)
+	baseSystem := llm.AgentSystemPrompt(input.Type, input.Prompt, len(input.Images) > 0)
 
 	typeLabel := "Bug"
 	if input.Type == "feature" {
