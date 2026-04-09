@@ -23,9 +23,8 @@ cp config.example.yaml config.yaml
   → dedup + rate limit → 讀取 thread 所有訊息 + 下載附件
   → repo/branch 選擇（thread 內按鈕）→ 可選補充說明
   → spawn CLI agent（claude/opencode/codex/gemini）
-    agent 用自己的工具探索 codebase → 回傳 markdown + JSON metadata
-  → confidence=low? 拒絕 : files=0? 建 issue 但跳過 triage : 建完整 issue
-  → Go 注入 header（channel/reporter）→ 建 GitHub issue → post URL in thread
+    agent 探索 codebase + 判斷 confidence + 建 GitHub issue（或拒絕）
+  → 回傳 issue URL → post 到 Slack thread
 ```
 
 ## 觸發方式
@@ -96,16 +95,17 @@ agents:
 
 ### Agent Skills
 
-Skills 集中管理在 `agents/skills/` 目錄，透過 symlink 發布到各 agent 的全域設定：
+Skills 以目錄形式集中管理在 `agents/skills/`，透過 symlink 發布到各 agent 的全域設定：
 
 ```
 agents/
   skills/
-    triage-issue.md    # 唯一來源，所有 agent 共用
-  setup.sh             # local 開發：建 symlink（run.sh 自動呼叫）
+    triage-issue/
+      SKILL.md           # skill 內容
+  setup.sh               # local 開發：建 symlink（run.sh 自動呼叫）
 ```
 
-新增 skill：在 `agents/skills/` 放 `.md` 檔即可，`setup.sh` 會自動 link 到 Claude Code 和 OpenCode 的全域目錄。
+新增 skill：在 `agents/skills/` 下建目錄 + `SKILL.md`，`setup.sh` 會自動 link 到 Claude Code 和 OpenCode 的全域目錄。
 
 ### Prompt 自訂
 
@@ -117,37 +117,26 @@ prompt:
     - "如果涉及資料庫變更，請提醒需要 migration"
 ```
 
-## Agent 輸出格式
+## Agent 行為
 
-Agent 輸出兩段，用 `===TRIAGE_METADATA===` 分隔：
-
-1. **Markdown body** — 直接作為 issue 內容
-2. **JSON metadata** — bot 用來決定 reject/degrade、issue title、labels
+Agent 收到 prompt 後：
+1. 載入 triage-issue skill（從全域 `~/.claude/skills/`）
+2. 探索 codebase（用自己的內建工具）
+3. 評估 confidence（low → 拒絕建 issue）
+4. 用 `gh issue create` 建立 GitHub issue
+5. 回傳結果標記：
 
 ```
-## 問題摘要
-登入頁面按送出後一直轉圈圈...
-
-## 相關程式碼
-- src/api/auth/login.ts:45
-
-===TRIAGE_METADATA===
-{
-  "issue_type": "bug",
-  "confidence": "high",
-  "files": [{"path": "src/api/auth/login.ts", "line": 45, "relevance": "login handler"}],
-  "open_questions": ["是否所有使用者都受影響？"],
-  "suggested_title": "登入頁面送出後無限 loading"
-}
+===TRIAGE_RESULT===
+CREATED: https://github.com/owner/repo/issues/42
 ```
 
-## Rejection / Degradation
+或拒絕：
 
-| 情況 | 行為 |
-|------|------|
-| 正常 triage | 建 issue（Go header + agent markdown） |
-| `files=0` 或 `questions>=5`，confidence 非 low | 建 issue，跳過 triage section |
-| `confidence=low` | 拒絕（可能選錯 repo） |
+```
+===TRIAGE_RESULT===
+REJECTED: 問題與此 repo 的程式碼關聯性不足
+```
 
 ## Slack App 設定
 
@@ -164,6 +153,66 @@ Slash Command：
 
 Socket Mode 啟用，App-Level Token scope `connections:write`。
 
+## 部署
+
+### Local
+
+```bash
+./run.sh
+# 或
+go build -o bot ./cmd/bot/ && ./bot -config config.yaml
+```
+
+### Docker
+
+```bash
+docker build -t react2issue .
+docker run -e SLACK_BOT_TOKEN=xoxb-... \
+           -e SLACK_APP_TOKEN=xapp-... \
+           -e GH_TOKEN=ghp_... \
+           -e CLAUDE_AUTH_TOKEN=... \
+           react2issue
+```
+
+### Kubernetes
+
+使用 Kustomize：
+
+```
+deploy/
+  base/                          # 通用 deployment（進 repo）
+    kustomization.yaml
+    deployment.yaml
+  overlays/
+    example/                     # 範本（進 repo）
+      kustomization.yaml.example
+      secret.yaml.example
+    <your-env>/                  # 實際設定（gitignored）
+      kustomization.yaml
+      secret.yaml
+```
+
+```bash
+# 建立 overlay
+cp deploy/overlays/example/*.example deploy/overlays/my-env/
+# 編輯設定
+vi deploy/overlays/my-env/kustomization.yaml
+vi deploy/overlays/my-env/secret.yaml
+# 部署
+kubectl apply -k deploy/overlays/my-env/
+```
+
+Claude CLI 認證：本地跑 `claude setup-token` 取得 token，存入 k8s Secret 的 `CLAUDE_AUTH_TOKEN`。
+
+### CI/CD (Jenkins)
+
+| Pipeline | 說明 |
+|----------|------|
+| `Jenkinsfile-bump-version` | semver 檢查 → go test → 自動 PR merge 更新版號 |
+| `Jenkinsfile-release` | docker build/push → GitHub Release |
+
+Registry、image name、credential ID 透過 Jenkins parameters 注入，不寫死在 repo。
+
 ## 架構
 
 ```
@@ -171,37 +220,32 @@ cmd/bot/main.go              # entry point, Socket Mode event loop
 internal/
   config/config.go           # YAML config: agents, channels, prompt, rate limits
   bot/
-    workflow.go              # trigger → interact → spawn agent → parse → issue
+    workflow.go              # trigger → interact → spawn agent → parse result
     agent.go                 # AgentRunner: spawn CLI agent with fallback chain
-    parser.go                # parse markdown + ===TRIAGE_METADATA=== + JSON
+    parser.go                # parse ===TRIAGE_RESULT=== (CREATED/REJECTED/ERROR)
     prompt.go                # build minimal user prompt for CLI agent
     enrich.go                # expand Mantis URLs in messages
   slack/
     client.go                # PostMessage/PostSelector/FetchThreadContext/DownloadAttachments
     handler.go               # TriggerEvent dedup, rate limiting, bounded concurrency
   github/
-    issue.go                 # CreateIssue(ctx, owner, repo, title, body, labels)
+    issue.go                 # CreateIssue (backup, agent handles issue creation)
     repo.go                  # RepoCache: clone, fetch, branch list, checkout
     discovery.go             # GitHub API repo discovery with cache
   mantis/                    # Mantis bug tracker URL enrichment
 agents/
-  skills/                    # Agent skills (symlinked to global dirs)
-    triage-issue.md
+  skills/
+    triage-issue/SKILL.md    # Agent skill: triage + gh issue create
   setup.sh                   # Setup symlinks for local dev
+deploy/
+  base/                      # Kustomize base (deployment)
+  overlays/example/          # Overlay template (secret.yaml.example)
 ```
 
 ## 測試
 
 ```bash
-go test ./...   # 69 tests
-```
-
-## Build
-
-```bash
-./run.sh
-# 或
-go build -o bot ./cmd/bot/ && ./bot -config config.yaml
+go test ./...
 ```
 
 ## License
