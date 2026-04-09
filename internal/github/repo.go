@@ -58,6 +58,20 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 	cmd := exec.Command("git", "-C", localPath, "fetch", "--all", "--prune")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		slog.Warn("git fetch failed", "error", err, "output", string(out))
+		// Broken repo (e.g. interrupted clone) — remove and re-clone
+		if strings.Contains(string(out), "not a git repository") {
+			slog.Info("removing broken repo dir and re-cloning", "repo", repoRef)
+			os.RemoveAll(localPath)
+			if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
+				return "", fmt.Errorf("mkdir: %w", err)
+			}
+			cmd = exec.Command("git", "clone", cloneURL, localPath)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("git clone (retry): %w\n%s", err, out)
+			}
+			rc.lastPull[repoRef] = time.Now()
+			return localPath, nil
+		}
 	}
 	// Fast-forward current branch to match remote
 	cmd = exec.Command("git", "-C", localPath, "pull", "--ff-only")
