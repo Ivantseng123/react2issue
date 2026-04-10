@@ -41,24 +41,24 @@ func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 	return runner
 }
 
-func (r *AgentRunner) Run(ctx context.Context, workDir, prompt string) (string, error) {
+func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string) (string, error) {
 	var errs []string
 	for i, agent := range r.agents {
-		slog.Info("trying agent", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
-		output, err := r.runOne(ctx, agent, workDir, prompt)
+		logger.Info("trying agent", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
+		output, err := r.runOne(ctx, logger, agent, workDir, prompt)
 		if err != nil {
-			slog.Warn("agent failed", "command", agent.Command, "index", i, "error", err)
+			logger.Warn("agent failed", "command", agent.Command, "index", i, "error", err)
 			errs = append(errs, fmt.Sprintf("%s: %s", agent.Command, err))
 			continue
 		}
-		slog.Info("agent succeeded", "command", agent.Command, "output_len", len(output))
+		logger.Info("agent succeeded", "command", agent.Command, "output_len", len(output))
 		return output, nil
 	}
-	slog.Error("all agents exhausted", "errors", strings.Join(errs, "; "))
+	logger.Error("all agents exhausted", "errors", strings.Join(errs, "; "))
 	return "", fmt.Errorf("all agents failed: %s", strings.Join(errs, "; "))
 }
 
-func (r *AgentRunner) runOne(ctx context.Context, agent config.AgentConfig, workDir, prompt string) (string, error) {
+func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string) (string, error) {
 	timeout := agent.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -86,7 +86,7 @@ func (r *AgentRunner) runOne(ctx context.Context, agent config.AgentConfig, work
 				args = append(args, a)
 			}
 		}
-		slog.Info("prompt too large for args, using stdin", "prompt_len", len(prompt))
+		logger.Info("prompt too large for args, using stdin", "prompt_len", len(prompt))
 	} else {
 		args = substitutePrompt(agent.Args, prompt)
 	}

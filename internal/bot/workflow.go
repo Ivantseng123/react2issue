@@ -11,6 +11,7 @@ import (
 
 	"slack-issue-bot/internal/config"
 	ghclient "slack-issue-bot/internal/github"
+	"slack-issue-bot/internal/logging"
 	"slack-issue-bot/internal/mantis"
 	slackclient "slack-issue-bot/internal/slack"
 )
@@ -30,6 +31,8 @@ type pendingTriage struct {
 	ChannelName    string
 	ExtraDesc      string
 	CmdArgs        string
+	RequestID      string
+	Logger         *slog.Logger
 }
 
 type Workflow struct {
@@ -97,6 +100,14 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		channelCfg = w.cfg.ChannelDefaults
 	}
 
+	reqID := logging.NewRequestID()
+	logger := slog.With(
+		"request_id", reqID,
+		"channel_id", event.ChannelID,
+		"thread_ts", event.ThreadTS,
+		"user_id", event.UserID,
+	)
+
 	reporter := w.slack.ResolveUser(event.UserID)
 	channelName := w.slack.GetChannelName(event.ChannelID)
 
@@ -108,6 +119,8 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		ChannelName: channelName,
 		CmdArgs:     parseTriggerArgs(event.Text),
 	}
+	pt.RequestID = reqID
+	pt.Logger = logger
 
 	repo, branch := parseRepoArg(pt.CmdArgs)
 	if repo != "" {
@@ -135,7 +148,7 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 			":point_right: Which repo should this issue go to?",
 			"repo_select", repos, pt.ThreadTS)
 		if err != nil {
-			w.notifyError(event.ChannelID, pt.ThreadTS, "Failed to show repo selector: %v", err)
+			w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo selector: %v", err)
 			return
 		}
 		pt.SelectorTS = selectorTS
@@ -148,7 +161,7 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		":point_right: Search and select a repo:",
 		"repo_search", "Type to search repos...", pt.ThreadTS)
 	if err != nil {
-		w.notifyError(event.ChannelID, pt.ThreadTS, "Failed to show repo search: %v", err)
+		w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo search: %v", err)
 		return
 	}
 	pt.SelectorTS = selectorTS
@@ -202,7 +215,7 @@ func (w *Workflow) afterRepoSelected(pt *pendingTriage, channelCfg config.Channe
 
 	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo)
 	if err != nil {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
 		return
 	}
 
@@ -308,7 +321,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	tempDir, err := os.MkdirTemp("", "triage-*")
 	if err != nil {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "Failed to create temp dir: %v", err)
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to create temp dir: %v", err)
 		w.clearDedup(pt)
 		return
 	}
@@ -319,13 +332,13 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	// 1. Ensure repo checked out.
 	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo)
 	if err != nil {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
 		w.clearDedup(pt)
 		return
 	}
 	if pt.SelectedBranch != "" {
 		if err := w.repoCache.Checkout(repoPath, pt.SelectedBranch); err != nil {
-			w.notifyError(pt.ChannelID, pt.ThreadTS, "Failed to checkout branch %s: %v", pt.SelectedBranch, err)
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to checkout branch %s: %v", pt.SelectedBranch, err)
 			w.clearDedup(pt)
 			return
 		}
@@ -335,21 +348,21 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	botUserID := ""
 	rawMsgs, err := w.slack.FetchThreadContext(pt.ChannelID, pt.ThreadTS, pt.TriggerTS, botUserID, w.cfg.MaxThreadMessages)
 	if err != nil {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "Failed to read thread: %v", err)
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to read thread: %v", err)
 		w.clearDedup(pt)
 		return
 	}
 
-	slog.Info("thread context read", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
+	pt.Logger.Info("thread context read", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
 
 	// 3. Download attachments.
 	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
 	if len(downloads) > 0 {
 		for _, d := range downloads {
 			if d.Failed {
-				slog.Warn("attachment download failed", "name", d.Name)
+				pt.Logger.Warn("attachment download failed", "name", d.Name)
 			} else {
-				slog.Info("attachment downloaded", "name", d.Name, "type", d.Type, "path", d.Path)
+				pt.Logger.Info("attachment downloaded", "name", d.Name, "type", d.Type, "path", d.Path)
 			}
 		}
 	}
@@ -405,30 +418,37 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		Prompt:           w.cfg.Prompt,
 	})
 
-	slog.Info("prompt built", "length", len(prompt), "thread_msgs", len(threadMsgs), "attachments", len(attachments))
-	slog.Debug("prompt content", "prompt", prompt)
+	pt.Logger.Info("prompt built", "length", len(prompt), "thread_msgs", len(threadMsgs), "attachments", len(attachments))
+	pt.Logger.Debug("prompt content", "prompt", prompt)
 
 	// 8. Spawn agent — agent explores codebase, creates GitHub issue (or rejects).
-	output, err := w.agentRunner.Run(ctx, repoPath, prompt)
+	output, err := w.agentRunner.Run(ctx, pt.Logger, repoPath, prompt)
 	if err != nil {
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "分析工具暫時不可用: %v", err)
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "分析工具暫時不可用: %v", err)
 		w.clearDedup(pt)
 		return
 	}
 
-	slog.Info("agent output received", "length", len(output))
-	slog.Debug("agent raw output", "output", output)
+	pt.Logger.Info("agent output received", "length", len(output))
+	pt.Logger.Debug("agent raw output", "output", output)
+
+	outputPath, saveErr := logging.SaveAgentOutput(w.cfg.Logging.AgentOutputDir, pt.RequestID, pt.SelectedRepo, output)
+	if saveErr != nil {
+		pt.Logger.Warn("failed to save agent output", "error", saveErr)
+	} else {
+		pt.Logger.Info("agent output saved", "path", outputPath, "length", len(output))
+	}
 
 	// 9. Parse result — extract issue URL or rejection/error.
 	result, err := ParseAgentOutput(output)
 	if err != nil {
-		slog.Warn("agent output parse failed", "error", err)
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "分析完成但無法取得結果，請稍後再試")
+		pt.Logger.Warn("agent output parse failed", "error", err)
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "分析完成但無法取得結果，請稍後再試")
 		w.clearDedup(pt)
 		return
 	}
 
-	slog.Info("triage result", "status", result.Status, "issueURL", result.IssueURL, "message", result.Message)
+	pt.Logger.Info("triage result", "status", result.Status, "issueURL", result.IssueURL, "message", result.Message)
 
 	// 10. Report to Slack — only one message.
 	branchInfo := ""
@@ -445,7 +465,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 			fmt.Sprintf(":warning: 無法建立 issue — %s", result.Message),
 			pt.ThreadTS)
 	case "ERROR":
-		w.notifyError(pt.ChannelID, pt.ThreadTS, "Agent error: %s", result.Message)
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Agent error: %s", result.Message)
 	}
 
 	w.clearDedup(pt)
@@ -480,9 +500,9 @@ func (w *Workflow) clearDedup(pt *pendingTriage) {
 	}
 }
 
-func (w *Workflow) notifyError(channelID, threadTS string, format string, args ...any) {
+func (w *Workflow) notifyError(logger *slog.Logger, channelID, threadTS string, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	slog.Error("workflow error", "message", msg)
+	logger.Error("workflow error", "message", msg)
 	w.slack.PostMessage(channelID, fmt.Sprintf(":x: %s", msg), threadTS)
 }
 
