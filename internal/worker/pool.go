@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"slack-issue-bot/internal/bot"
 	"slack-issue-bot/internal/queue"
 )
 
@@ -67,7 +68,7 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 				continue
 			}
 
-			result := executeJob(ctx, job, deps)
+			result := executeJob(ctx, job, deps, bot.RunOptions{})
 			p.cfg.Store.UpdateStatus(job.ID, queue.JobStatus(result.Status))
 			if err := p.cfg.Results.Publish(ctx, result); err != nil {
 				logger.Error("failed to publish result", "job_id", job.ID, "error", err)

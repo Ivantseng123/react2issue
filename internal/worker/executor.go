@@ -13,7 +13,7 @@ import (
 
 // Runner abstracts agent execution (for testing).
 type Runner interface {
-	Run(ctx context.Context, workDir, prompt string) (string, error)
+	Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error)
 }
 
 // RepoProvider abstracts repo clone/checkout (for testing).
@@ -29,7 +29,7 @@ type executionDeps struct {
 	skillDir    string
 }
 
-func executeJob(ctx context.Context, job *queue.Job, deps executionDeps) *queue.JobResult {
+func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions) *queue.JobResult {
 	startedAt := time.Now()
 
 	// Resolve attachments (blocks until Prepare completes on app side).
@@ -61,7 +61,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps) *queue.
 
 	// Execute agent.
 	deps.store.UpdateStatus(job.ID, queue.JobRunning)
-	output, err := deps.runner.Run(ctx, repoPath, job.Prompt)
+	output, err := deps.runner.Run(ctx, repoPath, job.Prompt, opts)
 	if err != nil {
 		return failedResult(job, startedAt, err)
 	}

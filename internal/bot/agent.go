@@ -3,14 +3,24 @@ package bot
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"slack-issue-bot/internal/config"
+	"slack-issue-bot/internal/queue"
 )
+
+// RunOptions provides per-call callbacks for agent execution.
+type RunOptions struct {
+	OnStarted func(pid int, command string)
+	OnEvent   func(event queue.StreamEvent)
+}
 
 type AgentRunner struct {
 	agents      []config.AgentConfig
@@ -41,11 +51,11 @@ func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 	return runner
 }
 
-func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string) (string, error) {
+func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string, opts RunOptions) (string, error) {
 	var errs []string
 	for i, agent := range r.agents {
 		logger.Info("trying agent", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
-		output, err := r.runOne(ctx, logger, agent, workDir, prompt)
+		output, err := r.runOne(ctx, logger, agent, workDir, prompt, opts)
 		if err != nil {
 			logger.Warn("agent failed", "command", agent.Command, "index", i, "error", err)
 			errs = append(errs, fmt.Sprintf("%s: %s", agent.Command, err))
@@ -58,7 +68,7 @@ func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, pro
 	return "", fmt.Errorf("all agents failed: %s", strings.Join(errs, "; "))
 }
 
-func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string) (string, error) {
+func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (string, error) {
 	timeout := agent.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
@@ -94,24 +104,95 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 	cmd := exec.CommandContext(ctx, agent.Command, args...)
 	cmd.Dir = workDir
 
-	// Pass GH_TOKEN so agent can use `gh issue create`
+	// Graceful termination: SIGTERM first, then force-kill after 10s.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
+
+	// Pass GH_TOKEN for agent to access GitHub API.
 	cmd.Env = append(os.Environ(), fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
 
 	if useStdin {
 		cmd.Stdin = strings.NewReader(prompt)
 	}
 
-	output, err := cmd.Output()
+	// Use StdoutPipe for streaming reads.
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	// Notify listener of PID.
+	if opts.OnStarted != nil {
+		opts.OnStarted(cmd.Process.Pid, agent.Command)
+	}
+	logger.Info("agent process started", "command", agent.Command, "pid", cmd.Process.Pid)
+
+	// Read stdout in a goroutine; wait for it before cmd.Wait().
+	var output string
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		output = readOutput(ctx, stdoutPipe, agent.Stream, opts.OnEvent)
+	}()
+	wg.Wait()
+
+	err = cmd.Wait()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("timeout after %s", timeout)
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("exit %d: %s", exitErr.ExitCode(), strings.TrimSpace(string(exitErr.Stderr)))
+			return "", fmt.Errorf("exit %d: %s", exitErr.ExitCode(), strings.TrimSpace(stderr.String()))
 		}
 		return "", err
 	}
-	return strings.TrimSpace(string(output)), nil
+	return strings.TrimSpace(output), nil
+}
+
+// readOutput routes stdout through the appropriate reader based on stream config.
+func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queue.StreamEvent)) string {
+	if !stream {
+		return queue.ReadRawOutput(r)
+	}
+
+	eventCh := make(chan queue.StreamEvent, 64)
+	var result string
+	var wg sync.WaitGroup
+
+	// Forward events to callback in a context-aware goroutine.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case evt, ok := <-eventCh:
+				if !ok {
+					return
+				}
+				if onEvent != nil {
+					onEvent(evt)
+				}
+			case <-ctx.Done():
+				// Drain remaining events.
+				for range eventCh {
+				}
+				return
+			}
+		}
+	}()
+
+	result = queue.ReadStreamJSON(r, eventCh)
+	close(eventCh)
+	wg.Wait()
+	return result
 }
 
 func substitutePrompt(args []string, prompt string) []string {

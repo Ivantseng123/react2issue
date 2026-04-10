@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"slack-issue-bot/internal/bot"
 	"slack-issue-bot/internal/queue"
 )
 
@@ -14,7 +15,7 @@ type mockRunner struct {
 	err    error
 }
 
-func (m *mockRunner) Run(ctx context.Context, workDir, prompt string) (string, error) {
+func (m *mockRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
 	return m.output, m.err
 }
 

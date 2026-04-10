@@ -28,7 +28,7 @@ echo '{"issue_type":"bug","confidence":"high","files":[],"open_questions":[],"su
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 10 * time.Second},
 	})
 
-	output, err := runner.Run(context.Background(), slog.Default(), dir, "test prompt")
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test prompt", RunOptions{})
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestAgentRunner_Fallback(t *testing.T) {
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
 
-	output, err := runner.Run(context.Background(), slog.Default(), dir, "test")
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
 	if err != nil {
 		t.Fatalf("Run with fallback failed: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestAgentRunner_AllFail(t *testing.T) {
 		{Command: "/nonexistent/agent2", Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
 
-	_, err := runner.Run(context.Background(), slog.Default(), t.TempDir(), "test")
+	_, err := runner.Run(context.Background(), slog.Default(), t.TempDir(), "test", RunOptions{})
 	if err == nil {
 		t.Error("expected error when all agents fail")
 	}
@@ -80,7 +80,7 @@ func TestAgentRunner_Timeout(t *testing.T) {
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 100 * time.Millisecond},
 	})
 
-	_, err := runner.Run(context.Background(), slog.Default(), dir, "test")
+	_, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
 	if err == nil {
 		t.Error("expected timeout error")
 	}
@@ -98,7 +98,7 @@ echo "padding padding padding padding padding padding padding"
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
 
-	output, err := runner.Run(context.Background(), slog.Default(), dir, "hello world")
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "hello world", RunOptions{})
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}

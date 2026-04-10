@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"slack-issue-bot/internal/bot"
 	"slack-issue-bot/internal/queue"
 	"slack-issue-bot/internal/worker"
 )
 
 type fakeRunner struct{}
 
-func (f *fakeRunner) Run(ctx context.Context, workDir, prompt string) (string, error) {
+func (f *fakeRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
 	result := map[string]any{
 		"status":         "CREATED",
 		"title":          "Test issue",
@@ -144,7 +145,7 @@ type orderRunner struct {
 	order *[]string
 }
 
-func (r *orderRunner) Run(ctx context.Context, workDir, prompt string) (string, error) {
+func (r *orderRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
 	r.mu.Lock()
 	*r.order = append(*r.order, prompt)
 	r.mu.Unlock()

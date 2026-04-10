@@ -295,8 +295,8 @@ type agentRunnerAdapter struct {
 	runner *bot.AgentRunner
 }
 
-func (a *agentRunnerAdapter) Run(ctx context.Context, workDir, prompt string) (string, error) {
-	return a.runner.Run(ctx, slog.Default(), workDir, prompt)
+func (a *agentRunnerAdapter) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+	return a.runner.Run(ctx, slog.Default(), workDir, prompt, opts)
 }
 
 // repoCacheAdapter wraps RepoCache to satisfy worker.RepoProvider interface.
