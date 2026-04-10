@@ -9,7 +9,7 @@ Decouple the app → agent execution path using a producer/consumer queue archit
 - **Priority queue**: Bounded capacity queue with channel-based priority ordering
 - **Producer/Consumer abstraction**: Interface designed for remote transport (fully serializable jobs), with in-memory implementation as first transport
 - **Result queue**: Workers publish results back; app listens and handles all side effects (GitHub issue creation, Slack posting)
-- **Attachment two-phase**: Job carries attachment metadata only; files downloaded after worker Ack to avoid storage bloat
+- **Attachment two-phase**: Job carries attachment metadata only; worker calls `Resolve` which blocks until app-side `Prepare` completes, avoiding storage bloat for queued jobs
 - **Job observability**: Full lifecycle tracking (pending → running → completed/failed) with queue position queryable by Slack users
 - **No retry**: Failures reported directly to Slack; existing agent fallback chain handles transient agent errors
 - **Side effects in app only**: Workers do not create GitHub issues or post to Slack; they return structured triage results
@@ -63,13 +63,13 @@ Decouple the app → agent execution path using a producer/consumer queue archit
 type Job struct {
     ID          string            `json:"id"`
     Priority    int               `json:"priority"`
+    Seq         uint64            `json:"seq"`             // monotonic counter for FIFO tie-breaking
     ChannelID   string            `json:"channel_id"`
     ThreadTS    string            `json:"thread_ts"`
     UserID      string            `json:"user_id"`
-    RepoOwner   string            `json:"repo_owner"`
-    RepoName    string            `json:"repo_name"`
+    Repo        string            `json:"repo"`            // "owner/repo" format (consistent with codebase)
     Branch      string            `json:"branch"`
-    CloneURL    string            `json:"clone_url"`
+    CloneURL    string            `json:"clone_url"`       // explicit for remote workers
     Prompt      string            `json:"prompt"`
     RequestID   string            `json:"request_id"`
     Attachments []AttachmentMeta  `json:"attachments"`
@@ -109,8 +109,13 @@ type JobResult struct {
 Submit → Pending (queued, position queryable)
   → Ack → Preparing (downloading attachments + cloning repo)
     → Running (agent executing)
-      → Completed / Failed
+      → Completed / Failed → Cleaned up (attachments removed, dedup cleared)
 ```
+
+### Delivery Guarantees
+
+- **In-memory transport**: At-most-once delivery. A job is considered consumed when sent on the `Receive` channel. If a worker crashes mid-execution, the job is lost. This is acceptable because: (1) users are notified the job was accepted, (2) they can re-trigger, and (3) the current system already drops requests under load.
+- **Future remote transport**: Should implement at-least-once with `Ack`-based redelivery. The `Ack` method exists in the interface to support this — in-memory `Ack` updates job state but does not gate redelivery.
 
 ## Interfaces
 
@@ -138,20 +143,29 @@ type JobQueue interface {
 type WorkerInfo struct {
     WorkerID    string   `json:"worker_id"`
     Name        string   `json:"name"`
-    Agents      []string `json:"agents"`
-    Labels      []string `json:"labels"`
+    Agents      []string `json:"agents"`      // available agent CLIs
+    Tags        []string `json:"tags"`        // capabilities: "gpu", "fast", etc.
     ConnectedAt time.Time
 }
 ```
 
 ### Attachment Store (two-phase download)
 
+The two-phase flow works as follows:
+1. Worker calls `Ack(jobID)` — this triggers the transport to notify the app side
+2. App side calls `Prepare(jobID, attachments)` — downloads from Slack to temp storage
+3. Worker calls `Resolve(jobID)` — **blocks until `Prepare` completes**, then returns attachment locations
+
+In-memory implementation: `Ack` sets a flag, `Prepare` is called synchronously by the `InMemTransport` Ack handler, `Resolve` waits on a `sync.WaitGroup` or channel that `Prepare` signals when done. No race condition because `Resolve` is guaranteed to block until ready.
+
+For remote transport: `Ack` sends a message to app, app runs `Prepare` and signals readiness via a "attachments-ready" message on the result bus, worker's `Resolve` blocks on that message.
+
 ```go
 type AttachmentStore interface {
-    // App side: called after worker Ack, downloads from Slack
+    // App side: called by transport after worker Ack, downloads from Slack
     Prepare(ctx context.Context, jobID string, attachments []AttachmentMeta) error
 
-    // Worker side: get attachment access info
+    // Worker side: blocks until Prepare completes, returns attachment locations
     Resolve(ctx context.Context, jobID string) ([]AttachmentReady, error)
 
     // Cleanup after job completion
@@ -182,6 +196,7 @@ type JobStore interface {
     GetByThread(channelID, threadTS string) (*JobState, error)
     ListPending() ([]*JobState, error)
     Update(jobID string, status JobStatus) error
+    Delete(jobID string) error                    // remove after ResultListener processes
     ClearDedup(channelID, threadTS string)
 }
 
@@ -193,6 +208,9 @@ type JobState struct {
     StartedAt time.Time
     WaitTime  time.Duration
 }
+```
+
+Job lifecycle in store: `Submit` creates entry → state transitions during execution → `ResultListener` processes result → calls `Delete` to remove. A background goroutine with TTL (default 1h) cleans up orphaned entries as a safety net.
 ```
 
 ## Priority Queue Implementation
@@ -207,12 +225,12 @@ type queueEntry struct {
     index int
 }
 
-// Higher priority first; FIFO within same priority
+// Higher priority first; FIFO within same priority (using monotonic Seq)
 func (pq priorityQueue) Less(i, j int) bool {
     if pq[i].job.Priority != pq[j].job.Priority {
         return pq[i].job.Priority > pq[j].job.Priority
     }
-    return pq[i].job.SubmittedAt.Before(pq[j].job.SubmittedAt)
+    return pq[i].job.Seq < pq[j].job.Seq
 }
 ```
 
@@ -240,14 +258,38 @@ type Pool struct {
 func (p *Pool) runWorker(ctx context.Context, id int) {
     jobs, _ := p.queue.Receive(ctx)
     for job := range jobs {
-        p.queue.Ack(ctx, job.ID)
-        attachments, _ := p.attachments.Resolve(ctx, job.ID)
-        repoPath, _ := p.repoCache.Prepare(job.CloneURL, job.Branch)
-        copyAttachmentsToRepo(attachments, repoPath)
-        output, err := p.agentRunner.Run(ctx, repoPath, job.Prompt)
-        result := buildResult(job, output, err)
+        result := p.executeJob(ctx, job)
         p.results.Publish(ctx, result)
     }
+}
+
+func (p *Pool) executeJob(ctx context.Context, job *Job) *JobResult {
+    // Ack triggers app-side attachment download
+    if err := p.queue.Ack(ctx, job.ID); err != nil {
+        return failedResult(job, fmt.Errorf("ack failed: %w", err))
+    }
+
+    // Resolve blocks until attachments are ready
+    attachments, err := p.attachments.Resolve(ctx, job.ID)
+    if err != nil {
+        return failedResult(job, fmt.Errorf("attachments failed: %w", err))
+    }
+
+    // Clone/fetch repo
+    owner, repo := splitRepo(job.Repo)
+    repoPath, err := p.repoCache.Prepare(job.CloneURL, job.Branch)
+    if err != nil {
+        return failedResult(job, fmt.Errorf("repo prepare failed: %w", err))
+    }
+    copyAttachmentsToRepo(attachments, repoPath)
+
+    // Execute agent (uses existing fallback chain)
+    output, err := p.agentRunner.Run(ctx, repoPath, job.Prompt)
+    if err != nil {
+        return failedResult(job, err)
+    }
+
+    return buildResult(job, output)
 }
 ```
 
@@ -261,54 +303,103 @@ All side effects handled by app:
 func (r *ResultListener) Listen(ctx context.Context) {
     ch, _ := r.results.Subscribe(ctx)
     for result := range ch {
-        job, _ := r.jobStore.Get(result.JobID)
+        job, err := r.jobStore.Get(result.JobID)
+        if err != nil {
+            slog.Error("job not found for result", "job_id", result.JobID)
+            continue
+        }
+
+        owner, repo := splitRepo(job.Job.Repo) // "owner/repo" → "owner", "repo"
+
         switch {
         case result.Status == "failed":
-            r.slack.PostMessage(..., formatError(result))
+            r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, formatError(result))
         case result.Confidence == "low":
-            r.slack.PostMessage(..., "判斷不屬於此 repo，已跳過")
+            r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, "判斷不屬於此 repo，已跳過")
         case result.FilesFound == 0 || result.Questions >= 5:
             url, _ := r.github.CreateIssue(owner, repo, result.Title,
                 stripTriageSection(result.Body), result.Labels)
-            r.slack.PostMessage(..., url)
+            r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, url)
         default:
             url, _ := r.github.CreateIssue(owner, repo, result.Title,
                 result.Body, result.Labels)
-            r.slack.PostMessage(..., url)
+            r.slack.PostMessage(job.Job.ChannelID, job.Job.ThreadTS, url)
         }
+
+        // Cleanup: attachments, dedup, and job store entry
         r.attachments.Cleanup(ctx, result.JobID)
-        r.jobStore.ClearDedup(job.ChannelID, job.ThreadTS)
+        r.jobStore.ClearDedup(job.Job.ChannelID, job.Job.ThreadTS)
+        r.jobStore.Delete(result.JobID)
     }
 }
 ```
 
-## Handler Changes
+## Flow Changes
+
+### Handler (dedup + rate limit only, no semaphore)
+
+Handler removes the semaphore. It still does dedup and rate limiting, then spawns the interactive workflow in a goroutine (same as today):
 
 ```go
 func (h *Handler) HandleTrigger(event TriggerEvent) bool {
-    // dedup + rate limit unchanged
     if h.threadDedup.isDuplicate(...) { return false }
     if !h.userLimit.allow(...)       { return false }
     if !h.channelLimit.allow(...)    { return false }
 
-    // Submit to queue instead of semaphore
-    job := buildJob(event)
-    err := h.queue.Submit(ctx, job)
-    if err == ErrQueueFull {
-        h.slack.PostMessage(..., "系統忙碌，請稍後再試")
-        return false
-    }
-
-    // Immediate feedback
-    pos, _ := h.queue.QueuePosition(job.ID)
-    if pos == 0 {
-        h.slack.PostMessage(..., "正在處理你的請求...")
-    } else {
-        h.slack.PostMessage(..., fmt.Sprintf("已加入排隊，前面有 %d 個請求", pos))
-    }
+    // No semaphore — concurrency controlled by queue + worker pool
+    go h.onEvent(event)
     return true
 }
 ```
+
+### Workflow (interactive UI unchanged, submit replaces runTriage)
+
+The interactive flow (repo selection → branch selection → description prompt → thread context → prompt building) stays in `workflow.go` unchanged. The **submission point** is where `runTriage` is currently called — after all interactive steps are complete and the prompt is built:
+
+```go
+func (w *Workflow) runTriage(ctx context.Context, pt *pendingTriage) {
+    // Read thread context, download attachment metadata, build prompt — unchanged
+    prompt := buildPrompt(pt)
+
+    // NEW: submit to queue instead of calling agentRunner.Run directly
+    job := &Job{
+        ID:          pt.RequestID,
+        Priority:    w.channelPriority(pt.ChannelID),
+        Repo:        pt.SelectedRepo,
+        Branch:      pt.SelectedBranch,
+        CloneURL:    w.repoCache.ResolveURL(pt.SelectedRepo),
+        Prompt:      prompt,
+        ChannelID:   pt.ChannelID,
+        ThreadTS:    pt.ThreadTS,
+        UserID:      pt.UserID,
+        RequestID:   pt.RequestID,
+        Attachments: toAttachmentMeta(pt.Attachments),
+        SubmittedAt: time.Now(),
+    }
+    err := w.queue.Submit(ctx, job)
+    if err == ErrQueueFull {
+        w.slack.PostMessage(..., "系統忙碌，請稍後再試")
+        return
+    }
+
+    // Immediate feedback — position 1 means "next up", 0 means "already dequeued"
+    pos, _ := w.queue.QueuePosition(job.ID)
+    if pos <= 1 {
+        w.slack.PostMessage(..., "正在處理你的請求...")
+    } else {
+        w.slack.PostMessage(..., fmt.Sprintf("已加入排隊，前面有 %d 個請求", pos-1))
+    }
+    // Function returns here — result will come back via ResultListener
+}
+```
+
+### QueuePosition semantics
+
+- `0` = job already dequeued (running or completed)
+- `1` = next to be picked up
+- `N` = N-1 jobs ahead in queue
+
+User-facing message uses `pos-1` to show "前面有 X 個請求".
 
 ## Config
 
@@ -369,7 +460,7 @@ internal/
 
 ## Migration Notes
 
-- `max_concurrent` config becomes `workers.count` (backward-compatible default)
+- `max_concurrent` config: config loader checks both `max_concurrent` (old path) and `workers.count` (new path); old path takes precedence if both set, with deprecation warning logged
 - Prompt changes: agent no longer runs `gh issue create`; outputs structured triage result
 - Parser changes: new output format for title/body/labels/metadata instead of `===TRIAGE_RESULT===`
 - Semaphore removal from handler.go
