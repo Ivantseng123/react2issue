@@ -13,6 +13,7 @@ import (
 	"slack-issue-bot/internal/bot"
 	"slack-issue-bot/internal/config"
 	ghclient "slack-issue-bot/internal/github"
+	"slack-issue-bot/internal/logging"
 	"slack-issue-bot/internal/mantis"
 	slackclient "slack-issue-bot/internal/slack"
 
@@ -35,7 +36,17 @@ func main() {
 	}
 
 	// Re-init logger with configured level.
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})))
+	stderrHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})
+
+	rotator, err := logging.NewRotator(cfg.Logging.Dir)
+	if err != nil {
+		slog.Error("failed to init log rotator", "error", err)
+		os.Exit(1)
+	}
+	rotator.StartCleanup(cfg.Logging.RetentionDays)
+
+	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: parseLogLevel(cfg.Logging.Level)})
+	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken)
 
