@@ -36,13 +36,13 @@ func (f *fakeRepo) Prepare(cloneURL, branch string) (string, error) {
 
 func TestFullFlow_SubmitToResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	transport := queue.NewInMemTransport(10, store)
-	defer transport.Close()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 
 	pool := worker.NewPool(worker.Config{
-		Queue:       transport,
-		Attachments: transport,
-		Results:     transport,
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
 		Store:       store,
 		Runner:      &fakeRunner{},
 		RepoCache:   &fakeRepo{},
@@ -55,10 +55,10 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 	pool.Start(ctx)
 
 	// Pre-signal attachments ready.
-	transport.Prepare(ctx, "j1", nil)
+	bundle.Attachments.Prepare(ctx, "j1", nil)
 
 	// Submit job.
-	err := transport.Submit(ctx, &queue.Job{
+	err := bundle.Queue.Submit(ctx, &queue.Job{
 		ID:       "j1",
 		Priority: 50,
 		Repo:     "owner/repo",
@@ -69,7 +69,7 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 	}
 
 	// Wait for result.
-	ch, _ := transport.Subscribe(ctx)
+	ch, _ := bundle.Results.Subscribe(ctx)
 	select {
 	case result := <-ch:
 		if result.Status != "completed" {
@@ -88,26 +88,26 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 
 func TestFullFlow_PriorityOrdering(t *testing.T) {
 	store := queue.NewMemJobStore()
-	transport := queue.NewInMemTransport(10, store)
-	defer transport.Close()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 
 	ctx := context.Background()
-	transport.Prepare(ctx, "low", nil)
-	transport.Prepare(ctx, "high", nil)
-	transport.Prepare(ctx, "mid", nil)
+	bundle.Attachments.Prepare(ctx, "low", nil)
+	bundle.Attachments.Prepare(ctx, "high", nil)
+	bundle.Attachments.Prepare(ctx, "mid", nil)
 
-	transport.Submit(ctx, &queue.Job{ID: "low", Priority: 10, Prompt: "low"})
-	transport.Submit(ctx, &queue.Job{ID: "high", Priority: 100, Prompt: "high"})
-	transport.Submit(ctx, &queue.Job{ID: "mid", Priority: 50, Prompt: "mid"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "low", Priority: 10, Prompt: "low"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "high", Priority: 100, Prompt: "high"})
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "mid", Priority: 50, Prompt: "mid"})
 
 	var mu sync.Mutex
 	var order []string
 	runner := &orderRunner{mu: &mu, order: &order}
 
 	pool := worker.NewPool(worker.Config{
-		Queue:       transport,
-		Attachments: transport,
-		Results:     transport,
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
 		Store:       store,
 		Runner:      runner,
 		RepoCache:   &fakeRepo{},
@@ -119,7 +119,7 @@ func TestFullFlow_PriorityOrdering(t *testing.T) {
 	pool.Start(ctx2)
 
 	// Collect 3 results.
-	ch, _ := transport.Subscribe(ctx2)
+	ch, _ := bundle.Results.Subscribe(ctx2)
 	for i := 0; i < 3; i++ {
 		select {
 		case <-ch:

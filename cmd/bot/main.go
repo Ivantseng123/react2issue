@@ -88,7 +88,7 @@ func main() {
 
 	jobStore := queue.NewMemJobStore()
 	jobStore.StartCleanup(1 * time.Hour)
-	jobQueue := queue.NewInMemTransport(cfg.Queue.Capacity, jobStore)
+	bundle := queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
 
 	// Determine skill dir from active agent config.
 	skillDir := ""
@@ -105,9 +105,9 @@ func main() {
 	}
 
 	workerPool := worker.NewPool(worker.Config{
-		Queue:       jobQueue,
-		Attachments: jobQueue,  // InMemTransport implements both
-		Results:     jobQueue,  // InMemTransport implements all three
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
 		Store:       jobStore,
 		Runner:      &agentRunnerAdapter{runner: agentRunner},
 		RepoCache:   &repoCacheAdapter{cache: repoCache},
@@ -116,7 +116,7 @@ func main() {
 	})
 	workerPool.Start(context.Background())
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, jobQueue, jobStore, skills)
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, bundle.Queue, jobStore, skills)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,
@@ -133,7 +133,7 @@ func main() {
 	wf.SetHandler(handler)
 
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
-	resultListener := bot.NewResultListener(jobQueue, jobStore, jobQueue, &slackPosterAdapter{client: slackClient}, issueClient)
+	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments, &slackPosterAdapter{client: slackClient}, issueClient)
 	go resultListener.Listen(context.Background())
 
 	// Job watchdog — detect stuck jobs and notify Slack.
@@ -152,7 +152,7 @@ func main() {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("ok"))
 			})
-			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, jobQueue))
+			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, bundle.Queue))
 			addr := fmt.Sprintf(":%d", cfg.Server.Port)
 			slog.Info("http endpoints listening", "addr", addr, "endpoints", []string{"/healthz", "/jobs"})
 			http.ListenAndServe(addr, nil)

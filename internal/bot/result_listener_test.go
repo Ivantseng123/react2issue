@@ -34,19 +34,19 @@ func TestResultListener_CompletedCreatesIssue(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	transport := queue.NewInMemTransport(10, store)
-	defer transport.Close()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
 	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/1"}
 
-	listener := NewResultListener(transport, store, transport, slackMock, githubMock)
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go listener.Listen(ctx)
 
-	transport.Publish(ctx, &queue.JobResult{
+	bundle.Results.Publish(ctx, &queue.JobResult{
 		JobID:      "j1",
 		Status:     "completed",
 		Title:      "Bug",
@@ -75,18 +75,18 @@ func TestResultListener_FailedPostsError(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	transport := queue.NewInMemTransport(10, store)
-	defer transport.Close()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
 
-	listener := NewResultListener(transport, store, transport, slackMock, nil)
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go listener.Listen(ctx)
 
-	transport.Publish(ctx, &queue.JobResult{
+	bundle.Results.Publish(ctx, &queue.JobResult{
 		JobID:  "j1",
 		Status: "failed",
 		Error:  "agent crashed",
@@ -111,18 +111,18 @@ func TestResultListener_LowConfidenceRejects(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
-	transport := queue.NewInMemTransport(10, store)
-	defer transport.Close()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
 
-	listener := NewResultListener(transport, store, transport, slackMock, nil)
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go listener.Listen(ctx)
 
-	transport.Publish(ctx, &queue.JobResult{
+	bundle.Results.Publish(ctx, &queue.JobResult{
 		JobID:      "j1",
 		Status:     "completed",
 		Confidence: "low",

@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-func TestInMemTransport_SubmitAndReceive(t *testing.T) {
-	tr := NewInMemTransport(10, NewMemJobStore())
-	defer tr.Close()
+func TestInMemJobQueue_SubmitAndReceive(t *testing.T) {
+	bundle := NewInMemBundle(10, 3, NewMemJobStore())
+	defer bundle.Close()
 	ctx := context.Background()
-	ch, _ := tr.Receive(ctx)
-	tr.Submit(ctx, &Job{ID: "j1", Priority: 50, ChannelID: "C1"})
+	ch, _ := bundle.Queue.Receive(ctx)
+	bundle.Queue.Submit(ctx, &Job{ID: "j1", Priority: 50, ChannelID: "C1"})
 	select {
 	case job := <-ch:
 		if job.ID != "j1" {
@@ -24,15 +24,15 @@ func TestInMemTransport_SubmitAndReceive(t *testing.T) {
 	}
 }
 
-func TestInMemTransport_PriorityOrdering(t *testing.T) {
+func TestInMemJobQueue_PriorityOrdering(t *testing.T) {
 	store := NewMemJobStore()
-	tr := NewInMemTransport(10, store)
-	defer tr.Close()
+	bundle := NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 	ctx := context.Background()
-	tr.Submit(ctx, &Job{ID: "low", Priority: 10})
-	tr.Submit(ctx, &Job{ID: "high", Priority: 100})
-	tr.Submit(ctx, &Job{ID: "mid", Priority: 50})
-	ch, _ := tr.Receive(ctx)
+	bundle.Queue.Submit(ctx, &Job{ID: "low", Priority: 10})
+	bundle.Queue.Submit(ctx, &Job{ID: "high", Priority: 100})
+	bundle.Queue.Submit(ctx, &Job{ID: "mid", Priority: 50})
+	ch, _ := bundle.Queue.Receive(ctx)
 	got := (<-ch).ID
 	if got != "high" {
 		t.Errorf("first = %q, want high", got)
@@ -47,45 +47,45 @@ func TestInMemTransport_PriorityOrdering(t *testing.T) {
 	}
 }
 
-func TestInMemTransport_SubmitFullQueueReturnsError(t *testing.T) {
-	tr := NewInMemTransport(1, NewMemJobStore())
-	defer tr.Close()
+func TestInMemJobQueue_SubmitFullQueueReturnsError(t *testing.T) {
+	bundle := NewInMemBundle(1, 3, NewMemJobStore())
+	defer bundle.Close()
 	ctx := context.Background()
-	tr.Submit(ctx, &Job{ID: "j1", Priority: 50})
-	err := tr.Submit(ctx, &Job{ID: "j2", Priority: 50})
+	bundle.Queue.Submit(ctx, &Job{ID: "j1", Priority: 50})
+	err := bundle.Queue.Submit(ctx, &Job{ID: "j2", Priority: 50})
 	if err != ErrQueueFull {
 		t.Errorf("expected ErrQueueFull, got %v", err)
 	}
 }
 
-func TestInMemTransport_QueuePositionAndDepth(t *testing.T) {
-	tr := NewInMemTransport(10, NewMemJobStore())
-	defer tr.Close()
+func TestInMemJobQueue_QueuePositionAndDepth(t *testing.T) {
+	bundle := NewInMemBundle(10, 3, NewMemJobStore())
+	defer bundle.Close()
 	ctx := context.Background()
-	tr.Submit(ctx, &Job{ID: "j1", Priority: 50})
-	tr.Submit(ctx, &Job{ID: "j2", Priority: 50})
-	tr.Submit(ctx, &Job{ID: "j3", Priority: 100})
-	if d := tr.QueueDepth(); d != 3 {
+	bundle.Queue.Submit(ctx, &Job{ID: "j1", Priority: 50})
+	bundle.Queue.Submit(ctx, &Job{ID: "j2", Priority: 50})
+	bundle.Queue.Submit(ctx, &Job{ID: "j3", Priority: 100})
+	if d := bundle.Queue.QueueDepth(); d != 3 {
 		t.Errorf("depth = %d, want 3", d)
 	}
-	pos, _ := tr.QueuePosition("j3")
+	pos, _ := bundle.Queue.QueuePosition("j3")
 	if pos != 1 {
 		t.Errorf("j3 position = %d, want 1", pos)
 	}
-	pos, _ = tr.QueuePosition("j1")
+	pos, _ = bundle.Queue.QueuePosition("j1")
 	if pos != 2 {
 		t.Errorf("j1 position = %d, want 2", pos)
 	}
 }
 
-func TestInMemTransport_SeqAutoAssigned(t *testing.T) {
-	tr := NewInMemTransport(10, NewMemJobStore())
-	defer tr.Close()
+func TestInMemJobQueue_SeqAutoAssigned(t *testing.T) {
+	bundle := NewInMemBundle(10, 3, NewMemJobStore())
+	defer bundle.Close()
 	ctx := context.Background()
 	j1 := &Job{ID: "j1", Priority: 50}
 	j2 := &Job{ID: "j2", Priority: 50}
-	tr.Submit(ctx, j1)
-	tr.Submit(ctx, j2)
+	bundle.Queue.Submit(ctx, j1)
+	bundle.Queue.Submit(ctx, j2)
 	if j1.Seq == 0 || j2.Seq == 0 {
 		t.Error("Seq should be auto-assigned (non-zero)")
 	}
@@ -94,12 +94,12 @@ func TestInMemTransport_SeqAutoAssigned(t *testing.T) {
 	}
 }
 
-func TestInMemTransport_ResultBus(t *testing.T) {
-	tr := NewInMemTransport(10, NewMemJobStore())
-	defer tr.Close()
+func TestInMemResultBus_PublishAndSubscribe(t *testing.T) {
+	bundle := NewInMemBundle(10, 3, NewMemJobStore())
+	defer bundle.Close()
 	ctx := context.Background()
-	ch, _ := tr.Subscribe(ctx)
-	tr.Publish(ctx, &JobResult{JobID: "j1", Status: "completed", Title: "test"})
+	ch, _ := bundle.Results.Subscribe(ctx)
+	bundle.Results.Publish(ctx, &JobResult{JobID: "j1", Status: "completed", Title: "test"})
 	select {
 	case r := <-ch:
 		if r.JobID != "j1" {
@@ -110,11 +110,11 @@ func TestInMemTransport_ResultBus(t *testing.T) {
 	}
 }
 
-func TestInMemTransport_ConcurrentSubmitReceive(t *testing.T) {
-	tr := NewInMemTransport(100, NewMemJobStore())
-	defer tr.Close()
+func TestInMemJobQueue_ConcurrentSubmitReceive(t *testing.T) {
+	bundle := NewInMemBundle(100, 3, NewMemJobStore())
+	defer bundle.Close()
 	ctx := context.Background()
-	ch, _ := tr.Receive(ctx)
+	ch, _ := bundle.Queue.Receive(ctx)
 
 	var wg sync.WaitGroup
 	n := 20
@@ -122,7 +122,7 @@ func TestInMemTransport_ConcurrentSubmitReceive(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(id int) {
 			defer wg.Done()
-			tr.Submit(ctx, &Job{ID: fmt.Sprintf("j%d", id), Priority: 50})
+			bundle.Queue.Submit(ctx, &Job{ID: fmt.Sprintf("j%d", id), Priority: 50})
 		}(i)
 	}
 

@@ -29,8 +29,8 @@ func (m *mockRepo) Prepare(cloneURL, branch string) (string, error) {
 
 func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	transport := queue.NewInMemTransport(10, store)
-	defer transport.Close()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 
 	agentOutput := "Analysis done.\n\n===TRIAGE_RESULT===\n" + `{
   "status": "CREATED",
@@ -43,9 +43,9 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 }`
 
 	pool := NewPool(Config{
-		Queue:       transport,
-		Attachments: transport,
-		Results:     transport,
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
 		Store:       store,
 		Runner:      &mockRunner{output: agentOutput},
 		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
@@ -58,16 +58,16 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 	pool.Start(ctx)
 
 	// Signal attachments ready before submitting.
-	transport.Prepare(ctx, "j1", nil)
+	bundle.Attachments.Prepare(ctx, "j1", nil)
 
-	transport.Submit(ctx, &queue.Job{
+	bundle.Queue.Submit(ctx, &queue.Job{
 		ID:       "j1",
 		Priority: 50,
 		Repo:     "owner/repo",
 		Prompt:   "test prompt",
 	})
 
-	ch, _ := transport.Subscribe(ctx)
+	ch, _ := bundle.Results.Subscribe(ctx)
 	select {
 	case result := <-ch:
 		if result.JobID != "j1" {
@@ -86,13 +86,13 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 
 func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 	store := queue.NewMemJobStore()
-	transport := queue.NewInMemTransport(10, store)
-	defer transport.Close()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
 
 	pool := NewPool(Config{
-		Queue:       transport,
-		Attachments: transport,
-		Results:     transport,
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
 		Store:       store,
 		Runner:      &mockRunner{err: fmt.Errorf("agent crashed")},
 		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
@@ -103,10 +103,10 @@ func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 	defer cancel()
 
 	pool.Start(ctx)
-	transport.Prepare(ctx, "j1", nil)
-	transport.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, Prompt: "test"})
+	bundle.Attachments.Prepare(ctx, "j1", nil)
+	bundle.Queue.Submit(ctx, &queue.Job{ID: "j1", Priority: 50, Prompt: "test"})
 
-	ch, _ := transport.Subscribe(ctx)
+	ch, _ := bundle.Results.Subscribe(ctx)
 	select {
 	case result := <-ch:
 		if result.Status != "failed" {
