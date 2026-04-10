@@ -13,8 +13,7 @@ func TestBuildPrompt_Basic(t *testing.T) {
 			{User: "Alice", Timestamp: "2026-04-09 10:30", Text: "Login page is broken"},
 			{User: "Bob", Timestamp: "2026-04-09 10:32", Text: "Same here"},
 		},
-		RepoPath: "/repos/owner/repo",
-		Branch:   "main",
+		Branch: "main",
 		Prompt: config.PromptConfig{
 			Language: "zh-TW",
 		},
@@ -25,9 +24,6 @@ func TestBuildPrompt_Basic(t *testing.T) {
 	}
 	if !strings.Contains(result, "Login page is broken") {
 		t.Error("missing message text")
-	}
-	if !strings.Contains(result, "/repos/owner/repo") {
-		t.Error("missing repo path")
 	}
 	if !strings.Contains(result, "main") {
 		t.Error("missing branch")
@@ -49,8 +45,7 @@ func TestBuildPrompt_WithAttachments(t *testing.T) {
 			{Path: "/tmp/triage-abc/screenshot.png", Name: "screenshot.png", Type: "image"},
 			{Path: "/tmp/triage-abc/error.log", Name: "error.log", Type: "text"},
 		},
-		RepoPath: "/repos/owner/repo",
-		Prompt:   config.PromptConfig{Language: "en"},
+		Prompt: config.PromptConfig{Language: "en"},
 	}
 	result := BuildPrompt(input)
 	if !strings.Contains(result, "screenshot.png") {
@@ -66,7 +61,6 @@ func TestBuildPrompt_WithExtraRules(t *testing.T) {
 		ThreadMessages: []ThreadMessage{
 			{User: "Alice", Timestamp: "10:30", Text: "test"},
 		},
-		RepoPath: "/repos/owner/repo",
 		Prompt: config.PromptConfig{
 			Language:   "zh-TW",
 			ExtraRules: []string{"no guessing", "only real files"},
@@ -87,11 +81,38 @@ func TestBuildPrompt_WithExtraDescription(t *testing.T) {
 			{User: "Alice", Timestamp: "10:30", Text: "it's broken"},
 		},
 		ExtraDescription: "It happens on the login page after entering wrong password 3 times",
-		RepoPath:         "/repos/owner/repo",
 		Prompt:           config.PromptConfig{Language: "en"},
 	}
 	result := BuildPrompt(input)
 	if !strings.Contains(result, "It happens on the login page") {
 		t.Error("missing extra description")
+	}
+}
+
+func TestBuildPrompt_NoRepoPathOrLabels(t *testing.T) {
+	input := PromptInput{
+		ThreadMessages: []ThreadMessage{
+			{User: "Alice", Timestamp: "10:30", Text: "test"},
+		},
+		Branch:   "main",
+		Channel:  "general",
+		Reporter: "Alice",
+		Prompt:   config.PromptConfig{Language: "en"},
+	}
+	result := BuildPrompt(input)
+	if strings.Contains(result, "Path:") {
+		t.Error("should not contain RepoPath")
+	}
+	if strings.Contains(result, "github_repo:") {
+		t.Error("should not contain github_repo metadata")
+	}
+	if strings.Contains(result, "labels:") {
+		t.Error("should not contain labels metadata")
+	}
+	if !strings.Contains(result, "general") {
+		t.Error("missing channel")
+	}
+	if !strings.Contains(result, "Alice") {
+		t.Error("missing reporter")
 	}
 }

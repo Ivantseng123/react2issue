@@ -398,23 +398,14 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		})
 	}
 
-	// 6. Resolve labels.
-	channelCfg := w.cfg.ChannelDefaults
-	if cc, ok := w.cfg.Channels[pt.ChannelID]; ok {
-		channelCfg = cc
-	}
-
 	// 7. Build prompt.
 	prompt := BuildPrompt(PromptInput{
 		ThreadMessages:   threadMsgs,
 		Attachments:      attachments,
 		ExtraDescription: pt.ExtraDesc,
-		RepoPath:         repoPath,
 		Branch:           pt.SelectedBranch,
-		GitHubRepo:       pt.SelectedRepo,
 		Channel:          pt.ChannelName,
 		Reporter:         pt.Reporter,
-		Labels:           channelCfg.DefaultLabels,
 		Prompt:           w.cfg.Prompt,
 	})
 

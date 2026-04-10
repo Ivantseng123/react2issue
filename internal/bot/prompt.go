@@ -23,19 +23,16 @@ type PromptInput struct {
 	ThreadMessages   []ThreadMessage
 	Attachments      []AttachmentInfo
 	ExtraDescription string
-	RepoPath         string
 	Branch           string
-	GitHubRepo       string   // "owner/repo"
-	Channel          string   // Slack channel name
-	Reporter         string   // display name
-	Labels           []string // GitHub issue labels
+	Channel          string
+	Reporter         string
 	Prompt           config.PromptConfig
 }
 
 func BuildPrompt(input PromptInput) string {
 	var sb strings.Builder
 
-	sb.WriteString("Use the /triage-issue skill to investigate and create a GitHub issue.\n\n")
+	sb.WriteString("Use the /triage-issue skill to investigate and produce a triage result.\n\n")
 
 	// Thread context
 	sb.WriteString("## Thread Context\n\n")
@@ -49,24 +46,12 @@ func BuildPrompt(input PromptInput) string {
 		sb.WriteString(fmt.Sprintf("> %s\n\n", input.ExtraDescription))
 	}
 
-	// Repository
-	sb.WriteString("## Repository\n\n")
-	sb.WriteString(fmt.Sprintf("Path: %s\n", input.RepoPath))
-	if input.Branch != "" {
-		sb.WriteString(fmt.Sprintf("Branch: %s\n", input.Branch))
-	}
-	sb.WriteString("\n")
-
-	// Issue metadata for gh issue create
-	sb.WriteString("## Issue Metadata\n\n")
-	sb.WriteString(fmt.Sprintf("github_repo: %s\n", input.GitHubRepo))
+	// Issue context
+	sb.WriteString("## Issue Context\n\n")
 	sb.WriteString(fmt.Sprintf("channel: %s\n", input.Channel))
 	sb.WriteString(fmt.Sprintf("reporter: %s\n", input.Reporter))
 	if input.Branch != "" {
 		sb.WriteString(fmt.Sprintf("branch: %s\n", input.Branch))
-	}
-	if len(input.Labels) > 0 {
-		sb.WriteString(fmt.Sprintf("labels: %s\n", strings.Join(input.Labels, ", ")))
 	}
 	sb.WriteString("\n")
 
