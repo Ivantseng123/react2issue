@@ -32,12 +32,16 @@ github:
 agents:
   claude:
     command: claude
-    args: ["--print", "-p", "{prompt}"]
+    args: ["--print", "--output-format", "stream-json", "-p", "{prompt}"]
     timeout: 5m
+    skill_dir: ".claude/skills"
+    stream: true                  # enable stream-json event tracking
   opencode:
     command: opencode
     args: ["--prompt", "{prompt}"]
     timeout: 5m
+    skill_dir: ".opencode/skills"
+    stream: false
   # codex:
   #   command: codex
   #   args: ["{prompt}"]
@@ -65,8 +69,25 @@ rate_limit:
   per_channel: 20
   window: 1h
 
-max_concurrent: 3
 max_thread_messages: 50
+
+# === Queue ===
+queue:
+  capacity: 50               # max queued jobs before rejection
+  transport: inmem            # inmem | nats | redis (future)
+  job_timeout: 20m              # max job lifetime
+  agent_idle_timeout: 5m        # stream-json agent: kill if no events
+  prepare_timeout: 3m           # kill if stuck in preparing stage
+  status_interval: 5s           # worker status report frequency
+
+workers:
+  count: 3                    # number of worker goroutines
+
+# Channel priority: higher number = processed first
+channel_priority:
+  # C_INCIDENTS: 100          # production incidents get priority
+  # C_ONCALL: 80
+  default: 50
 
 # === Logging ===
 logging:

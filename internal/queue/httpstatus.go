@@ -4,24 +4,37 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 )
 
+type agentStatusEntry struct {
+	PID          int     `json:"pid,omitempty"`
+	Command      string  `json:"command,omitempty"`
+	Alive        bool    `json:"alive,omitempty"`
+	LastEvent    string  `json:"last_event,omitempty"`
+	LastEventAge string  `json:"last_event_age,omitempty"`
+	ToolCalls    int     `json:"tool_calls,omitempty"`
+	FilesRead    int     `json:"files_read,omitempty"`
+	OutputBytes  int     `json:"output_bytes,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+}
+
 type jobStatusEntry struct {
-	ID           string    `json:"id"`
-	Status       JobStatus `json:"status"`
-	Repo         string    `json:"repo"`
-	Branch       string    `json:"branch,omitempty"`
-	Position     int       `json:"position,omitempty"`
-	Age          string    `json:"age"`
-	WaitTime     string    `json:"wait_time,omitempty"`
-	WorkerID     string    `json:"worker_id,omitempty"`
-	AgentPID     int       `json:"agent_pid,omitempty"`
-	AgentCommand string    `json:"agent_command,omitempty"`
-	AgentAlive   *bool     `json:"agent_alive,omitempty"`
-	ChannelID    string    `json:"channel_id"`
-	ThreadTS     string    `json:"thread_ts"`
+	ID        string            `json:"id"`
+	Status    JobStatus         `json:"status"`
+	Repo      string            `json:"repo"`
+	Branch    string            `json:"branch,omitempty"`
+	Position  int               `json:"position,omitempty"`
+	Age       string            `json:"age"`
+	WaitTime  string            `json:"wait_time,omitempty"`
+	WorkerID  string            `json:"worker_id,omitempty"`
+	Agent     *agentStatusEntry `json:"agent,omitempty"`
+	ChannelID string            `json:"channel_id"`
+	ThreadTS  string            `json:"thread_ts"`
 }
 
 type jobsResponse struct {
@@ -62,10 +75,25 @@ func StatusHandler(store JobStore, queue JobQueue) http.HandlerFunc {
 				entry.Position = pos
 			}
 			if state.AgentStatus != nil {
-				entry.AgentPID = state.AgentStatus.PID
-				entry.AgentCommand = state.AgentStatus.AgentCmd
-				alive := isProcessAlive(state.AgentStatus.PID)
-				entry.AgentAlive = &alive
+				as := state.AgentStatus
+				agentEntry := &agentStatusEntry{
+					PID:          as.PID,
+					Command:      as.AgentCmd,
+					ToolCalls:    as.ToolCalls,
+					FilesRead:    as.FilesRead,
+					OutputBytes:  as.OutputBytes,
+					CostUSD:      as.CostUSD,
+					InputTokens:  as.InputTokens,
+					OutputTokens: as.OutputTokens,
+				}
+				if !as.LastEventAt.IsZero() {
+					agentEntry.LastEvent = as.LastEvent
+					agentEntry.LastEventAge = now.Sub(as.LastEventAt).Truncate(time.Second).String()
+				}
+				if as.PID > 0 {
+					agentEntry.Alive = isProcessAlive(as.PID)
+				}
+				entry.Agent = agentEntry
 			}
 			entries = append(entries, entry)
 		}
@@ -78,6 +106,45 @@ func StatusHandler(store JobStore, queue JobQueue) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// KillHandler returns an http.HandlerFunc that kills a running job via DELETE /jobs/{id}.
+func KillHandler(store JobStore, commands CommandBus) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/jobs/"), "/")
+		if len(parts) == 0 || parts[0] == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "job ID required"})
+			return
+		}
+		jobID := parts[0]
+
+		state, err := store.Get(jobID)
+		if err != nil {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "job not found"})
+			return
+		}
+
+		if state.Status == JobCompleted || state.Status == JobFailed {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": "job not running"})
+			return
+		}
+
+		store.UpdateStatus(jobID, JobFailed)
+		if commands != nil {
+			commands.Send(r.Context(), Command{JobID: jobID, Action: "kill"})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "killing", "job_id": jobID})
 	}
 }
 
