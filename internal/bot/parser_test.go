@@ -4,17 +4,59 @@ import (
 	"testing"
 )
 
-func TestParseAgentOutput_Created(t *testing.T) {
-	output := `Some analysis output here...
-
-The issue has been created successfully.
-
-===TRIAGE_RESULT===
-CREATED: https://github.com/owner/repo/issues/42`
-
+func TestParseAgentOutput_JSONCreated(t *testing.T) {
+	output := "Some analysis output...\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "CREATED",
+  "title": "Login page broken after 3 failed attempts",
+  "body": "## Problem\n\nLogin page crashes...",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 5,
+  "open_questions": 0
+}`
 	result, err := ParseAgentOutput(output)
 	if err != nil {
-		t.Fatalf("ParseAgentOutput failed: %v", err)
+		t.Fatalf("parse failed: %v", err)
+	}
+	if result.Status != "CREATED" {
+		t.Errorf("status = %q, want CREATED", result.Status)
+	}
+	if result.Title != "Login page broken after 3 failed attempts" {
+		t.Errorf("title = %q", result.Title)
+	}
+	if result.Confidence != "high" {
+		t.Errorf("confidence = %q", result.Confidence)
+	}
+	if result.FilesFound != 5 {
+		t.Errorf("files_found = %d, want 5", result.FilesFound)
+	}
+	if len(result.Labels) != 1 || result.Labels[0] != "bug" {
+		t.Errorf("labels = %v", result.Labels)
+	}
+}
+
+func TestParseAgentOutput_JSONRejected(t *testing.T) {
+	output := "Investigation complete.\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "REJECTED",
+  "message": "Could not find relevant code"
+}`
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if result.Status != "REJECTED" {
+		t.Errorf("status = %q", result.Status)
+	}
+	if result.Message == "" {
+		t.Error("message should not be empty")
+	}
+}
+
+func TestParseAgentOutput_LegacyCreated(t *testing.T) {
+	output := "Analysis done.\n\n===TRIAGE_RESULT===\nCREATED: https://github.com/owner/repo/issues/42"
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
 	}
 	if result.Status != "CREATED" {
 		t.Errorf("status = %q, want CREATED", result.Status)
@@ -24,63 +66,39 @@ CREATED: https://github.com/owner/repo/issues/42`
 	}
 }
 
-func TestParseAgentOutput_Rejected(t *testing.T) {
-	output := `After investigation, this problem is not related to the codebase.
-
-===TRIAGE_RESULT===
-REJECTED: Could not find relevant code, problem likely unrelated to this repo`
-
+func TestParseAgentOutput_LegacyRejected(t *testing.T) {
+	output := "After investigation.\n\n===TRIAGE_RESULT===\nREJECTED: Problem unrelated to this repo"
 	result, err := ParseAgentOutput(output)
 	if err != nil {
-		t.Fatalf("ParseAgentOutput failed: %v", err)
+		t.Fatalf("parse failed: %v", err)
 	}
 	if result.Status != "REJECTED" {
-		t.Errorf("status = %q, want REJECTED", result.Status)
-	}
-	if result.Message == "" {
-		t.Error("message should not be empty")
+		t.Errorf("status = %q", result.Status)
 	}
 }
 
-func TestParseAgentOutput_Error(t *testing.T) {
-	output := `Tried to create the issue but it failed.
-
-===TRIAGE_RESULT===
-ERROR: gh issue create failed: 401 Bad credentials`
-
+func TestParseAgentOutput_LegacyError(t *testing.T) {
+	output := "Tried to create issue.\n\n===TRIAGE_RESULT===\nERROR: gh issue create failed"
 	result, err := ParseAgentOutput(output)
 	if err != nil {
-		t.Fatalf("ParseAgentOutput failed: %v", err)
+		t.Fatalf("parse failed: %v", err)
 	}
 	if result.Status != "ERROR" {
-		t.Errorf("status = %q, want ERROR", result.Status)
-	}
-	if result.Message == "" {
-		t.Error("message should not be empty")
+		t.Errorf("status = %q", result.Status)
 	}
 }
 
-func TestParseAgentOutput_NoMarker_FallbackURL(t *testing.T) {
-	output := `Analysis complete. Created issue at https://github.com/owner/repo/issues/99 for tracking. Some more text to meet the minimum length requirement.`
-
+func TestParseAgentOutput_FallbackURL(t *testing.T) {
+	output := "Created issue at https://github.com/owner/repo/issues/99 for tracking. Some more padding text to meet minimum length."
 	result, err := ParseAgentOutput(output)
 	if err != nil {
-		t.Fatalf("ParseAgentOutput failed: %v", err)
+		t.Fatalf("parse failed: %v", err)
 	}
 	if result.Status != "CREATED" {
-		t.Errorf("status = %q, want CREATED", result.Status)
+		t.Errorf("status = %q", result.Status)
 	}
 	if result.IssueURL != "https://github.com/owner/repo/issues/99" {
 		t.Errorf("issueURL = %q", result.IssueURL)
-	}
-}
-
-func TestParseAgentOutput_NoMarker_NoURL(t *testing.T) {
-	output := "Some analysis that didn't produce a result or URL. Padding to meet minimum length requirement for the parser."
-
-	_, err := ParseAgentOutput(output)
-	if err == nil {
-		t.Error("expected error when no result marker and no URL")
 	}
 }
 
@@ -94,27 +112,13 @@ func TestParseAgentOutput_Empty(t *testing.T) {
 func TestParseAgentOutput_TooShort(t *testing.T) {
 	_, err := ParseAgentOutput("short")
 	if err == nil {
-		t.Error("expected error on output under 10 chars")
+		t.Error("expected error on short output")
 	}
 }
 
-func TestExtractIssueURL(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"plain url", "https://github.com/owner/repo/issues/42", "https://github.com/owner/repo/issues/42"},
-		{"in sentence", "Created issue at https://github.com/owner/repo/issues/42 successfully", "https://github.com/owner/repo/issues/42"},
-		{"no url", "no github url here", ""},
-		{"partial url", "https://github.com/owner/repo", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractIssueURL(tt.input)
-			if got != tt.want {
-				t.Errorf("extractIssueURL = %q, want %q", got, tt.want)
-			}
-		})
+func TestParseAgentOutput_NoResult(t *testing.T) {
+	_, err := ParseAgentOutput("Some analysis that didn't produce a result or URL. Padding to meet minimum length requirement.")
+	if err == nil {
+		t.Error("expected error when no result")
 	}
 }

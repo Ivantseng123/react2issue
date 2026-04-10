@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -12,9 +13,15 @@ const (
 
 // TriageResult is the parsed result from agent output.
 type TriageResult struct {
-	Status   string // "CREATED", "REJECTED", "ERROR"
-	IssueURL string // only set when Status == "CREATED"
-	Message  string // rejection reason or error message
+	Status     string   `json:"status"`
+	IssueURL   string   `json:"issue_url,omitempty"`
+	Message    string   `json:"message,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Body       string   `json:"body,omitempty"`
+	Labels     []string `json:"labels,omitempty"`
+	Confidence string   `json:"confidence,omitempty"`
+	FilesFound int      `json:"files_found,omitempty"`
+	Questions  int      `json:"open_questions,omitempty"`
 }
 
 // ParseAgentOutput extracts the triage result from agent stdout.
@@ -36,6 +43,15 @@ func ParseAgentOutput(output string) (TriageResult, error) {
 
 	result := strings.TrimSpace(output[idx+len(resultSeparator):])
 
+	// Try JSON format first.
+	if strings.HasPrefix(result, "{") {
+		var tr TriageResult
+		if err := json.Unmarshal([]byte(result), &tr); err == nil && tr.Status != "" {
+			return tr, nil
+		}
+	}
+
+	// Legacy format.
 	if strings.HasPrefix(result, "CREATED:") {
 		url := strings.TrimSpace(strings.TrimPrefix(result, "CREATED:"))
 		if url == "" {
