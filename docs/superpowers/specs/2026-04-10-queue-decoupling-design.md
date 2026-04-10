@@ -71,6 +71,7 @@ type Job struct {
     Branch      string            `json:"branch"`
     CloneURL    string            `json:"clone_url"`       // explicit for remote workers
     Prompt      string            `json:"prompt"`
+    Skills      map[string]string `json:"skills"`          // skill name → file content
     RequestID   string            `json:"request_id"`
     Attachments []AttachmentMeta  `json:"attachments"`
     SubmittedAt time.Time         `json:"submitted_at"`
@@ -291,6 +292,12 @@ func (p *Pool) executeJob(ctx context.Context, job *Job) *JobResult {
     }
     copyAttachmentsToRepo(attachments, repoPath)
 
+    // Mount skills into workspace for agent CLI to discover
+    if err := p.mountSkills(repoPath, job.Skills); err != nil {
+        return failedResult(job, fmt.Errorf("skill mount failed: %w", err))
+    }
+    defer p.cleanupSkills(repoPath) // don't leave skill files in shared repo cache
+
     // Execute agent (uses existing fallback chain)
     output, err := p.agentRunner.Run(ctx, repoPath, job.Prompt)
     if err != nil {
@@ -434,6 +441,13 @@ channel_priority:
 workers:
   count: 3
 
+# Existing agents config extended with skill_dir
+# agents:
+#   claude:
+#     command: claude
+#     args: ["--print", "-p", "{prompt}"]
+#     skill_dir: ".claude/skills"
+
 attachments:
   store: local             # local | s3 (遠期)
   temp_dir: /tmp/triage-attachments
@@ -499,13 +513,60 @@ The rest of the skill (Steps 1-5: understand, explore, assess, fix approach, TDD
 
 ### Skill mounting for workers
 
-All supported agent CLIs (claude, opencode, codex) read skills from the repo directory. Since the skill file is checked into the repo at `agents/skills/triage-issue/SKILL.md`, any worker that clones the repo automatically has access to it. No additional skill mounting or configuration is needed.
+The triage-issue skill belongs to **this app**, not the target repo. Workers need the skill content to be delivered with the Job, then written into the cloned repo's workspace before the agent runs.
+
+**Flow:**
+1. App reads `agents/skills/triage-issue/SKILL.md` at submit time → puts content in `Job.Skills`
+2. Worker clones target repo
+3. Worker writes skill files into the cloned repo at the agent CLI's expected skill directory
+4. Agent CLI discovers and uses the skill
+5. Worker cleans up skill files after execution (repo cache is shared)
+
+**Agent config with skill directory:**
+
+```yaml
+agents:
+  claude:
+    command: claude
+    args: ["--print", "-p", "{prompt}"]
+    skill_dir: ".claude/skills"
+  opencode:
+    command: opencode
+    args: ["--prompt", "{prompt}"]
+    skill_dir: ".opencode/skills"
+  codex:
+    command: codex
+    args: ["{prompt}"]
+    skill_dir: ".codex/skills"
+```
+
+**Worker mountSkills implementation:**
+
+```go
+func (p *Pool) mountSkills(repoPath string, skills map[string]string) error {
+    skillDir := p.currentAgent().SkillDir  // e.g. ".claude/skills"
+    dir := filepath.Join(repoPath, skillDir)
+    os.MkdirAll(dir, 0755)
+    for name, content := range skills {
+        path := filepath.Join(dir, name+".md")
+        if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+```
+
+**Advantages:**
+- Skill version always matches the app version (embedded in Job at submit time)
+- Remote workers and external listeners don't need to manage skill files
+- Different agent CLIs get skills in their expected location
 
 | Worker type | Skill source | How it works |
 |-------------|-------------|--------------|
-| In-pod worker | Clone repo → `agents/skills/` in repo | Agent reads on startup |
-| Remote pod worker | Clone repo → same | Same as in-pod |
-| External listener | Clone repo → same | Same; uses own agent CLI + API key |
+| In-pod worker | `Job.Skills` → write to clone dir | Same as remote |
+| Remote pod worker | `Job.Skills` → write to clone dir | Self-contained |
+| External listener | `Job.Skills` → write to clone dir | No manual install needed |
 
 ## File Structure (new/changed)
 
