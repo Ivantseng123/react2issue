@@ -17,6 +17,7 @@ import (
 	"slack-issue-bot/internal/mantis"
 	"slack-issue-bot/internal/queue"
 	slackclient "slack-issue-bot/internal/slack"
+	"slack-issue-bot/internal/worker"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -65,6 +66,16 @@ func main() {
 
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
 
+	// Load skills for agent.
+	skills := make(map[string]string)
+	skillPath := "agents/skills/triage-issue/SKILL.md"
+	if data, err := os.ReadFile(skillPath); err == nil {
+		skills["triage-issue"] = string(data)
+		slog.Info("skill loaded", "path", skillPath)
+	} else {
+		slog.Warn("skill not found, agents will run without skill", "path", skillPath, "error", err)
+	}
+
 	mantisClient := mantis.NewClient(
 		cfg.Mantis.BaseURL,
 		cfg.Mantis.APIToken,
@@ -76,9 +87,36 @@ func main() {
 	}
 
 	jobStore := queue.NewMemJobStore()
+	jobStore.StartCleanup(1 * time.Hour)
 	jobQueue := queue.NewInMemTransport(cfg.Queue.Capacity, jobStore)
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, jobQueue, jobStore, nil)
+	// Determine skill dir from active agent config.
+	skillDir := ""
+	for _, name := range cfg.Fallback {
+		if agent, ok := cfg.Agents[name]; ok && agent.SkillDir != "" {
+			skillDir = agent.SkillDir
+			break
+		}
+	}
+	if skillDir == "" && cfg.ActiveAgent != "" {
+		if agent, ok := cfg.Agents[cfg.ActiveAgent]; ok {
+			skillDir = agent.SkillDir
+		}
+	}
+
+	workerPool := worker.NewPool(worker.Config{
+		Queue:       jobQueue,
+		Attachments: jobQueue,  // InMemTransport implements both
+		Results:     jobQueue,  // InMemTransport implements all three
+		Store:       jobStore,
+		Runner:      &agentRunnerAdapter{runner: agentRunner},
+		RepoCache:   &repoCacheAdapter{cache: repoCache},
+		WorkerCount: cfg.Workers.Count,
+		SkillDir:    skillDir,
+	})
+	workerPool.Start(context.Background())
+
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, jobQueue, jobStore, skills)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,
@@ -93,6 +131,10 @@ func main() {
 		},
 	})
 	wf.SetHandler(handler)
+
+	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
+	resultListener := bot.NewResultListener(jobQueue, jobStore, jobQueue, &slackPosterAdapter{client: slackClient}, issueClient)
+	go resultListener.Listen(context.Background())
 
 	if cfg.Server.Port > 0 {
 		go func() {
@@ -234,6 +276,45 @@ func main() {
 	if err := sm.Run(); err != nil {
 		slog.Error("socket mode error", "error", err)
 		os.Exit(1)
+	}
+}
+
+// agentRunnerAdapter wraps AgentRunner to satisfy worker.Runner interface.
+type agentRunnerAdapter struct {
+	runner *bot.AgentRunner
+}
+
+func (a *agentRunnerAdapter) Run(ctx context.Context, workDir, prompt string) (string, error) {
+	return a.runner.Run(ctx, slog.Default(), workDir, prompt)
+}
+
+// repoCacheAdapter wraps RepoCache to satisfy worker.RepoProvider interface.
+type repoCacheAdapter struct {
+	cache *ghclient.RepoCache
+}
+
+func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
+	repoPath, err := a.cache.EnsureRepo(cloneURL)
+	if err != nil {
+		return "", err
+	}
+	if branch != "" {
+		if err := a.cache.Checkout(repoPath, branch); err != nil {
+			return "", err
+		}
+	}
+	return repoPath, nil
+}
+
+// slackPosterAdapter wraps slackclient.Client to satisfy bot.SlackPoster interface.
+// SlackPoster.PostMessage has no return value, but Client.PostMessage returns error.
+type slackPosterAdapter struct {
+	client *slackclient.Client
+}
+
+func (a *slackPosterAdapter) PostMessage(channelID, text, threadTS string) {
+	if err := a.client.PostMessage(channelID, text, threadTS); err != nil {
+		slog.Warn("failed to post slack message", "channel", channelID, "error", err)
 	}
 }
 
