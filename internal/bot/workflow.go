@@ -13,6 +13,7 @@ import (
 	ghclient "slack-issue-bot/internal/github"
 	"slack-issue-bot/internal/logging"
 	"slack-issue-bot/internal/mantis"
+	"slack-issue-bot/internal/queue"
 	slackclient "slack-issue-bot/internal/slack"
 )
 
@@ -43,6 +44,9 @@ type Workflow struct {
 	repoDiscovery *ghclient.RepoDiscovery
 	agentRunner   *AgentRunner
 	mantisClient  *mantis.Client
+	queue         queue.JobQueue
+	store         queue.JobStore
+	skills        map[string]string
 
 	mu        sync.Mutex
 	pending   map[string]*pendingTriage
@@ -56,6 +60,9 @@ func NewWorkflow(
 	repoDiscovery *ghclient.RepoDiscovery,
 	agentRunner *AgentRunner,
 	mantisClient *mantis.Client,
+	jobQueue queue.JobQueue,
+	jobStore queue.JobStore,
+	skills map[string]string,
 ) *Workflow {
 	return &Workflow{
 		cfg:           cfg,
@@ -64,12 +71,25 @@ func NewWorkflow(
 		repoDiscovery: repoDiscovery,
 		agentRunner:   agentRunner,
 		mantisClient:  mantisClient,
+		queue:         jobQueue,
+		store:         jobStore,
+		skills:        skills,
 		pending:       make(map[string]*pendingTriage),
 		autoBound:     make(map[string]bool),
 	}
 }
 
 func (w *Workflow) SetHandler(h *slackclient.Handler) { w.handler = h }
+
+func (w *Workflow) channelPriority(channelID string) int {
+	if pri, ok := w.cfg.ChannelPriority[channelID]; ok {
+		return pri
+	}
+	if pri, ok := w.cfg.ChannelPriority["default"]; ok {
+		return pri
+	}
+	return 50
+}
 
 func (w *Workflow) RegisterChannel(channelID string) {
 	w.mu.Lock()
@@ -319,32 +339,9 @@ func (w *Workflow) HandleDescriptionSubmit(selectorMsgTS, extraText string) {
 func (w *Workflow) runTriage(pt *pendingTriage) {
 	ctx := context.Background()
 
-	tempDir, err := os.MkdirTemp("", "triage-*")
-	if err != nil {
-		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to create temp dir: %v", err)
-		w.clearDedup(pt)
-		return
-	}
-	defer os.RemoveAll(tempDir)
+	w.slack.PostMessage(pt.ChannelID, ":mag: 正在排入處理佇列...", pt.ThreadTS)
 
-	w.slack.PostMessage(pt.ChannelID, ":mag: 正在分析...", pt.ThreadTS)
-
-	// 1. Ensure repo checked out.
-	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo)
-	if err != nil {
-		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
-		w.clearDedup(pt)
-		return
-	}
-	if pt.SelectedBranch != "" {
-		if err := w.repoCache.Checkout(repoPath, pt.SelectedBranch); err != nil {
-			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to checkout branch %s: %v", pt.SelectedBranch, err)
-			w.clearDedup(pt)
-			return
-		}
-	}
-
-	// 2. Read thread context.
+	// 1. Read thread context.
 	botUserID := ""
 	rawMsgs, err := w.slack.FetchThreadContext(pt.ChannelID, pt.ThreadTS, pt.TriggerTS, botUserID, w.cfg.MaxThreadMessages)
 	if err != nil {
@@ -352,22 +349,9 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		w.clearDedup(pt)
 		return
 	}
-
 	pt.Logger.Info("thread context read", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
 
-	// 3. Download attachments.
-	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
-	if len(downloads) > 0 {
-		for _, d := range downloads {
-			if d.Failed {
-				pt.Logger.Warn("attachment download failed", "name", d.Name)
-			} else {
-				pt.Logger.Info("attachment downloaded", "name", d.Name, "type", d.Type, "path", d.Path)
-			}
-		}
-	}
-
-	// 4. Enrich messages (Mantis URLs).
+	// 2. Enrich messages.
 	var threadMsgs []ThreadMessage
 	for _, m := range rawMsgs {
 		text := m.Text
@@ -381,85 +365,82 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		})
 	}
 
-	// 5. Build attachments info.
-	var attachments []AttachmentInfo
+	// 3. Collect attachment metadata.
+	tempDir, err := os.MkdirTemp("", "triage-meta-*")
+	if err != nil {
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to create temp dir: %v", err)
+		w.clearDedup(pt)
+		return
+	}
+	defer os.RemoveAll(tempDir)
+
+	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
+	var attachmentInfos []AttachmentInfo
 	for _, d := range downloads {
 		if d.Failed {
-			attachments = append(attachments, AttachmentInfo{
-				Name: d.Name + " (download failed)",
-				Type: d.Type,
-			})
 			continue
 		}
-		attachments = append(attachments, AttachmentInfo{
-			Path: d.Path,
-			Name: d.Name,
-			Type: d.Type,
-		})
+		attachmentInfos = append(attachmentInfos, AttachmentInfo{Path: d.Path, Name: d.Name, Type: d.Type})
 	}
 
-	// 7. Build prompt.
+	// 4. Build prompt.
 	prompt := BuildPrompt(PromptInput{
 		ThreadMessages:   threadMsgs,
-		Attachments:      attachments,
+		Attachments:      attachmentInfos,
 		ExtraDescription: pt.ExtraDesc,
 		Branch:           pt.SelectedBranch,
 		Channel:          pt.ChannelName,
 		Reporter:         pt.Reporter,
 		Prompt:           w.cfg.Prompt,
 	})
+	pt.Logger.Info("prompt built", "length", len(prompt))
 
-	pt.Logger.Info("prompt built", "length", len(prompt), "thread_msgs", len(threadMsgs), "attachments", len(attachments))
-	pt.Logger.Debug("prompt content", "prompt", prompt)
+	// 5. Build attachment metadata for queue.
+	var attachMeta []queue.AttachmentMeta
+	for _, d := range downloads {
+		if d.Failed {
+			continue
+		}
+		attachMeta = append(attachMeta, queue.AttachmentMeta{
+			Filename: d.Name,
+			MimeType: d.Type,
+		})
+	}
 
-	// 8. Spawn agent — agent explores codebase, creates GitHub issue (or rejects).
-	output, err := w.agentRunner.Run(ctx, pt.Logger, repoPath, prompt)
-	if err != nil {
-		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "分析工具暫時不可用: %v", err)
+	// 6. Submit to queue.
+	job := &queue.Job{
+		ID:          pt.RequestID,
+		Priority:    w.channelPriority(pt.ChannelID),
+		ChannelID:   pt.ChannelID,
+		ThreadTS:    pt.ThreadTS,
+		Repo:        pt.SelectedRepo,
+		Branch:      pt.SelectedBranch,
+		CloneURL:    w.repoCache.ResolveURL(pt.SelectedRepo),
+		Prompt:      prompt,
+		Skills:      w.skills,
+		RequestID:   pt.RequestID,
+		Attachments: attachMeta,
+		SubmittedAt: time.Now(),
+	}
+
+	if err := w.queue.Submit(ctx, job); err != nil {
+		if err == queue.ErrQueueFull {
+			w.slack.PostMessage(pt.ChannelID, ":warning: 系統忙碌，請稍後再試", pt.ThreadTS)
+		} else {
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to submit job: %v", err)
+		}
 		w.clearDedup(pt)
 		return
 	}
 
-	pt.Logger.Info("agent output received", "length", len(output))
-	pt.Logger.Debug("agent raw output", "output", output)
-
-	outputPath, saveErr := logging.SaveAgentOutput(w.cfg.Logging.AgentOutputDir, pt.RequestID, pt.SelectedRepo, output)
-	if saveErr != nil {
-		pt.Logger.Warn("failed to save agent output", "error", saveErr)
+	pos, _ := w.queue.QueuePosition(job.ID)
+	if pos <= 1 {
+		w.slack.PostMessage(pt.ChannelID, ":hourglass_flowing_sand: 正在處理你的請求...", pt.ThreadTS)
 	} else {
-		pt.Logger.Info("agent output saved", "path", outputPath, "length", len(output))
-	}
-
-	// 9. Parse result — extract issue URL or rejection/error.
-	result, err := ParseAgentOutput(output)
-	if err != nil {
-		pt.Logger.Warn("agent output parse failed", "error", err)
-		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "分析完成但無法取得結果，請稍後再試")
-		w.clearDedup(pt)
-		return
-	}
-
-	pt.Logger.Info("triage result", "status", result.Status, "issueURL", result.IssueURL, "message", result.Message)
-
-	// 10. Report to Slack — only one message.
-	branchInfo := ""
-	if pt.SelectedBranch != "" {
-		branchInfo = fmt.Sprintf(" (branch: `%s`)", pt.SelectedBranch)
-	}
-	switch result.Status {
-	case "CREATED":
 		w.slack.PostMessage(pt.ChannelID,
-			fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, result.IssueURL),
-			pt.ThreadTS)
-	case "REJECTED":
-		w.slack.PostMessage(pt.ChannelID,
-			fmt.Sprintf(":warning: 無法建立 issue — %s", result.Message),
-			pt.ThreadTS)
-	case "ERROR":
-		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Agent error: %s", result.Message)
+			fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1), pt.ThreadTS)
 	}
-
-	w.clearDedup(pt)
+	// Don't clearDedup here — ResultListener handles cleanup after job completes.
 }
 
 func (w *Workflow) storePending(selectorTS string, pt *pendingTriage) {

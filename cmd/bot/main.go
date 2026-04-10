@@ -15,6 +15,7 @@ import (
 	ghclient "slack-issue-bot/internal/github"
 	"slack-issue-bot/internal/logging"
 	"slack-issue-bot/internal/mantis"
+	"slack-issue-bot/internal/queue"
 	slackclient "slack-issue-bot/internal/slack"
 
 	"github.com/slack-go/slack"
@@ -74,7 +75,10 @@ func main() {
 		slog.Info("mantis integration enabled", "url", cfg.Mantis.BaseURL)
 	}
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient)
+	jobStore := queue.NewMemJobStore()
+	jobQueue := queue.NewInMemTransport(cfg.Queue.Capacity, jobStore)
+
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, jobQueue, jobStore, nil)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,
