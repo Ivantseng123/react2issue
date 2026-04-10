@@ -190,6 +190,45 @@ active_agent: claude
 	}
 }
 
+func writeAndLoad(t *testing.T, yamlContent string) *Config {
+	t.Helper()
+	f, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if _, err := f.WriteString(yamlContent); err != nil {
+		t.Fatalf("WriteString: %v", err)
+	}
+	f.Close()
+	t.Cleanup(func() { os.Remove(f.Name()) })
+
+	cfg, err := Load(f.Name())
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	return cfg
+}
+
+func TestLoggingConfigDefaults(t *testing.T) {
+	cfg := writeAndLoad(t, `
+slack:
+  bot_token: "xoxb-test"
+  app_token: "xapp-test"
+`)
+	if cfg.Logging.Dir != "logs" {
+		t.Errorf("Logging.Dir = %q, want %q", cfg.Logging.Dir, "logs")
+	}
+	if cfg.Logging.Level != "debug" {
+		t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, "debug")
+	}
+	if cfg.Logging.RetentionDays != 30 {
+		t.Errorf("Logging.RetentionDays = %d, want 30", cfg.Logging.RetentionDays)
+	}
+	if cfg.Logging.AgentOutputDir != "logs/agent-outputs" {
+		t.Errorf("Logging.AgentOutputDir = %q, want %q", cfg.Logging.AgentOutputDir, "logs/agent-outputs")
+	}
+}
+
 func TestLoadConfig_Defaults(t *testing.T) {
 	yaml := `
 slack:

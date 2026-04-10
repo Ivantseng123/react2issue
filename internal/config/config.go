@@ -26,6 +26,7 @@ type Config struct {
 	RateLimit         RateLimitConfig          `yaml:"rate_limit"`
 	Mantis            MantisConfig             `yaml:"mantis"`
 	RepoCache         RepoCacheConfig          `yaml:"repo_cache"`
+	Logging           LoggingConfig            `yaml:"logging"`
 }
 
 type ServerConfig struct {
@@ -94,6 +95,13 @@ type RepoCacheConfig struct {
 	MaxAge time.Duration `yaml:"max_age"`
 }
 
+type LoggingConfig struct {
+	Dir            string `yaml:"dir"`
+	Level          string `yaml:"level"`
+	RetentionDays  int    `yaml:"retention_days"`
+	AgentOutputDir string `yaml:"agent_output_dir"`
+}
+
 type v1RawCheck struct {
 	Reactions    map[string]any `yaml:"reactions"`
 	Integrations map[string]any `yaml:"integrations"`
@@ -140,6 +148,18 @@ func applyDefaults(cfg *Config) {
 			agent.Timeout = 5 * time.Minute
 			cfg.Agents[name] = agent
 		}
+	}
+	if cfg.Logging.Dir == "" {
+		cfg.Logging.Dir = "logs"
+	}
+	if cfg.Logging.Level == "" {
+		cfg.Logging.Level = "debug"
+	}
+	if cfg.Logging.RetentionDays <= 0 {
+		cfg.Logging.RetentionDays = 30
+	}
+	if cfg.Logging.AgentOutputDir == "" {
+		cfg.Logging.AgentOutputDir = "logs/agent-outputs"
 	}
 }
 
