@@ -1,0 +1,79 @@
+package queue
+
+import (
+	"fmt"
+	"time"
+)
+
+type JobStatus string
+
+const (
+	JobPending   JobStatus = "pending"
+	JobPreparing JobStatus = "preparing"
+	JobRunning   JobStatus = "running"
+	JobCompleted JobStatus = "completed"
+	JobFailed    JobStatus = "failed"
+)
+
+type Job struct {
+	ID          string            `json:"id"`
+	Priority    int               `json:"priority"`
+	Seq         uint64            `json:"seq"`
+	ChannelID   string            `json:"channel_id"`
+	ThreadTS    string            `json:"thread_ts"`
+	UserID      string            `json:"user_id"`
+	Repo        string            `json:"repo"`
+	Branch      string            `json:"branch"`
+	CloneURL    string            `json:"clone_url"`
+	Prompt      string            `json:"prompt"`
+	Skills      map[string]string `json:"skills"`
+	RequestID   string            `json:"request_id"`
+	Attachments []AttachmentMeta  `json:"attachments"`
+	SubmittedAt time.Time         `json:"submitted_at"`
+}
+
+type AttachmentMeta struct {
+	SlackFileID string `json:"slack_file_id"`
+	Filename    string `json:"filename"`
+	Size        int64  `json:"size"`
+	MimeType    string `json:"mime_type"`
+}
+
+type JobResult struct {
+	JobID      string    `json:"job_id"`
+	Status     string    `json:"status"`
+	Title      string    `json:"title"`
+	Body       string    `json:"body"`
+	Labels     []string  `json:"labels"`
+	Confidence string    `json:"confidence"`
+	FilesFound int       `json:"files_found"`
+	Questions  int       `json:"open_questions"`
+	RawOutput  string    `json:"raw_output"`
+	Error      string    `json:"error"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+type AttachmentReady struct {
+	Filename string `json:"filename"`
+	URL      string `json:"url"`
+}
+
+type JobState struct {
+	Job       *Job
+	Status    JobStatus
+	Position  int
+	WorkerID  string
+	StartedAt time.Time
+	WaitTime  time.Duration
+}
+
+type WorkerInfo struct {
+	WorkerID    string   `json:"worker_id"`
+	Name        string   `json:"name"`
+	Agents      []string `json:"agents"`
+	Tags        []string `json:"tags"`
+	ConnectedAt time.Time
+}
+
+var ErrQueueFull = fmt.Errorf("queue is full")
