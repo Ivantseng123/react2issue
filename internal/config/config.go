@@ -3,6 +3,7 @@ package config
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -252,5 +253,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
 		cfg.Redis.Password = v
+	}
+	if v := os.Getenv("ACTIVE_AGENT"); v != "" {
+		cfg.ActiveAgent = v
+	}
+	if v := os.Getenv("FALLBACK"); v != "" {
+		cfg.Fallback = strings.Split(v, ",")
 	}
 }
