@@ -316,13 +316,25 @@ docker run -e SLACK_BOT_TOKEN=xoxb-... \
 # Worker 模式（Redis，獨立消費 job）
 docker run -e REDIS_ADDR=redis:6379 \
            -e GITHUB_TOKEN=ghp_... \
+           -e FALLBACK=claude \
            -e CLAUDE_AUTH_TOKEN=... \
            react2issue worker -config /config.yaml
 ```
 
-#### Agent 認證
+#### Agent 選擇與認證
 
-Worker 需要的 token 取決於 config 裡啟用了哪些 agent：
+Worker 透過 `FALLBACK` 環境變數選擇要使用的 agent（逗號分隔，依序 fallback），不需要修改 config 檔：
+
+```bash
+# 用 claude
+docker run -e FALLBACK=claude -e CLAUDE_AUTH_TOKEN=... ...
+
+# 用 codex，fallback 到 claude
+docker run -e FALLBACK=codex,claude -e OPENAI_API_KEY=... -e CLAUDE_AUTH_TOKEN=... ...
+
+# 用 opencode
+docker run -e FALLBACK=opencode -e ANTHROPIC_API_KEY=... ...
+```
 
 | Agent | 環境變數 | 取得方式 |
 |-------|---------|---------|
@@ -330,7 +342,22 @@ Worker 需要的 token 取決於 config 裡啟用了哪些 agent：
 | codex | `OPENAI_API_KEY` | OpenAI dashboard |
 | opencode | `ANTHROPIC_API_KEY` | Anthropic console |
 
-只需要傳你實際使用的 agent 的 token。例如 `fallback: [claude]` 只需要 `CLAUDE_AUTH_TOKEN`。
+只需要傳 `FALLBACK` 裡列出的 agent 的 token。
+
+#### 所有環境變數
+
+| 環境變數 | 用途 | 必要 |
+|---------|------|------|
+| `SLACK_BOT_TOKEN` | Slack Bot token | App 模式 |
+| `SLACK_APP_TOKEN` | Slack App-Level token | App 模式 |
+| `GITHUB_TOKEN` | GitHub token（App: read+write, Worker: read） | 是 |
+| `REDIS_ADDR` | Redis 連線地址 | Redis 模式 |
+| `REDIS_PASSWORD` | Redis 密碼 | 有密碼時 |
+| `FALLBACK` | Agent fallback 順序（逗號分隔） | 否（預設用 config） |
+| `ACTIVE_AGENT` | 主要 agent | 否（預設用 config） |
+| `CLAUDE_AUTH_TOKEN` | Claude CLI auth | 用 claude 時 |
+| `OPENAI_API_KEY` | Codex CLI auth | 用 codex 時 |
+| `ANTHROPIC_API_KEY` | OpenCode CLI auth | 用 opencode 時 |
 
 ### Kubernetes
 
