@@ -119,6 +119,9 @@ func (q *RedisJobQueue) Receive(ctx context.Context) (<-chan *Job, error) {
 						continue
 					}
 
+					// Store in local JobStore so worker pool can find it.
+					q.store.Put(&job)
+
 					select {
 					case ch <- &job:
 					case <-q.stopCh:
