@@ -87,7 +87,26 @@ func main() {
 
 	jobStore := queue.NewMemJobStore()
 	jobStore.StartCleanup(1 * time.Hour)
-	bundle := queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
+
+	var bundle *queue.Bundle
+	switch cfg.Queue.Transport {
+	case "redis":
+		rdb, err := queue.NewRedisClient(queue.RedisConfig{
+			Addr:     cfg.Redis.Addr,
+			Password: cfg.Redis.Password,
+			DB:       cfg.Redis.DB,
+			TLS:      cfg.Redis.TLS,
+		})
+		if err != nil {
+			slog.Error("failed to connect to Redis", "error", err)
+			os.Exit(1)
+		}
+		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
+		slog.Info("using Redis transport", "addr", cfg.Redis.Addr)
+	default:
+		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
+		slog.Info("using in-memory transport")
+	}
 
 	// Collect skill dirs from all agents in fallback chain.
 	seen := make(map[string]bool)
@@ -109,24 +128,27 @@ func main() {
 	coordinator.RegisterQueue("triage", bundle.Queue)
 
 	// Create and start LocalAdapter (owns worker.Pool lifecycle).
-	localAdapter := NewLocalAdapter(LocalAdapterConfig{
-		Runner:         &agentRunnerAdapter{runner: agentRunner},
-		RepoCache:      &repoCacheAdapter{cache: repoCache},
-		SkillDirs:      skillDirs,
-		WorkerCount:    cfg.Workers.Count,
-		StatusInterval: cfg.Queue.StatusInterval,
-		Capabilities:   []string{"triage"},
-		Store:          jobStore,
-	})
-	if err := localAdapter.Start(queue.AdapterDeps{
-		Jobs:        bundle.Queue,
-		Results:     bundle.Results,
-		Status:      bundle.Status,
-		Commands:    bundle.Commands,
-		Attachments: bundle.Attachments,
-	}); err != nil {
-		slog.Error("failed to start local adapter", "error", err)
-		os.Exit(1)
+	// In redis mode, workers are separate pods — skip local agent execution.
+	if cfg.Queue.Transport != "redis" {
+		localAdapter := NewLocalAdapter(LocalAdapterConfig{
+			Runner:         &agentRunnerAdapter{runner: agentRunner},
+			RepoCache:      &repoCacheAdapter{cache: repoCache},
+			SkillDirs:      skillDirs,
+			WorkerCount:    cfg.Workers.Count,
+			StatusInterval: cfg.Queue.StatusInterval,
+			Capabilities:   []string{"triage"},
+			Store:          jobStore,
+		})
+		if err := localAdapter.Start(queue.AdapterDeps{
+			Jobs:        bundle.Queue,
+			Results:     bundle.Results,
+			Status:      bundle.Status,
+			Commands:    bundle.Commands,
+			Attachments: bundle.Attachments,
+		}); err != nil {
+			slog.Error("failed to start local adapter", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, coordinator, jobStore, bundle.Attachments, skills)
