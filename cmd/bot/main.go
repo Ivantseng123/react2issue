@@ -24,6 +24,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "worker":
+			runWorker()
+			return
+		}
+	}
+
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()
 
