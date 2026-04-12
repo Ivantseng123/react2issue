@@ -31,6 +31,7 @@ type Config struct {
 	ChannelPriority   map[string]int           `yaml:"channel_priority"`
 	Workers           WorkersConfig            `yaml:"workers"`
 	Attachments       AttachmentsConfig        `yaml:"attachments"`
+	Redis             RedisConfig              `yaml:"redis"`
 }
 
 type ServerConfig struct {
@@ -71,6 +72,13 @@ type AttachmentsConfig struct {
 	Store   string        `yaml:"store"`
 	TempDir string        `yaml:"temp_dir"`
 	TTL     time.Duration `yaml:"ttl"`
+}
+
+type RedisConfig struct {
+	Addr     string `yaml:"addr"`
+	Password string `yaml:"password"`
+	DB       int    `yaml:"db"`
+	TLS      bool   `yaml:"tls"`
 }
 
 type PromptConfig struct {
@@ -238,5 +246,11 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("MANTIS_API_TOKEN"); v != "" {
 		cfg.Mantis.APIToken = v
+	}
+	if v := os.Getenv("REDIS_ADDR"); v != "" {
+		cfg.Redis.Addr = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		cfg.Redis.Password = v
 	}
 }
