@@ -299,6 +299,22 @@ redis-server --daemonize yes
 ./bot worker -config worker.yaml
 ```
 
+### 外部 Worker（同事電腦）
+
+同事不需要任何 config 檔案，只需要 binary + 環境變數：
+
+```bash
+# 前置條件：已安裝 agent CLI 並登入（例如 claude login）
+REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx ./bot worker
+```
+
+自訂 agent：
+```bash
+REDIS_ADDR=redis.company.com:6379 GITHUB_TOKEN=ghp_xxx FALLBACK=codex ./bot worker
+```
+
+Worker 內建三個 agent 的預設 config（claude/codex/opencode），不需要 YAML。Redis 地址和 token 透過環境變數傳入。
+
 ### Docker
 
 Image 包含三個 agent CLI：claude、codex、opencode。
