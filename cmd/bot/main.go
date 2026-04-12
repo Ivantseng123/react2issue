@@ -17,7 +17,6 @@ import (
 	"slack-issue-bot/internal/mantis"
 	"slack-issue-bot/internal/queue"
 	slackclient "slack-issue-bot/internal/slack"
-	"slack-issue-bot/internal/worker"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -105,22 +104,32 @@ func main() {
 		}
 	}
 
-	workerPool := worker.NewPool(worker.Config{
-		Queue:          bundle.Queue,
-		Attachments:    bundle.Attachments,
-		Results:        bundle.Results,
-		Store:          jobStore,
+	// Create Coordinator (JobQueue decorator for TaskType routing).
+	coordinator := queue.NewCoordinator(bundle.Queue)
+	coordinator.RegisterQueue("triage", bundle.Queue)
+
+	// Create and start LocalAdapter (owns worker.Pool lifecycle).
+	localAdapter := NewLocalAdapter(LocalAdapterConfig{
 		Runner:         &agentRunnerAdapter{runner: agentRunner},
 		RepoCache:      &repoCacheAdapter{cache: repoCache},
-		WorkerCount:    cfg.Workers.Count,
 		SkillDirs:      skillDirs,
-		Commands:       bundle.Commands,
-		Status:         bundle.Status,
+		WorkerCount:    cfg.Workers.Count,
 		StatusInterval: cfg.Queue.StatusInterval,
+		Capabilities:   []string{"triage"},
+		Store:          jobStore,
 	})
-	workerPool.Start(context.Background())
+	if err := localAdapter.Start(queue.AdapterDeps{
+		Jobs:        bundle.Queue,
+		Results:     bundle.Results,
+		Status:      bundle.Status,
+		Commands:    bundle.Commands,
+		Attachments: bundle.Attachments,
+	}); err != nil {
+		slog.Error("failed to start local adapter", "error", err)
+		os.Exit(1)
+	}
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, bundle.Queue, jobStore, bundle.Attachments, skills)
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, coordinator, jobStore, bundle.Attachments, skills)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,
@@ -163,7 +172,7 @@ func main() {
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("ok"))
 			})
-			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, bundle.Queue))
+			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, coordinator))
 			http.HandleFunc("/jobs/", queue.KillHandler(jobStore, bundle.Commands))
 			addr := fmt.Sprintf(":%d", cfg.Server.Port)
 			slog.Info("http endpoints listening", "addr", addr, "endpoints", []string{"/healthz", "/jobs", "/jobs/{id}"})
