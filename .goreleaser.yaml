@@ -1,0 +1,74 @@
+version: 2
+project_name: agentdock
+
+builds:
+  - id: bot
+    main: ./cmd/bot
+    binary: bot
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - config.example.yaml
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  disable: true   # release-please owns CHANGELOG.md; goreleaser must not contribute
+
+dockers:
+  - image_templates:
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
+    dockerfile: Dockerfile.release
+    use: buildx
+    goarch: amd64
+    build_flag_templates:
+      - --platform=linux/amd64
+    extra_files:
+      - agents/skills
+      - config.example.yaml
+
+  - image_templates:
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
+    dockerfile: Dockerfile.release
+    use: buildx
+    goarch: arm64
+    build_flag_templates:
+      - --platform=linux/arm64
+    extra_files:
+      - agents/skills
+      - config.example.yaml
+
+docker_manifests:
+  - name_template: 'ghcr.io/ivantseng123/agentdock:{{ .Version }}'
+    image_templates:
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
+  - name_template: 'ghcr.io/ivantseng123/agentdock:{{ .Major }}.{{ .Minor }}'
+    image_templates:
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
+
+release:
+  github:
+    owner: Ivantseng123
+    name: agentdock
+  mode: keep-existing   # append assets only; do NOT modify release body (release-please owns it)
