@@ -36,7 +36,7 @@ type Job struct {
 }
 ```
 
-Retry creates a **new Job** (new ID) copying the original job's prompt, repo, thread context, branch, and attachments. `RetryCount` is set to `original + 1`.
+Retry creates a **new Job** (new ID) copying the original job's prompt, repo, thread context, branch, attachments, user ID, and skills. `RetryCount` is set to `original + 1`.
 
 ### 2. Watchdog Publishes to ResultBus
 
@@ -48,18 +48,29 @@ Changes to `Watchdog`:
 - Remove `StuckNotifier` type and the `notifier` field.
 - Add `ResultBus` dependency.
 - `killAndNotify()` publishes a `JobResult{Status: "failed", Error: "job terminated: <reason>"}` instead of calling the notifier.
+- Remove `FormatStuckMessage()` helper (dead code after this change).
 
-This means all failures — whether from agent execution, infra errors, or watchdog kills — are routed through `ResultListener`.
+**Double-publish guard:** When watchdog kills a job, both the watchdog and the worker may publish a failed result to `ResultBus` (watchdog publishes immediately; worker publishes after context cancellation causes `executeJob` to return). `ResultListener` guards against this: on receiving a failed result, it checks `JobState.Status`. If the job is already in `JobFailed` or `JobCompleted` state, the result is silently dropped. This is set via `UpdateStatus(jobID, JobFailed)` on first processing.
+
+This same guard also prevents stale results from interfering after a retry button click (see Section 4).
 
 ### 3. ResultListener Unified Failure Handling
 
 `ResultListener.handleResult()` on `status == "failed"`:
 
 ```
+if job status already terminal (JobFailed/JobCompleted):
+    drop (duplicate result from watchdog + worker race)
+    return
+
+mark job as JobFailed in store
+
 if job.RetryCount < 1:
     post failure message WITH retry button
 else:
     post failure message WITHOUT button (text indicates retry was attempted)
+
+clear thread dedup (allow re-tag bot in same thread)
 ```
 
 Message format with button:
@@ -76,25 +87,42 @@ Message format after retry exhausted:
 repo: owner/repo | worker: a1b2c3d4/worker-0
 ```
 
-`SlackPoster` interface gains a new method:
+**Interface changes:** `SlackPoster` gains a new method for posting messages with blocks:
 
 ```go
-PostBlocks(channelID, threadTS string, blocks []slack.Block) (string, error)
+type SlackPoster interface {
+    PostMessage(channelID, text, threadTS string)
+    UpdateMessage(channelID, messageTS, text string)
+    PostBlocks(channelID, threadTS string, blocks []slack.Block) (string, error)  // new
+}
 ```
 
-`ResultListener` reads `JobState.WorkerID` from `JobStore` to include worker identity in the message.
+This requires updates in three places:
+- `internal/bot/result_listener.go` — interface definition
+- `internal/slack/client.go` — concrete `Client` implementation
+- `cmd/bot/main.go` — `slackPosterAdapter` (if one exists) or wiring
+
+**Thread dedup:** `ResultListener` needs a `ClearThreadDedup` callback (or dependency on handler) to clear dedup on failure. Without this, re-tagging the bot after failure would be blocked. Currently `ClearThreadDedup` is called in the watchdog notifier callback in `main.go`; this responsibility moves to `ResultListener`.
+
+`ResultListener` reads `JobState.WorkerID` from `JobStore` to include worker identity in the message. In Redis mode, `WorkerID` reaches the bot's `JobStore` via the `StatusListener` path: worker sends `StatusReport` (with `WorkerID`) → `StatusBus` → `StatusListener` calls `SetAgentStatus()` which stores `WorkerID` in the `StatusReport` field of `JobState`. `ResultListener` reads it from `state.AgentStatus.WorkerID`.
 
 ### 4. Retry Button Interaction Handler
 
 New file: `internal/bot/retry_handler.go`
 
+**Dependencies:**
+- `JobStore` — lookup original job, `Put()` new job
+- `JobQueue` (or `Coordinator`) — `Submit()` new job
+- `SlackPoster` — update message
+
 Handles `block_actions` interaction with `action_id: "retry_job"`:
 
-1. Look up original job from `JobStore` using `value` (job ID).
-2. Update the original failure message to `:arrows_counterclockwise: 重試中，已重新排入佇列...` (button removed).
-3. Create new `Job` copying: `Prompt`, `Repo`, `CloneURL`, `Branch`, `ChannelID`, `ThreadTS`, `Attachments`, `Skills`, `Priority`. Set `RetryCount = original + 1`, `RetryOfJobID = original.ID`.
-4. Submit new job to queue.
-5. Set `StatusMsgTS` on the new job to the same message timestamp, so subsequent status updates overwrite it.
+1. Look up original job from `JobStore` using `value` (job ID). If not found (TTL expired), post error message and return.
+2. If original job is not in `JobFailed` state (e.g., user clicks stale button on a job that already completed), ignore.
+3. Update the original failure message to `:arrows_counterclockwise: 重試中，已重新排入佇列...` (button removed).
+4. Create new `Job` copying: `Prompt`, `Repo`, `CloneURL`, `Branch`, `ChannelID`, `ThreadTS`, `UserID`, `Attachments`, `Skills`, `Priority`. Set `RetryCount = original + 1`, `RetryOfJobID = original.ID`.
+5. Submit new job to queue.
+6. Set `StatusMsgTS` on the new job to the same message timestamp, so subsequent status updates overwrite it.
 
 Routing: `internal/slack/handler.go` routes `block_actions` with `action_id == "retry_job"` to the retry handler.
 
@@ -104,7 +132,7 @@ Re-tagging the bot in the same thread triggers the full workflow: re-reads all t
 
 No conflict because:
 - Retry creates a new job with a new ID.
-- Thread dedup in `handler.go` checks for running/pending jobs. The original failed job is already in `JobFailed` status, so it won't block a new trigger.
+- Thread dedup is cleared on failure (see Section 3). The original failed job is in `JobFailed` status, so it won't block a new trigger.
 
 ### 6. Worker Identity
 
@@ -115,10 +143,11 @@ Worker ID format: `<hostname>/worker-<index>`
 
 Where it's used:
 - `StatusReport.WorkerID` — already exists, currently only `worker-0`. Change to include hostname.
-- `JobState.WorkerID` — already exists. Pool calls `SetWorker()` after Ack.
-- Failure messages in Slack — `ResultListener` reads from `JobState.WorkerID`.
+- `JobState.WorkerID` — already exists but `SetWorker()` is never called today. Add call in pool after Ack.
+- In Redis mode, `WorkerID` propagates to the bot via `StatusReport` → `StatusBus` → `StatusListener` → `SetAgentStatus()`. The bot reads it from `state.AgentStatus.WorkerID`.
+- Failure messages in Slack — `ResultListener` reads from `JobState`.
 
-Implementation: `Pool` receives hostname at construction. Each worker goroutine uses `<hostname>/worker-<index>`.
+Implementation: `Pool` receives hostname at construction time (`cmd/bot/worker.go` calls `os.Hostname()`). Each worker goroutine uses `<hostname>/worker-<index>`.
 
 ## Data Flow
 
@@ -126,20 +155,23 @@ Implementation: `Pool` receives hostname at construction. Each worker goroutine 
 First attempt:
   trigger → workflow → Submit(Job{RetryCount:0}) → worker executes
     → success: ResultListener → create issue → post URL
-    → failure: ResultListener → post error + retry button
+    → failure: ResultListener → guard (first result wins) → post error + retry button + clear dedup
 
 Watchdog timeout:
-  watchdog → kill + publish failed result to ResultBus
-    → ResultListener → post error + retry button
+  watchdog → kill command + publish failed result to ResultBus
+  worker → context cancelled → also publishes failed result
+  ResultListener → first result processed, second dropped by terminal-state guard
 
 User clicks retry:
-  interaction handler → update message to "retrying..."
+  interaction handler → check job is in JobFailed state
+    → update message to "retrying..."
     → Submit(Job{RetryCount:1, RetryOfJobID:original}) → worker executes
       → success: ResultListener → update same message to issue URL
-      → failure: ResultListener → update same message to error (no button)
+      → failure: ResultListener → update same message to error (no button) + clear dedup
 
 User re-tags bot:
   independent new workflow → new thread context → repo selection → new job
+  (works because dedup was cleared on failure)
 ```
 
 ## Files Changed
@@ -147,11 +179,11 @@ User re-tags bot:
 | File | Change |
 |------|--------|
 | `internal/queue/job.go` | Add `RetryCount`, `RetryOfJobID` to `Job` |
-| `internal/queue/watchdog.go` | Remove `StuckNotifier`, add `ResultBus` dependency |
-| `cmd/bot/main.go` | Update Watchdog wiring: remove notifier, pass ResultBus |
-| `internal/bot/result_listener.go` | Unified failure handling: check RetryCount, post with/without button, show worker |
-| `internal/slack/client.go` | Add `PostBlocks` to `SlackPoster` interface |
-| `internal/bot/retry_handler.go` | New: retry button interaction handler |
+| `internal/queue/watchdog.go` | Remove `StuckNotifier`, `FormatStuckMessage`; add `ResultBus`; `killAndNotify` publishes result |
+| `cmd/bot/main.go` | Update Watchdog wiring: remove notifier callback, pass ResultBus; update `slackPosterAdapter` if needed |
+| `internal/bot/result_listener.go` | Add terminal-state guard; failure handling with RetryCount; post blocks; clear thread dedup; read WorkerID |
+| `internal/slack/client.go` | Add `PostBlocks` concrete implementation |
+| `internal/bot/retry_handler.go` | New: retry button interaction handler (deps: JobStore, JobQueue, SlackPoster) |
 | `internal/slack/handler.go` | Route `block_actions` `retry_job` to retry handler |
 | `internal/worker/pool.go` | Worker ID uses hostname/index; call `SetWorker()` after Ack |
 | `cmd/bot/worker.go` | Pass `os.Hostname()` to Pool at startup |
@@ -159,7 +191,11 @@ User re-tags bot:
 ## Testing
 
 - Unit test: `ResultListener` posts button when `RetryCount == 0`, no button when `RetryCount == 1`.
-- Unit test: retry handler creates new job with correct fields and `RetryCount + 1`.
+- Unit test: `ResultListener` drops duplicate result for a job already in terminal state (double-publish guard).
+- Unit test: `ResultListener` calls `ClearThreadDedup` on failure.
+- Unit test: retry handler creates new job with correct fields (`UserID`, `RetryCount + 1`, etc.).
+- Unit test: retry handler ignores click if job is not in `JobFailed` state (stale button).
+- Unit test: retry handler returns graceful error if job not found (TTL expired).
 - Unit test: Watchdog publishes failed result to ResultBus (no longer calls notifier).
 - Unit test: worker ID format includes hostname.
 - Integration: trigger failure → see button → click retry → job re-executes.
