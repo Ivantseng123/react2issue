@@ -67,6 +67,11 @@ func runWorker() {
 		}
 	}
 
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "unknown"
+	}
+
 	pool := worker.NewPool(worker.Config{
 		Queue:          bundle.Queue,
 		Attachments:    bundle.Attachments,
@@ -75,6 +80,7 @@ func runWorker() {
 		Runner:         &agentRunnerAdapter{runner: agentRunner},
 		RepoCache:      &repoCacheAdapter{cache: repoCache},
 		WorkerCount:    cfg.Workers.Count,
+		Hostname:       hostname,
 		SkillDirs:      skillDirs,
 		Commands:       bundle.Commands,
 		Status:         bundle.Status,
