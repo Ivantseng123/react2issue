@@ -118,10 +118,10 @@ func main() {
 		slog.Info("using in-memory transport")
 	}
 
-	// Collect skill dirs from all agents in fallback chain.
+	// Collect skill dirs from all agents in provider chain.
 	seen := make(map[string]bool)
 	var skillDirs []string
-	for _, name := range cfg.Fallback {
+	for _, name := range cfg.Providers {
 		if agent, ok := cfg.Agents[name]; ok && agent.SkillDir != "" && !seen[agent.SkillDir] {
 			skillDirs = append(skillDirs, agent.SkillDir)
 			seen[agent.SkillDir] = true

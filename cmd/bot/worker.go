@@ -60,7 +60,7 @@ func runWorker() {
 	// Collect skill dirs.
 	var skillDirs []string
 	seen := make(map[string]bool)
-	for _, name := range cfg.Fallback {
+	for _, name := range cfg.Providers {
 		if agent, ok := cfg.Agents[name]; ok && agent.SkillDir != "" && !seen[agent.SkillDir] {
 			skillDirs = append(skillDirs, agent.SkillDir)
 			seen[agent.SkillDir] = true
