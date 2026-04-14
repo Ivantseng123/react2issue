@@ -184,17 +184,11 @@ func main() {
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
 	go statusListener.Listen(context.Background())
 
-	// Job watchdog — detect stuck jobs and notify Slack.
-	slackAdapter := &slackPosterAdapter{client: slackClient}
-	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, queue.WatchdogConfig{
+	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
+	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, bundle.Results, queue.WatchdogConfig{
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,
 		PrepareTimeout: cfg.Queue.PrepareTimeout,
-	}, func(job *queue.Job, status queue.JobStatus, reason string) {
-		msg := queue.FormatStuckMessage(job, status, reason)
-		slackAdapter.PostMessage(job.ChannelID, msg, job.ThreadTS)
-		// Also clear dedup so user can re-trigger.
-		handler.ClearThreadDedup(job.ChannelID, job.ThreadTS)
 	})
 	go watchdog.Start(make(chan struct{})) // runs until process exits
 
