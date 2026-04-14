@@ -185,6 +185,8 @@ func main() {
 		})
 	go resultListener.Listen(context.Background())
 
+	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient})
+
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
 	go statusListener.Listen(context.Background())
 
@@ -317,6 +319,9 @@ func main() {
 
 					case strings.HasPrefix(action.ActionID, "description_action"):
 						wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
+
+					case action.ActionID == "retry_job":
+						retryHandler.Handle(cb.Channel.ID, action.Value, selectorTS)
 
 					case strings.HasPrefix(action.ActionID, "cancel_job"):
 						jobID := action.Value
