@@ -14,7 +14,6 @@ Single Go binary, supports both in-memory and Redis transports. Workers can run 
 | Configuration (config.yaml, Skills, NPX) | [docs/configuration.en.md](docs/configuration.en.md) |
 | Deployment (Local / Redis / Docker / K8s / CI) | [docs/deployment.en.md](docs/deployment.en.md) |
 | Monitoring, agent behavior, HTTP endpoints | [docs/operations.en.md](docs/operations.en.md) |
-| Internal architecture / directory layout | [docs/internals.en.md](docs/internals.en.md) |
 
 ## Quick Start
 
