@@ -48,7 +48,7 @@ type Workflow struct {
 	queue         queue.JobQueue
 	store         queue.JobStore
 	attachments   queue.AttachmentStore
-	skills        map[string]string
+	skills        map[string]*queue.SkillPayload
 
 	mu        sync.Mutex
 	pending   map[string]*pendingTriage
@@ -65,7 +65,7 @@ func NewWorkflow(
 	jobQueue queue.JobQueue,
 	jobStore queue.JobStore,
 	attachStore queue.AttachmentStore,
-	skills map[string]string,
+	skills map[string]*queue.SkillPayload,
 ) *Workflow {
 	return &Workflow{
 		cfg:           cfg,

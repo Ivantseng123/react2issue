@@ -86,10 +86,12 @@ func main() {
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
 
 	// Load skills for agent.
-	skills := make(map[string]string)
+	skills := make(map[string]*queue.SkillPayload)
 	skillPath := "agents/skills/triage-issue/SKILL.md"
 	if data, err := os.ReadFile(skillPath); err == nil {
-		skills["triage-issue"] = string(data)
+		skills["triage-issue"] = &queue.SkillPayload{
+			Files: map[string][]byte{"SKILL.md": data},
+		}
 		slog.Info("skill loaded", "path", skillPath)
 	} else {
 		slog.Warn("skill not found, agents will run without skill", "path", skillPath, "error", err)
