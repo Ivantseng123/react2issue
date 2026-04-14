@@ -3,6 +3,7 @@ package skill
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -79,7 +80,7 @@ func TestLoader_LoadAll_LocalSkill(t *testing.T) {
 func TestLoader_LoadAll_NpxSkill_CacheMiss(t *testing.T) {
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"review": {Type: "npx", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
+			"review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},
 	}
@@ -105,7 +106,7 @@ func TestLoader_LoadAll_NpxSkill_CacheMiss(t *testing.T) {
 func TestLoader_LoadAll_NpxSkill_CacheHit(t *testing.T) {
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"review": {Type: "npx", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
+			"review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},
 	}
@@ -132,7 +133,7 @@ func TestLoader_LoadAll_NpxSkill_CacheHit(t *testing.T) {
 func TestLoader_LoadAll_NpxSkill_CacheExpired(t *testing.T) {
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"review": {Type: "npx", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
+			"review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 1 * time.Millisecond},
 	}
@@ -158,7 +159,7 @@ func TestLoader_LoadAll_NpxFail_FallbackBakedIn(t *testing.T) {
 	}
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"review": {Type: "npx", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
+			"review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},
 	}
@@ -180,7 +181,7 @@ func TestLoader_LoadAll_NpxFail_FallbackBakedIn(t *testing.T) {
 func TestLoader_LoadAll_NpxFail_NoBakedIn_Skip(t *testing.T) {
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"review": {Type: "npx", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
+			"review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},
 	}
@@ -199,7 +200,7 @@ func TestLoader_LoadAll_NpxFail_NoBakedIn_Skip(t *testing.T) {
 func TestLoader_LoadAll_NpxFail_NegativeCache(t *testing.T) {
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"review": {Type: "npx", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
+			"review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},
 	}
@@ -217,8 +218,8 @@ func TestLoader_LoadAll_NpxFail_NegativeCache(t *testing.T) {
 func TestLoader_LoadAll_SamePackageDedup(t *testing.T) {
 	cfg := &SkillsFileConfig{
 		Skills: map[string]*SkillConfig{
-			"entry-a": {Type: "npx", Package: "@team/multi", Version: "latest", Timeout: 30 * time.Second},
-			"entry-b": {Type: "npx", Package: "@team/multi", Version: "latest", Timeout: 30 * time.Second},
+			"entry-a": {Type: "remote", Package: "@team/multi", Version: "latest", Timeout: 30 * time.Second},
+			"entry-b": {Type: "remote", Package: "@team/multi", Version: "latest", Timeout: 30 * time.Second},
 		},
 		Cache: CacheConfig{TTL: 5 * time.Minute},
 	}
@@ -241,6 +242,34 @@ func TestLoader_LoadAll_SamePackageDedup(t *testing.T) {
 	}
 	if fetcher.calls != 1 {
 		t.Errorf("fetcher calls = %d, want 1 (same package fetched once)", fetcher.calls)
+	}
+}
+
+func TestLoader_LoadAll_ConflictFailFast(t *testing.T) {
+	bakedIn := map[string]*SkillFiles{
+		"code-review": {Name: "code-review", Files: map[string][]byte{"SKILL.md": []byte("# Local")}},
+	}
+	cfg := &SkillsFileConfig{
+		Skills: map[string]*SkillConfig{
+			"local-review": {Type: "local", Path: "agents/skills/code-review"},
+			"remote-review": {Type: "remote", Package: "@team/review", Version: "latest", Timeout: 30 * time.Second},
+		},
+		Cache: CacheConfig{TTL: 5 * time.Minute},
+	}
+	fetcher := &mockFetcher{
+		results: map[string][]*SkillFiles{
+			// Remote package produces a skill with same name as local
+			"@team/review@latest": {{Name: "code-review", Files: map[string][]byte{"SKILL.md": []byte("# Remote")}}},
+		},
+	}
+	loader := newTestLoader(cfg, fetcher.fetch, bakedIn)
+
+	_, err := loader.LoadAll(context.Background())
+	if err == nil {
+		t.Fatal("expected error for same-name conflict")
+	}
+	if !strings.Contains(err.Error(), "conflict") {
+		t.Errorf("error should mention conflict: %v", err)
 	}
 }
 

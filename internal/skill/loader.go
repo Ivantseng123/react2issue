@@ -66,8 +66,8 @@ func NewLoader(configPath, bakedInDir string) (*Loader, error) {
 	}, nil
 }
 
-// Warmup pre-fetches all npx packages defined in config so that the first real
-// job doesn't pay the npm install latency. Errors are logged but not returned.
+// Warmup pre-fetches all remote packages defined in config so that the first
+// real job doesn't pay the npm install latency. Errors are logged but not returned.
 func (l *Loader) Warmup(ctx context.Context) {
 	l.mu.RLock()
 	cfg := l.config
@@ -75,7 +75,7 @@ func (l *Loader) Warmup(ctx context.Context) {
 
 	seen := make(map[string]bool)
 	for _, sc := range cfg.Skills {
-		if sc.Type != "npx" {
+		if sc.Type != "remote" {
 			continue
 		}
 		cacheKey := sc.Package + "@" + sc.Version
@@ -85,7 +85,8 @@ func (l *Loader) Warmup(ctx context.Context) {
 		seen[cacheKey] = true
 
 		result := make(map[string]*queue.SkillPayload)
-		l.loadNpx(ctx, sc, cacheKey, result)
+		sources := make(map[string]string)
+		l.loadRemote(ctx, sc, cacheKey, result, sources)
 	}
 }
 
@@ -98,23 +99,27 @@ func (l *Loader) LoadAll(ctx context.Context) (map[string]*queue.SkillPayload, e
 	l.mu.RUnlock()
 
 	result := make(map[string]*queue.SkillPayload)
+	sources := make(map[string]string) // skill name → source (for conflict detection)
 
 	// Deduplicate: same package@version should only be fetched once per call.
-	// We process each unique cacheKey once and let loadNpx populate result.
-	seenNpx := make(map[string]bool)
+	seenRemote := make(map[string]bool)
 
 	for _, sc := range cfg.Skills {
 		switch sc.Type {
 		case "local":
-			l.loadLocal(sc, result)
+			if err := l.loadLocal(sc, result, sources); err != nil {
+				return nil, err
+			}
 
-		case "npx":
+		case "remote":
 			cacheKey := sc.Package + "@" + sc.Version
-			if seenNpx[cacheKey] {
+			if seenRemote[cacheKey] {
 				continue
 			}
-			seenNpx[cacheKey] = true
-			l.loadNpx(ctx, sc, cacheKey, result)
+			seenRemote[cacheKey] = true
+			if err := l.loadRemote(ctx, sc, cacheKey, result, sources); err != nil {
+				return nil, err
+			}
 
 		default:
 			slog.Warn("skill: unknown type", "type", sc.Type)
@@ -144,7 +149,7 @@ func (l *Loader) ReloadConfig(path string) error {
 	// Build set of old package keys.
 	oldKeys := make(map[string]bool)
 	for _, sc := range oldCfg.Skills {
-		if sc.Type == "npx" {
+		if sc.Type == "remote" {
 			oldKeys[sc.Package+"@"+sc.Version] = true
 		}
 	}
@@ -152,7 +157,7 @@ func (l *Loader) ReloadConfig(path string) error {
 	// Build set of new package keys and detect changes.
 	newKeys := make(map[string]bool)
 	for _, sc := range newCfg.Skills {
-		if sc.Type == "npx" {
+		if sc.Type == "remote" {
 			newKeys[sc.Package+"@"+sc.Version] = true
 		}
 	}
@@ -177,45 +182,58 @@ func (l *Loader) ReloadConfig(path string) error {
 
 // loadLocal resolves a "local" skill from the baked-in map using the config key
 // as the skill name lookup.
-func (l *Loader) loadLocal(sc *SkillConfig, result map[string]*queue.SkillPayload) {
-	// For local skills, the config key is the skill name. We look it up in
-	// bakedIn by the last path segment (skill directory name).
+func (l *Loader) loadLocal(sc *SkillConfig, result map[string]*queue.SkillPayload, sources map[string]string) error {
 	skillName := filepath.Base(sc.Path)
 
 	sf, ok := l.bakedIn[skillName]
 	if !ok {
 		slog.Warn("skill: local skill not found in baked-in map", "name", skillName)
-		return
+		return nil
 	}
-	result[sf.Name] = &queue.SkillPayload{Files: sf.Files}
+	return addSkill(result, sf.Name, "local:"+sc.Path, sf, sources)
 }
 
-// loadNpx resolves an npx skill: checks TTL cache, uses singleflight to avoid
-// duplicate fetches, validates files, and falls back to baked-in on failure.
-func (l *Loader) loadNpx(ctx context.Context, sc *SkillConfig, cacheKey string, result map[string]*queue.SkillPayload) {
+// addSkill adds a skill to the result map. Returns an error if the name
+// already exists from a different source (fail fast on conflict).
+func addSkill(result map[string]*queue.SkillPayload, name, source string, sf *SkillFiles, sources map[string]string) error {
+	if prev, exists := sources[name]; exists && prev != source {
+		return fmt.Errorf("skill name conflict: %q provided by both %q and %q", name, prev, source)
+	}
+	sources[name] = source
+	result[name] = &queue.SkillPayload{Files: sf.Files}
+	return nil
+}
+
+// loadRemote resolves a remote skill: checks TTL cache, uses singleflight to
+// avoid duplicate fetches, validates files, and falls back to baked-in on failure.
+func (l *Loader) loadRemote(ctx context.Context, sc *SkillConfig, cacheKey string, result map[string]*queue.SkillPayload, sources map[string]string) error {
 	l.mu.RLock()
 	entry, cached := l.cache[cacheKey]
 	ttl := l.config.Cache.TTL
 	l.mu.RUnlock()
 
+	source := "remote:" + sc.Package
+
 	// Cache hit and not yet expired — use it directly.
 	if cached && time.Since(entry.fetchedAt) < ttl {
 		if entry.status == cacheOK {
 			for _, sf := range entry.skills {
-				result[sf.Name] = &queue.SkillPayload{Files: sf.Files}
+				if err := addSkill(result, sf.Name, source, sf, sources); err != nil {
+					return err
+				}
 			}
 		} else {
 			// Negative cache: fetch previously failed; fall back without retrying.
 			l.fallbackBakedIn(cacheKey, result)
 		}
-		return
+		return nil
 	}
 
 	// Cache miss or expired: use singleflight to prevent thundering herd.
 	type sfResult struct {
 		skills []*SkillFiles
 	}
-	raw, err, _ := l.group.Do(cacheKey, func() (interface{}, error) {
+	raw, fetchErr, _ := l.group.Do(cacheKey, func() (interface{}, error) {
 		fetchCtx := ctx
 		if sc.Timeout > 0 {
 			var cancel context.CancelFunc
@@ -226,29 +244,29 @@ func (l *Loader) loadNpx(ctx context.Context, sc *SkillConfig, cacheKey string, 
 		return &sfResult{skills: skills}, err
 	})
 
-	if err != nil {
-		slog.Warn("skill: fetch failed, recording negative cache", "pkg", cacheKey, "err", err)
+	if fetchErr != nil {
+		slog.Warn("skill: fetch failed, recording negative cache", "pkg", cacheKey, "err", fetchErr)
 		l.setCacheEntry(cacheKey, &cacheEntry{
 			status:    cacheFailed,
-			reason:    err.Error(),
+			reason:    fetchErr.Error(),
 			fetchedAt: time.Now(),
 		})
 		l.fallbackBakedIn(cacheKey, result)
-		return
+		return nil
 	}
 
 	sfr := raw.(*sfResult)
 
 	// Validate each skill's files.
-	if err := l.validateSkillsBatch(sfr.skills); err != nil {
-		slog.Warn("skill: validation failed, recording negative cache", "pkg", cacheKey, "err", err)
+	if valErr := l.validateSkillsBatch(sfr.skills); valErr != nil {
+		slog.Warn("skill: validation failed, recording negative cache", "pkg", cacheKey, "err", valErr)
 		l.setCacheEntry(cacheKey, &cacheEntry{
 			status:    cacheInvalid,
-			reason:    err.Error(),
+			reason:    valErr.Error(),
 			fetchedAt: time.Now(),
 		})
 		l.fallbackBakedIn(cacheKey, result)
-		return
+		return nil
 	}
 
 	l.setCacheEntry(cacheKey, &cacheEntry{
@@ -258,12 +276,15 @@ func (l *Loader) loadNpx(ctx context.Context, sc *SkillConfig, cacheKey string, 
 	})
 
 	for _, sf := range sfr.skills {
-		result[sf.Name] = &queue.SkillPayload{Files: sf.Files}
+		if err := addSkill(result, sf.Name, source, sf, sources); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // fallbackBakedIn adds all baked-in skills to result that aren't already
-// present, as a best-effort fallback when npx fetch fails.
+// present, as a best-effort fallback when remote fetch fails.
 func (l *Loader) fallbackBakedIn(pkg string, result map[string]*queue.SkillPayload) {
 	if len(l.bakedIn) == 0 {
 		return

@@ -261,7 +261,7 @@ skills:
     path: agents/skills/triage-issue
 
   code-review:
-    type: npx
+    type: remote
     package: "@team/skill-code-review"
     version: "latest"
 
@@ -280,6 +280,7 @@ skills_config: "/etc/agentdock/skills.yaml"
 - **Negative cache**：失敗的 skill 在 TTL 內不重試
 - **啟動預熱**：App 啟動時預先 fetch 所有 npx skills
 - **Hot reload**：fsnotify 監控 skills.yaml，ConfigMap 更新後自動 reload
+- **同名衝突 fail fast**：local 和 remote skill 同名時立即報錯，避免 silent override
 - **檔案驗證**：單一 skill < 1MB，Job 總量 < 5MB，副檔名白名單，path traversal 防護
 
 **NPM package convention：**

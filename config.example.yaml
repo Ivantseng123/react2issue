@@ -96,7 +96,7 @@ logging:
   retention_days: 30
   agent_output_dir: "logs/agent-outputs"
 
-# Skills config (optional, for npx dynamic loading via ConfigMap)
+# Skills config (optional, for remote skill loading via ConfigMap)
 # skills_config: "/etc/agentdock/skills.yaml"
 
 # Optional: Mantis integration

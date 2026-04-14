@@ -45,7 +45,7 @@ skills:
     type: local
     path: agents/skills/triage
   review:
-    type: npx
+    type: remote
     package: "@team/review"
     version: "latest"
 cache:

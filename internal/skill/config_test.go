@@ -13,11 +13,11 @@ skills:
     type: local
     path: agents/skills/triage-issue
   code-review:
-    type: npx
+    type: remote
     package: "@someone/skill-code-review"
     version: "latest"
   security-audit:
-    type: npx
+    type: remote
     package: "@team/security-skills"
     version: "^2.0.0"
     timeout: 60s
@@ -46,15 +46,15 @@ cache:
 		t.Errorf("triage-issue path = %q", local.Path)
 	}
 
-	npx := cfg.Skills["code-review"]
-	if npx.Type != "npx" {
-		t.Errorf("code-review type = %q", npx.Type)
+	remote := cfg.Skills["code-review"]
+	if remote.Type != "remote" {
+		t.Errorf("code-review type = %q", remote.Type)
 	}
-	if npx.Package != "@someone/skill-code-review" {
-		t.Errorf("code-review package = %q", npx.Package)
+	if remote.Package != "@someone/skill-code-review" {
+		t.Errorf("code-review package = %q", remote.Package)
 	}
-	if npx.Version != "latest" {
-		t.Errorf("code-review version = %q", npx.Version)
+	if remote.Version != "latest" {
+		t.Errorf("code-review version = %q", remote.Version)
 	}
 
 	audit := cfg.Skills["security-audit"]
@@ -71,7 +71,7 @@ func TestLoadSkillsConfig_Defaults(t *testing.T) {
 	yaml := `
 skills:
   review:
-    type: npx
+    type: remote
     package: "@team/review"
 `
 	f, _ := os.CreateTemp("", "skills-*.yaml")

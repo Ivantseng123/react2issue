@@ -13,11 +13,11 @@ type SkillsFileConfig struct {
 }
 
 type SkillConfig struct {
-	Type    string        `yaml:"type"`
-	Path    string        `yaml:"path"`
-	Package string        `yaml:"package"`
-	Version string        `yaml:"version"`
-	Timeout time.Duration `yaml:"timeout"`
+	Type    string        `yaml:"type"`    // "local" | "remote"
+	Path    string        `yaml:"path"`    // local: disk path
+	Package string        `yaml:"package"` // remote: npm package name
+	Version string        `yaml:"version"` // remote: version spec (default "latest")
+	Timeout time.Duration `yaml:"timeout"` // remote: fetch timeout (default 30s)
 }
 
 type CacheConfig struct {
@@ -41,7 +41,7 @@ func LoadSkillsConfig(path string) (*SkillsFileConfig, error) {
 
 func applySkillsDefaults(cfg *SkillsFileConfig) {
 	for _, s := range cfg.Skills {
-		if s.Type == "npx" {
+		if s.Type == "remote" {
 			if s.Version == "" {
 				s.Version = "latest"
 			}
