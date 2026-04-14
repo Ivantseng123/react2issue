@@ -29,6 +29,8 @@ internal/
     agent.go                 # AgentRunner: spawn CLI agent with provider chain
     parser.go                # Parse agent output (===TRIAGE_RESULT=== CREATED/REJECTED/ERROR)
     prompt.go                # Build minimal user prompt for CLI agent
+    result_listener.go       # ResultBus → create issue / retry button → Slack
+    retry_handler.go         # Retry button interaction → re-submit job
     enrich.go                # Expand Mantis URLs in messages
   slack/
     client.go                # PostMessage/PostSelector/FetchThreadContext/DownloadAttachments
