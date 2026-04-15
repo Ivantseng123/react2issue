@@ -64,16 +64,17 @@ Empty input shows `Redis address is required`.
   Generate at: https://github.com/settings/tokens → "Fine-grained tokens"
   Required permissions: Repository access → Contents (Read), Issues (Write)
   Token: ********
-  ✓ Token valid (user: Ivantseng123, scopes: repo)
+  ✓ Token valid (user: Ivantseng123)
 ```
 
-**Providers** — multi-select from built-in agents (`claude`, `codex`, `opencode`):
+**Providers** — numbered selection from built-in agents:
 
 ```
-  Select providers:
-    [x] claude
-    [ ] codex
-    [ ] opencode
+  Available providers:
+    1) claude
+    2) codex
+    3) opencode
+  Select (comma-separated, e.g. 1,2): 1
   ✓ claude v1.0.22
 ```
 
@@ -128,11 +129,11 @@ For each selected provider, run `<command> --version`. If some providers fail:
 
 If ALL providers fail, exit with error in both modes.
 
-### GitHub Token Scope Check
+### GitHub Token Validation
 
-1. Call `GET /user` with the token to verify identity
-2. Read the `X-OAuth-Scopes` response header to check for `repo` scope
-3. Display username and scopes on success
+1. Call `GET /user` with the token to verify identity and display username
+2. Call `GET /repos` (or similar) to verify the token has repository access
+3. Works with both classic tokens (`ghp_`) and fine-grained tokens (`github_pat_`) — validates by actual API capability, not `X-OAuth-Scopes` header (which fine-grained tokens don't support)
 
 ### Code Changes
 
@@ -150,9 +151,13 @@ All changes in `cmd/bot/worker.go`. New functions:
 
 No changes to `internal/config/` or `internal/queue/`. Validated values are written back to `cfg` before proceeding to worker pool setup.
 
+### Output Style
+
+Preflight phase uses `fmt.Fprintf(os.Stderr, ...)` for human-readable UI output (`✓`, `✗`, prompts). `slog` is NOT initialized until preflight passes and the worker pool starts. This keeps interactive output clean and separated from structured logging.
+
 ### Dependencies
 
-- `golang.org/x/term` — hidden password input for GitHub token
+- `golang.org/x/term` (new) — hidden password input for GitHub token, `IsTerminal` check
 - `bufio.Scanner` (stdlib) — text input
 - `os/exec` (stdlib) — agent CLI version check
 - `net/http` (stdlib) — GitHub API call
