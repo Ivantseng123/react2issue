@@ -48,6 +48,7 @@ type Workflow struct {
 	queue         queue.JobQueue
 	store         queue.JobStore
 	attachments   queue.AttachmentStore
+	results       queue.ResultBus
 	skillProvider SkillProvider
 
 	mu        sync.Mutex
@@ -65,6 +66,7 @@ func NewWorkflow(
 	jobQueue queue.JobQueue,
 	jobStore queue.JobStore,
 	attachStore queue.AttachmentStore,
+	resultBus queue.ResultBus,
 	skillProvider SkillProvider,
 ) *Workflow {
 	return &Workflow{
@@ -77,6 +79,7 @@ func NewWorkflow(
 		queue:         jobQueue,
 		store:         jobStore,
 		attachments:   attachStore,
+		results:       resultBus,
 		skillProvider: skillProvider,
 		pending:       make(map[string]*pendingTriage),
 		autoBound:     make(map[string]bool),
@@ -380,18 +383,10 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	defer os.RemoveAll(tempDir)
 
 	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
-	var attachmentInfos []AttachmentInfo
-	for _, d := range downloads {
-		if d.Failed {
-			continue
-		}
-		attachmentInfos = append(attachmentInfos, AttachmentInfo{Path: d.Path, Name: d.Name, Type: d.Type})
-	}
 
 	// 4. Build prompt.
 	prompt := BuildPrompt(PromptInput{
 		ThreadMessages:   threadMsgs,
-		Attachments:      attachmentInfos,
 		ExtraDescription: pt.ExtraDesc,
 		Branch:           pt.SelectedBranch,
 		Channel:          pt.ChannelName,
@@ -453,7 +448,18 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	// Signal attachment readiness so workers can proceed.
 	if len(attachPayloads) > 0 {
-		w.attachments.Prepare(ctx, job.ID, attachPayloads)
+		if err := w.attachments.Prepare(ctx, job.ID, attachPayloads); err != nil {
+			pt.Logger.Error("附件上傳至 Redis 失敗", "phase", "失敗", "error", err)
+			w.store.UpdateStatus(job.ID, queue.JobFailed)
+			w.results.Publish(ctx, &queue.JobResult{
+				JobID:      job.ID,
+				Status:     "failed",
+				Error:      fmt.Sprintf("attachment prepare failed: %v", err),
+				StartedAt:  time.Now(),
+				FinishedAt: time.Now(),
+			})
+			return
+		}
 	}
 
 	pos, _ := w.queue.QueuePosition(job.ID)
