@@ -152,7 +152,11 @@ func runApp(cfg *config.Config) error {
 	}
 
 	// Create Coordinator (JobQueue decorator for TaskType routing).
-	coordinator := queue.NewCoordinator(bundle.Queue)
+	coordinator := queue.NewCoordinator(bundle.Queue,
+		queue.WithCoordinatorSubmitHook(func(priority string) {
+			metrics.QueueSubmittedTotal.WithLabelValues(priority).Inc()
+		}),
+	)
 	coordinator.RegisterQueue("triage", bundle.Queue)
 
 	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
@@ -218,7 +222,11 @@ func runApp(cfg *config.Config) error {
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,
 		PrepareTimeout: cfg.Queue.PrepareTimeout,
-	}, queueLogger)
+	}, queueLogger,
+		queue.WithWatchdogKillHook(func(reason string) {
+			metrics.WatchdogKillsTotal.WithLabelValues(reason).Inc()
+		}),
+	)
 	go watchdog.Start(make(chan struct{})) // runs until process exits
 
 	metrics.Register(prometheus.DefaultRegisterer, coordinator, jobStore)
