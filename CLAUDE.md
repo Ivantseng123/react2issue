@@ -78,6 +78,7 @@ Bot auto-registers when joining a channel. No static channel config needed.
 - **Slack `invalid_blocks`**: Don't combine `MsgOptionMetadata` with `MsgOptionBlocks`.
 - **Full clone required**: Shallow clone can't list branches. Use `fetch --all --prune`.
 - **Reporter tag**: Don't use `@username` — Slack/GitHub names differ. Plain text only.
+- **Logging conventions**: See `internal/logging/GUIDE.md` for component/phase classification, Chinese message format, and attribute naming rules.
 
 ## Testing
 
