@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"agentdock/internal/queue"
@@ -17,6 +18,7 @@ type LocalAdapterConfig struct {
 	StatusInterval time.Duration
 	Capabilities   []string
 	Store          queue.JobStore
+	Logger         *slog.Logger
 }
 
 // LocalAdapter runs agents locally via worker.Pool.
@@ -46,6 +48,7 @@ func (a *LocalAdapter) Start(deps queue.AdapterDeps) error {
 		Commands:       deps.Commands,
 		Status:         deps.Status,
 		StatusInterval: a.cfg.StatusInterval,
+		Logger:         a.cfg.Logger,
 	})
 	a.pool.Start(context.Background())
 	return nil

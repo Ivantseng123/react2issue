@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +49,7 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 		Runner:      &fakeRunner{},
 		RepoCache:   &fakeRepo{},
 		WorkerCount: 1,
+		Logger:      slog.Default(),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -113,6 +115,7 @@ func TestFullFlow_PriorityOrdering(t *testing.T) {
 		Runner:      runner,
 		RepoCache:   &fakeRepo{},
 		WorkerCount: 1,
+		Logger:      slog.Default(),
 	})
 
 	ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)

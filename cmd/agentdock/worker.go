@@ -75,6 +75,7 @@ func runWorker(cfg *config.Config) error {
 		hostname = "unknown"
 	}
 
+	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 	pool := worker.NewPool(worker.Config{
 		Queue:          bundle.Queue,
 		Attachments:    bundle.Attachments,
@@ -88,6 +89,7 @@ func runWorker(cfg *config.Config) error {
 		Commands:       bundle.Commands,
 		Status:         bundle.Status,
 		StatusInterval: cfg.Queue.StatusInterval,
+		Logger:         workerLogger,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

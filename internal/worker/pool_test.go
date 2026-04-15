@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -51,6 +52,7 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 		Runner:      &mockRunner{output: agentOutput},
 		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
 		WorkerCount: 1,
+		Logger:      slog.Default(),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -109,6 +111,7 @@ func TestPool_WorkerIDIncludesHostname(t *testing.T) {
 		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
 		WorkerCount: 1,
 		Hostname:    "test-host",
+		Logger:      slog.Default(),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -146,6 +149,7 @@ func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 		Runner:      &mockRunner{err: fmt.Errorf("agent crashed")},
 		RepoCache:   &mockRepo{path: "/tmp/test-repo"},
 		WorkerCount: 1,
+		Logger:      slog.Default(),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

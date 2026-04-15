@@ -2,6 +2,7 @@ package queue_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -45,6 +46,7 @@ func TestRedisFullFlow_SubmitToResult(t *testing.T) {
 		Runner:      &fakeRunner{},
 		RepoCache:   &fakeRepo{},
 		WorkerCount: 1,
+		Logger:      slog.Default(),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

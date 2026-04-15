@@ -24,6 +24,7 @@ type Config struct {
 	Commands       queue.CommandBus
 	Status         queue.StatusBus
 	StatusInterval time.Duration
+	Logger         *slog.Logger
 }
 
 type Pool struct {
@@ -32,6 +33,9 @@ type Pool struct {
 }
 
 func NewPool(cfg Config) *Pool {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
 	return &Pool{
 		cfg:      cfg,
 		registry: queue.NewProcessRegistry(),
@@ -49,13 +53,13 @@ func (p *Pool) Start(ctx context.Context) {
 	// Register workers with the queue and maintain heartbeat.
 	go p.workerHeartbeat(ctx)
 
-	slog.Info("worker pool started", "count", p.cfg.WorkerCount)
+	p.cfg.Logger.Info("Worker pool 已啟動", "phase", "處理中", "count", p.cfg.WorkerCount)
 }
 
 func (p *Pool) commandListener(ctx context.Context) {
 	commands, err := p.cfg.Commands.Receive(ctx)
 	if err != nil {
-		slog.Error("failed to receive commands", "error", err)
+		p.cfg.Logger.Error("接收指令失敗", "phase", "失敗", "error", err)
 		return
 	}
 	for {
@@ -66,7 +70,7 @@ func (p *Pool) commandListener(ctx context.Context) {
 			}
 			if cmd.Action == "kill" {
 				if err := p.registry.Kill(cmd.JobID); err != nil {
-					slog.Warn("kill command failed", "job_id", cmd.JobID, "error", err)
+					p.cfg.Logger.Warn("終止指令失敗", "phase", "失敗", "job_id", cmd.JobID, "error", err)
 				}
 			}
 		case <-ctx.Done():
@@ -76,7 +80,7 @@ func (p *Pool) commandListener(ctx context.Context) {
 }
 
 func (p *Pool) runWorker(ctx context.Context, id int) {
-	logger := slog.With("worker_id", id)
+	logger := p.cfg.Logger.With("worker_id", id)
 	jobs, err := p.cfg.Queue.Receive(ctx)
 	if err != nil {
 		logger.Error("failed to receive jobs", "error", err)
@@ -106,7 +110,7 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 }
 
 func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *queue.Job) {
-	logger := slog.With("worker_id", workerIndex, "job_id", job.ID)
+	logger := p.cfg.Logger.With("worker_id", workerIndex, "job_id", job.ID)
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
 
@@ -125,7 +129,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		OnStarted: func(pid int, command string) {
 			status.setPID(pid, command)
 			p.registry.Register(job.ID, pid, command, jobCancel)
-			logger.Info("agent registered", "pid", pid, "command", command)
+			logger.Info("Agent 已註冊", "phase", "處理中", "pid", pid, "command", command)
 
 			// Now that we have a PID, send first report immediately + start periodic.
 			if p.cfg.Status != nil {
@@ -165,7 +169,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		skillDirs:   p.cfg.SkillDirs,
 	}
 
-	result := executeJob(jobCtx, job, deps, opts)
+	result := executeJob(jobCtx, job, deps, opts, logger)
 
 	// Send final status report (captures cost/tokens from result event).
 	status.alive = false
@@ -190,7 +194,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	if err := p.cfg.Results.Publish(ctx, result); err != nil {
 		logger.Error("failed to publish result", "error", err)
 	}
-	logger.Info("job completed", "status", result.Status)
+	logger.Info("工作完成", "phase", "完成", "status", result.Status)
 }
 
 func (p *Pool) workerHeartbeat(ctx context.Context) {
@@ -202,7 +206,7 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 			ConnectedAt: now,
 		}
 		if err := p.cfg.Queue.Register(ctx, info); err != nil {
-			slog.Warn("worker registration failed", "worker_id", info.WorkerID, "error", err)
+			p.cfg.Logger.Warn("Worker 註冊失敗", "phase", "失敗", "worker_id", info.WorkerID, "error", err)
 		}
 	}
 

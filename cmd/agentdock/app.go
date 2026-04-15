@@ -154,6 +154,7 @@ func runApp(cfg *config.Config) error {
 	// Create and start LocalAdapter (owns worker.Pool lifecycle).
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
+		workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 		localAdapter := NewLocalAdapter(LocalAdapterConfig{
 			Runner:         &agentRunnerAdapter{runner: agentRunner},
 			RepoCache:      &repoCacheAdapter{cache: repoCache},
@@ -162,6 +163,7 @@ func runApp(cfg *config.Config) error {
 			StatusInterval: cfg.Queue.StatusInterval,
 			Capabilities:   []string{"triage"},
 			Store:          jobStore,
+			Logger:         workerLogger,
 		})
 		if err := localAdapter.Start(queue.AdapterDeps{
 			Jobs:        bundle.Queue,
