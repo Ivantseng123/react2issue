@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 
 	"agentdock/internal/queue"
@@ -36,7 +37,7 @@ func TestRetryHandler_CreatesNewJob(t *testing.T) {
 	q := &mockJobQueue{}
 	slackMock := &mockSlackPoster{}
 
-	handler := NewRetryHandler(store, q, slackMock)
+	handler := NewRetryHandler(store, q, slackMock, slog.Default())
 	handler.Handle("C1", "j1", "msg-ts-1")
 
 	if len(q.submitted) != 1 {
@@ -85,7 +86,7 @@ func TestRetryHandler_JobNotFound(t *testing.T) {
 	q := &mockJobQueue{}
 	slackMock := &mockSlackPoster{}
 
-	handler := NewRetryHandler(store, q, slackMock)
+	handler := NewRetryHandler(store, q, slackMock, slog.Default())
 	handler.Handle("C1", "nonexistent", "msg-ts-1")
 
 	if len(q.submitted) != 0 {
@@ -107,7 +108,7 @@ func TestRetryHandler_IgnoresNonFailedJob(t *testing.T) {
 	q := &mockJobQueue{}
 	slackMock := &mockSlackPoster{}
 
-	handler := NewRetryHandler(store, q, slackMock)
+	handler := NewRetryHandler(store, q, slackMock, slog.Default())
 	handler.Handle("C1", "j1", "msg-ts-1")
 
 	if len(q.submitted) != 0 {

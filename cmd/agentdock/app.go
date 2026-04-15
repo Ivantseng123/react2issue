@@ -151,10 +151,12 @@ func runApp(cfg *config.Config) error {
 	coordinator := queue.NewCoordinator(bundle.Queue)
 	coordinator.RegisterQueue("triage", bundle.Queue)
 
+	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
+	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
+
 	// Create and start LocalAdapter (owns worker.Pool lifecycle).
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
-		workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 		localAdapter := NewLocalAdapter(LocalAdapterConfig{
 			Runner:         &agentRunnerAdapter{runner: agentRunner},
 			RepoCache:      &repoCacheAdapter{cache: repoCache},
@@ -192,21 +194,22 @@ func runApp(cfg *config.Config) error {
 	})
 	wf.SetHandler(handler)
 
+	agentLogger := logging.ComponentLogger(slog.Default(), logging.CompAgent)
+
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
 		&slackPosterAdapter{client: slackClient, logger: slackLogger}, issueClient,
 		func(channelID, threadTS string) {
 			handler.ClearThreadDedup(channelID, threadTS)
-		})
+		}, agentLogger)
 	go resultListener.Listen(context.Background())
 
-	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger})
+	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger)
 
-	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
+	statusListener := bot.NewStatusListener(bundle.Status, jobStore, queueLogger)
 	go statusListener.Listen(context.Background())
 
 	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
-	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
 	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, bundle.Results, queue.WatchdogConfig{
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,

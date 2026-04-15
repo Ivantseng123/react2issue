@@ -29,6 +29,7 @@ type ResultListener struct {
 	slack         SlackPoster
 	github        IssueCreator
 	onDedupClear  func(channelID, threadTS string)
+	logger        *slog.Logger
 
 	mu            sync.Mutex
 	processedJobs map[string]bool
@@ -41,6 +42,7 @@ func NewResultListener(
 	slack SlackPoster,
 	github IssueCreator,
 	onDedupClear func(channelID, threadTS string),
+	logger *slog.Logger,
 ) *ResultListener {
 	return &ResultListener{
 		results:       results,
@@ -49,6 +51,7 @@ func NewResultListener(
 		slack:         slack,
 		github:        github,
 		onDedupClear:  onDedupClear,
+		logger:        logger,
 		processedJobs: make(map[string]bool),
 	}
 }
@@ -56,7 +59,7 @@ func NewResultListener(
 func (r *ResultListener) Listen(ctx context.Context) {
 	ch, err := r.results.Subscribe(ctx)
 	if err != nil {
-		slog.Error("failed to subscribe to results", "error", err)
+		r.logger.Error("訂閱結果匯流排失敗", "phase", "失敗", "error", err)
 		return
 	}
 
@@ -78,7 +81,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	r.mu.Lock()
 	if r.processedJobs[result.JobID] {
 		r.mu.Unlock()
-		slog.Debug("dropping duplicate result", "job_id", result.JobID)
+		r.logger.Debug("重複結果已忽略", "phase", "處理中", "job_id", result.JobID)
 		return
 	}
 	r.processedJobs[result.JobID] = true
@@ -86,22 +89,22 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 
 	state, err := r.store.Get(result.JobID)
 	if err != nil {
-		slog.Error("job not found for result", "job_id", result.JobID, "error", err)
+		r.logger.Error("找不到工作結果對應的工作", "phase", "失敗", "job_id", result.JobID, "error", err)
 		return
 	}
 
 	job := state.Job
 	owner, repo := splitRepo(job.Repo)
 
-	logger := slog.With("job_id", result.JobID, "repo", job.Repo, "status", result.Status)
+	logger := r.logger.With("job_id", result.JobID, "repo", job.Repo, "status", result.Status)
 	if result.Status == "failed" {
 		truncated := result.RawOutput
 		if len(truncated) > 2000 {
 			truncated = truncated[:2000] + "…(truncated)"
 		}
-		logger.Warn("job failed", "error", result.Error, "raw_output", truncated)
+		logger.Warn("工作失敗", "phase", "降級", "error", result.Error, "raw_output", truncated)
 	} else {
-		logger.Info("job completed", "title", result.Title, "confidence", result.Confidence, "files_found", result.FilesFound)
+		logger.Info("工作完成", "phase", "完成", "title", result.Title, "confidence", result.Confidence, "files_found", result.FilesFound)
 	}
 
 	switch {

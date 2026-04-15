@@ -15,25 +15,26 @@ type JobSubmitter interface {
 }
 
 type RetryHandler struct {
-	store queue.JobStore
-	queue JobSubmitter
-	slack SlackPoster
+	store  queue.JobStore
+	queue  JobSubmitter
+	slack  SlackPoster
+	logger *slog.Logger
 }
 
-func NewRetryHandler(store queue.JobStore, q JobSubmitter, slack SlackPoster) *RetryHandler {
-	return &RetryHandler{store: store, queue: q, slack: slack}
+func NewRetryHandler(store queue.JobStore, q JobSubmitter, slack SlackPoster, logger *slog.Logger) *RetryHandler {
+	return &RetryHandler{store: store, queue: q, slack: slack, logger: logger}
 }
 
 func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 	state, err := h.store.Get(jobID)
 	if err != nil {
-		slog.Warn("retry: job not found", "job_id", jobID, "error", err)
+		h.logger.Warn("重試：找不到工作", "phase", "重試", "job_id", jobID, "error", err)
 		h.slack.UpdateMessage(channelID, msgTS, ":warning: 此任務已過期，請重新觸發")
 		return
 	}
 
 	if state.Status != queue.JobFailed {
-		slog.Info("retry: job not in failed state, ignoring", "job_id", jobID, "status", state.Status)
+		h.logger.Info("重試：工作非失敗狀態，忽略", "phase", "重試", "job_id", jobID, "status", state.Status)
 		return
 	}
 
@@ -66,7 +67,7 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 
 	ctx := context.Background()
 	if err := h.queue.Submit(ctx, newJob); err != nil {
-		slog.Error("retry: failed to submit", "job_id", newJob.ID, "error", err)
+		h.logger.Error("重試：提交失敗", "phase", "重試", "job_id", newJob.ID, "error", err)
 		h.slack.PostMessage(channelID, ":x: 重試失敗: "+err.Error(), original.ThreadTS)
 		return
 	}
@@ -80,7 +81,7 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 		h.store.Put(newJob) // update with StatusMsgTS
 	}
 
-	slog.Info("retry: new job submitted",
+	h.logger.Info("重試工作已提交", "phase", "重試",
 		"original_job_id", original.ID,
 		"new_job_id", newJob.ID,
 		"retry_count", newJob.RetryCount)
