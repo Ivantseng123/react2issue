@@ -48,6 +48,7 @@ func init() {
 	appCmd.Flags().StringVarP(&appConfigPath, "config", "c", "config.yaml", "path to config file")
 	rootCmd.AddCommand(appCmd)
 	rootCmd.AddCommand(workerCmd)
+	addAppFlags(appCmd)
 }
 
 func runApp(configPath string) error {

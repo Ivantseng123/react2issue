@@ -20,6 +20,10 @@ var rootCmd = &cobra.Command{
 	Version: fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 }
 
+func init() {
+	addPersistentFlags(rootCmd)
+}
+
 // Execute runs the root command. Called from main().
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
