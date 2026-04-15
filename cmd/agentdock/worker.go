@@ -57,7 +57,8 @@ func runWorker(cfg *config.Config) error {
 	bundle := queue.NewRedisBundle(rdb, jobStore, "triage")
 
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
-	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token)
+	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
+	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
 
 	// Collect skill dirs.
 	var skillDirs []string

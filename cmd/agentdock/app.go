@@ -61,10 +61,12 @@ func runApp(cfg *config.Config) error {
 	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: parseLogLevel(cfg.Logging.Level)})
 	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 
+	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
+
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken)
 
-	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token)
-	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token)
+	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
+	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token, githubLogger)
 
 	if cfg.AutoBind {
 		go func() {
@@ -186,7 +188,7 @@ func runApp(cfg *config.Config) error {
 	})
 	wf.SetHandler(handler)
 
-	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
+	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
 		&slackPosterAdapter{client: slackClient}, issueClient,
 		func(channelID, threadTS string) {

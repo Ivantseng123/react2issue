@@ -1,6 +1,7 @@
 package github
 
 import (
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +25,7 @@ func TestRepoCache_EnsureRepo_ClonesNewRepo(t *testing.T) {
 	run(t, workDir, "git", "push")
 
 	cacheDir := t.TempDir()
-	cache := NewRepoCache(cacheDir, time.Hour, "")
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
 
 	repoPath, err := cache.EnsureRepo("file://" + bareDir)
 	if err != nil {
@@ -56,7 +57,7 @@ func TestRepoCache_EnsureRepo_PullsExistingRepo(t *testing.T) {
 	run(t, workDir, "git", "push")
 
 	cacheDir := t.TempDir()
-	cache := NewRepoCache(cacheDir, 0, "")
+	cache := NewRepoCache(cacheDir, 0, "", slog.Default())
 
 	repoPath, err := cache.EnsureRepo("file://" + bareDir)
 	if err != nil {

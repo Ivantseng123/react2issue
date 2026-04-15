@@ -18,14 +18,16 @@ type RepoCache struct {
 	githubPAT string
 	mu        sync.Mutex
 	lastPull  map[string]time.Time
+	logger    *slog.Logger
 }
 
-func NewRepoCache(dir string, maxAge time.Duration, githubPAT string) *RepoCache {
+func NewRepoCache(dir string, maxAge time.Duration, githubPAT string, logger *slog.Logger) *RepoCache {
 	return &RepoCache{
 		dir:       dir,
 		maxAge:    maxAge,
 		githubPAT: githubPAT,
 		lastPull:  make(map[string]time.Time),
+		logger:    logger,
 	}
 }
 
@@ -33,11 +35,12 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
+	start := time.Now()
 	cloneURL := rc.ResolveURL(repoRef)
 	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
 
 	if _, err := os.Stat(filepath.Join(localPath, ".git")); os.IsNotExist(err) {
-		slog.Info("cloning repo", "repo", SanitizeURL(repoRef), "path", localPath)
+		rc.logger.Info("開始 clone repo", "phase", "處理中", "repo", SanitizeURL(repoRef), "path", localPath)
 		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 			return "", fmt.Errorf("mkdir: %w", err)
 		}
@@ -47,6 +50,7 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 			return "", fmt.Errorf("git clone failed: %w", err)
 		}
 		rc.lastPull[repoRef] = time.Now()
+		rc.logger.Info("Repo 同步完成", "phase", "完成", "repo", SanitizeURL(repoRef), "duration_ms", time.Since(start).Milliseconds())
 		return localPath, nil
 	}
 
@@ -54,13 +58,13 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 		return localPath, nil
 	}
 
-	slog.Info("fetching repo", "repo", SanitizeURL(repoRef))
+	rc.logger.Info("開始 fetch repo", "phase", "處理中", "repo", SanitizeURL(repoRef))
 	cmd := exec.Command("git", "-C", localPath, "fetch", "--all", "--prune")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		slog.Warn("git fetch failed", "error", err)
+		rc.logger.Warn("Git fetch 失敗", "phase", "失敗", "error", err)
 		// Broken repo (e.g. interrupted clone) — remove and re-clone
 		if strings.Contains(string(out), "not a git repository") {
-			slog.Info("removing broken repo dir and re-cloning", "repo", SanitizeURL(repoRef))
+			rc.logger.Info("移除損壞目錄並重新 clone", "phase", "處理中", "repo", SanitizeURL(repoRef))
 			os.RemoveAll(localPath)
 			if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 				return "", fmt.Errorf("mkdir: %w", err)
@@ -70,15 +74,17 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 				return "", fmt.Errorf("git clone (retry) failed: %w", err)
 			}
 			rc.lastPull[repoRef] = time.Now()
+			rc.logger.Info("Repo 同步完成", "phase", "完成", "repo", SanitizeURL(repoRef), "duration_ms", time.Since(start).Milliseconds())
 			return localPath, nil
 		}
 	}
 	// Fast-forward current branch to match remote
 	cmd = exec.Command("git", "-C", localPath, "pull", "--ff-only")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		slog.Debug("git pull ff failed (may be on detached head)", "output", string(out))
+		rc.logger.Debug("Git pull fast-forward 失敗（可能在 detached head）", "phase", "處理中", "output", string(out))
 	}
 	rc.lastPull[repoRef] = time.Now()
+	rc.logger.Info("Repo 同步完成", "phase", "完成", "repo", SanitizeURL(repoRef), "duration_ms", time.Since(start).Milliseconds())
 	return localPath, nil
 }
 
