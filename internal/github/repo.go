@@ -149,7 +149,8 @@ func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
 	if branch == "" {
 		cmd = exec.Command("git", "-C", barePath, "worktree", "add", worktreePath, "HEAD")
 	} else {
-		cmd = exec.Command("git", "-C", barePath, "worktree", "add", worktreePath, "origin/"+branch)
+		// Bare repo branches are in refs/heads/, not refs/remotes/origin/.
+		cmd = exec.Command("git", "-C", barePath, "worktree", "add", worktreePath, branch)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree add: %w\n%s", err, out)
