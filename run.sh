@@ -7,4 +7,4 @@ cd "$(dirname "$0")"
 echo "Building..."
 go build -o agentdock ./cmd/agentdock/ || exit 1
 echo "Starting react2issue..."
-exec ./agentdock -config config.yaml
+exec ./agentdock app -c config.yaml

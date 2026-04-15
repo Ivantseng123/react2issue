@@ -29,12 +29,11 @@ RUN mkdir -p /home/node/.claude/skills && \
 
 RUN mkdir -p /data/repos && chown node:node /data/repos
 
-COPY config.example.yaml /config.yaml
-
 # Binary last — invalidates only this layer per release.
 # COPY preserves the 0755 mode Go's linker writes; no chmod needed.
 COPY agentdock /agentdock
 
 USER node
+# Runtime picks the subcommand (app / worker / init). Pass e.g.:
+#   docker run ... agentdock:X app -c /etc/agentdock/config.yaml
 ENTRYPOINT ["/agentdock"]
-CMD ["-config", "/config.yaml"]

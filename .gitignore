@@ -1,10 +1,11 @@
 # Binary
 /bot
+/agentdock
 
 # Logs
 logs/
 
-# Config with secrets (use config.example.yaml as template)
+# Config with secrets (run `agentdock init` to generate a starter)
 config.yaml
 config.local.yaml
 
