@@ -34,7 +34,9 @@
 
 新增 `internal/logging/styled_handler.go`，實作 `slog.Handler` 介面。
 
-**職責**：攔截 `component` 和 `phase` 兩個 attribute，拉到 message 前綴位置。剩餘 attribute 照常 `key=value` 排列。
+**職責**：攔截 `component` attribute（由 struct logger 注入）和 `phase` attribute（由每條 log 逐條帶入），拉到 message 前綴位置。剩餘 attribute 照常 `key=value` 排列。
+
+**時間格式**：只顯示 `HH:MM:SS`，不印日期。Terminal 是即時 debug 工具，日期資訊由 JSON log 檔名（`YYYY-MM-DD.jsonl`）提供。
 
 **輸出格式**：
 
@@ -72,17 +74,17 @@ const (
 )
 ```
 
-**Phase 常數**：
+**Phase 常數**（英文常數名、中文值，與 codebase 風格一致）：
 
 ```go
 const (
-    Phase接收   = "接收"
-    Phase處理中 = "處理中"
-    Phase等待中 = "等待中"
-    Phase完成   = "完成"
-    Phase降級   = "降級"
-    Phase失敗   = "失敗"
-    Phase重試   = "重試"
+    PhaseReceive    = "接收"
+    PhaseProcessing = "處理中"
+    PhaseWaiting    = "等待中"
+    PhaseComplete   = "完成"
+    PhaseDegraded   = "降級"
+    PhaseFailed     = "失敗"
+    PhaseRetry      = "重試"
 )
 ```
 
@@ -115,16 +117,39 @@ const (
 
 高頻 key 用常數擋 typo，一次性 key 直接寫字串。
 
-### 4. Logger 建構 Helper
+### 4. Logger 注入模式
+
+**Component**：透過 struct 注入。每個 struct 在建構時接收一個已綁定 component 的 `*slog.Logger`，存為欄位。method 內部用 `s.logger.Info(...)` 呼叫。
 
 ```go
+// 建構 helper
 func ComponentLogger(base *slog.Logger, component string) *slog.Logger {
     return base.With("component", component)
 }
 
-func WithPhase(logger *slog.Logger, phase string) *slog.Logger {
-    return logger.With("phase", phase)
+// 使用端（以 Watchdog 為例）
+type Watchdog struct {
+    logger *slog.Logger
+    // ...
 }
+
+func NewWatchdog(logger *slog.Logger, /* ... */) *Watchdog {
+    return &Watchdog{logger: logger, /* ... */}
+}
+
+// app.go 建構時
+watchdog := queue.NewWatchdog(
+    logging.ComponentLogger(slog.Default(), logging.CompQueue),
+    // ...
+)
+```
+
+**Phase**：逐條帶入。Phase 是每條 log 的狀態，不綁定到 logger 上（避免 `slog.With()` 疊加問題）。
+
+```go
+// 在每條 log 呼叫時帶 phase
+w.logger.Info("Watchdog 已啟動", "phase", logging.PhaseProcessing, /* ... */)
+w.logger.Warn("強制終止逾時工作", "phase", logging.PhaseFailed, "job_id", id)
 ```
 
 ---
@@ -145,12 +170,12 @@ func WithPhase(logger *slog.Logger, phase string) *slog.Logger {
 
 ### Duration 追蹤
 
-在關鍵操作加上 `duration_ms` attribute：
+在關鍵操作加上 `duration_ms` attribute。**由被呼叫端內部計算並 log**（不在呼叫端外面包），讓耗時資訊跟對應 component 的 log 綁在一起：
 
-- Agent 執行耗時（`internal/worker/executor.go`）
-- GitHub issue 建立耗時（`internal/bot/result_listener.go`）
-- Repo clone/fetch 耗時（`internal/github/repo.go`）
-- Thread context 讀取耗時（`internal/slack/client.go`）
+- Repo clone/fetch 耗時 → `[GitHub][完成]` log 內（`internal/github/repo.go`）
+- Thread context 讀取耗時 → `[Slack][處理中]` log 內（`internal/slack/client.go`）
+- Agent 執行耗時 → `[Agent][完成]` log 內（`internal/worker/executor.go`）
+- Issue 建立耗時 → `[GitHub][完成]` log 內（`internal/github/issue.go`）
 
 ---
 
@@ -388,15 +413,15 @@ func WithPhase(logger *slog.Logger, phase string) *slog.Logger {
 internal/logging/
   handler.go              # 既有 MultiHandler（微調 stderr handler）
   styled_handler.go       # 新增：StyledTextHandler
-  styled_handler_test.go  # 新增：測試
+  styled_handler_test.go  # 新增：測試（含邊界情況：有/無 component、有/無 phase、有 group）
   constants.go            # 新增：Component + Phase 常數
   attributes.go           # 新增：Attribute Key 常數
-  helpers.go              # 新增：ComponentLogger, WithPhase
+  helpers.go              # 新增：ComponentLogger
   helpers_test.go         # 新增：測試
   request_id.go           # 既有（不動）
   rotator.go              # 既有（不動）
   agent.go                # 既有（不動）
-  README.md               # 新增：logging 使用指南 + component/phase 對應表
+  GUIDE.md                # 新增：logging 開發指南 + component/phase 對應表
 ```
 
 ### 遷移範圍（按模組）
@@ -435,20 +460,22 @@ internal/logging/
 4. 此時所有現有 log 照常運作，只是沒有 `[Component][Phase]` 前綴
 
 ### 第二波：逐模組遷移
-按模組逐一改動，每個模組：
-1. 在進入點建 `ComponentLogger`
-2. 各 log 點加 `phase`
-3. Message 改中文
-4. Attribute key 統一 snake_case
-5. 補 Debug log
-6. 跑 `go test ./...` 確認沒炸
+每個模組是一個**原子單位**，一次改完以下所有項目（避免中間狀態編譯不過）：
+1. struct 加 `logger *slog.Logger` 欄位，修改建構函式簽名
+2. `cmd/agentdock/app.go`（或 `worker.go`）的建構呼叫傳入 `ComponentLogger`
+3. struct 內部 log 從 `slog.Xxx()` 改為 `s.logger.Xxx()`，各 log 點加 `"phase", PhaseXxx`
+4. Message 改中文
+5. Attribute key 統一 snake_case
+6. 補 Debug log
+7. 被呼叫端加 `duration_ms` 計時（如適用）
+8. 跑 `go test ./...` 確認沒炸
 
-建議順序：`internal/logging/` → `internal/bot/` → `internal/slack/` → `internal/github/` → `internal/queue/` → `internal/worker/` → `internal/skill/` → `internal/config/` → `cmd/agentdock/`
+建議順序（依賴少的先改）：`internal/github/` → `internal/slack/` → `internal/skill/` → `internal/config/` → `internal/queue/` → `internal/worker/` → `internal/bot/` → `cmd/agentdock/`
 
 ### 第三波：收尾
-1. 寫 `internal/logging/README.md`
+1. 寫 `internal/logging/GUIDE.md`
 2. 掃描全專案確認無殘留英文 message 或 camelCase key
-3. 更新 `CLAUDE.md` 的 Lessons Learned 加入 logging 規範
+3. 更新 `CLAUDE.md` 的 Lessons Learned 加入 logging 規範指引
 
 ---
 
@@ -460,11 +487,50 @@ internal/logging/
 
 ---
 
+## 測試策略
+
+### StyledTextHandler 測試（`styled_handler_test.go`）
+
+必須覆蓋以下邊界情況：
+- 有 component + 有 phase → `[Comp][Phase] msg key=val`
+- 有 component + 無 phase → `[Comp] msg key=val`
+- 無 component + 有 phase → `[Phase] msg key=val`
+- 兩者都沒有 → `msg key=val`（向後相容）
+- 有 slog.Group 的情況
+- component/phase 不出現在剩餘 attribute 裡（確認攔截成功）
+- 時間格式為 `HH:MM:SS`
+
+### 遷移測試
+
+每個模組改完後跑 `go test ./...`，確認：
+- 編譯通過（struct 簽名變更沒漏改）
+- 現有測試不 break
+
+---
+
 ## 產出文件
 
-- `internal/logging/README.md`：logging 使用指南
-  - 如何建立 component logger
-  - Phase 對應表（本文件的對應表精簡版）
-  - Attribute 命名規範
+- `internal/logging/GUIDE.md`：logging 開發指南
+  - 如何建立 component logger（struct 注入模式）
+  - Phase 使用方式（逐條帶入）
+  - Component / Phase 對應表（本文件的對應表精簡版）
+  - Attribute 命名規範（snake_case、用 `"error"` 不用 `"err"`）
   - 新增 log 的 checklist
   - Debug log 何時該加的判斷原則
+
+---
+
+## 附錄：Grill Session 決議紀錄
+
+| # | 議題 | 決議 | 理由 |
+|---|------|------|------|
+| 1 | Phase 綁定方式 | 逐條帶，不綁 logger | Phase 在同一函式內會切換，`slog.With()` 疊加不替換 |
+| 2 | Component 注入方式 | struct 注入 `*slog.Logger` | 固定不變的值綁到 logger；靠紀律的方案已被 attribute 不一致證明不可靠 |
+| 3 | 常數命名風格 | 英文名中文值 `PhaseReceive = "接收"` | 與 codebase 全英文 identifier 風格一致 |
+| 4 | 遷移順序 | 每模組原子改動（struct + app.go + 內部 log） | 避免中間狀態編譯不過 |
+| 5 | duration_ms 計算位置 | 被呼叫端內部計算 | 耗時跟 component log 綁在一起，filter component 時自然看到 |
+| 6 | watchdog kill level | 維持 WARN | 設計內的自癒行為，ERROR 留給 result_listener 避免重複 |
+| 7 | logging 文件 | `internal/logging/GUIDE.md` | 內部開發指南，不是 repo README |
+| 8 | Slack 失敗 log 粒度 | 維持細粒度不合併 | 各 error path 有不同 fallback 行為，是不同 code path |
+| 9 | Terminal 時間格式 | 只留 `HH:MM:SS` | 即時 debug 不需日期，跨日看 JSON log 檔名 |
+| 10 | 測試策略 | `styled_handler_test.go` unit test 覆蓋邊界 | Handler 是全域咽喉，壞了所有 log 都壞 |
