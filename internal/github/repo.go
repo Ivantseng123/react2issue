@@ -83,23 +83,28 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 	return localPath, nil
 }
 
-// ListBranches returns remote branch names for a cached repo.
+// ListBranches returns branch names for a cached repo.
+// Works with both bare repos (refs/heads/) and regular clones (refs/remotes/origin/).
 func (rc *RepoCache) ListBranches(repoPath string) ([]string, error) {
-	cmd := exec.Command("git", "-C", repoPath, "branch", "-r", "--format=%(refname:short)")
+	// Use for-each-ref which works consistently on both bare and non-bare repos.
+	cmd := exec.Command("git", "-C", repoPath, "for-each-ref", "--format=%(refname:short)", "refs/heads/", "refs/remotes/origin/")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
 
+	seen := make(map[string]bool)
 	var branches []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.Contains(line, "HEAD") {
 			continue
 		}
-		// Remove "origin/" prefix
 		name := strings.TrimPrefix(line, "origin/")
-		branches = append(branches, name)
+		if !seen[name] {
+			seen[name] = true
+			branches = append(branches, name)
+		}
 	}
 	return branches, nil
 }
