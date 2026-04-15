@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"agentdock/internal/config"
@@ -60,6 +61,10 @@ func buildKoanf(cmd *cobra.Command, configPath string) (*config.Config, *koanf.K
 			if err := kSave.Load(file.Provider(configPath), parser); err != nil {
 				return nil, nil, nil, DeltaInfo{}, fmt.Errorf("load %s: %w", configPath, err)
 			}
+			// Warn about any file-origin keys that don't match the Config schema.
+			// Done after file load and before env overlay so we only flag YAML
+			// typos / leftover v0.x keys, not env-sourced values.
+			warnUnknownKeys(kEff)
 		} else if !os.IsNotExist(err) {
 			return nil, nil, nil, DeltaInfo{}, fmt.Errorf("stat %s: %w", configPath, err)
 		}
@@ -233,4 +238,54 @@ func resolveConfigPath(in string) (string, error) {
 		in = filepath.Join(home, strings.TrimPrefix(in, "~/"))
 	}
 	return filepath.Abs(in)
+}
+
+// validKoanfKeys returns the set of valid dotted koanf paths derived from
+// config.Config yaml tags.
+func validKoanfKeys() map[string]bool {
+	out := map[string]bool{}
+	walkYAMLPathsKeyOnly(reflect.TypeOf(config.Config{}), "", out)
+	return out
+}
+
+func walkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool) {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := strings.Split(f.Tag.Get("yaml"), ",")[0]
+		if tag == "" || tag == "-" {
+			continue
+		}
+		path := tag
+		if prefix != "" {
+			path = prefix + "." + tag
+		}
+		out[path] = true
+		ft := f.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		if ft.Kind() == reflect.Struct {
+			walkYAMLPathsKeyOnly(ft, path, out)
+		}
+	}
+}
+
+// warnUnknownKeys logs warnings for any koanf key not in the valid Config
+// schema. Map-valued top-level keys (e.g. channels, agents, channel_priority)
+// are allowed to have arbitrary sub-keys — the top-level short-circuit handles
+// that case.
+func warnUnknownKeys(k *koanf.Koanf) {
+	valid := validKoanfKeys()
+	for _, key := range k.Keys() {
+		topLevel := strings.SplitN(key, ".", 2)[0]
+		if !valid[topLevel] && !valid[key] {
+			slog.Warn("unknown config key", "key", key)
+		}
+	}
 }

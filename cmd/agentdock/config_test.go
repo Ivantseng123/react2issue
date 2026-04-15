@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,6 +274,37 @@ func TestSaveConfig_Chmod0600(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0600 {
 		t.Errorf("mode = %o, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestBuildKoanf_WarnsOnUnknownKey(t *testing.T) {
+	clearEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.yaml")
+	yamlBody := `
+workers:
+  count: 3
+reactions:
+  approved: thumbsup
+`
+	if err := os.WriteFile(path, []byte(yamlBody), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{Use: "test"}
+	addPersistentFlags(cmd)
+
+	var logBuf strings.Builder
+	oldHandler := slog.Default().Handler()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(slog.New(oldHandler))
+
+	_, _, _, _, err := buildKoanf(cmd, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logBuf.String(), "unknown config key") || !strings.Contains(logBuf.String(), "reactions") {
+		t.Errorf("expected warn about unknown key 'reactions', got log:\n%s", logBuf.String())
 	}
 }
 
