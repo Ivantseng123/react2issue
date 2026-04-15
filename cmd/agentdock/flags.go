@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -60,7 +63,10 @@ var flagToKey = map[string]string{
 func addPersistentFlags(cmd *cobra.Command) {
 	pf := cmd.PersistentFlags()
 
-	pf.String("log-level", "", "log level (debug|info|warn|error)")
+	{
+		var v logLevelFlag
+		pf.Var(&v, "log-level", "log level: debug|info|warn|error")
+	}
 
 	// Redis.
 	pf.String("redis-addr", "", "Redis address (host:port)")
@@ -79,7 +85,10 @@ func addPersistentFlags(cmd *cobra.Command) {
 
 	// Queue.
 	pf.Int("queue-capacity", 0, "in-memory queue capacity")
-	pf.String("queue-transport", "", "queue transport (inmem|redis)")
+	{
+		var v queueTransportFlag
+		pf.Var(&v, "queue-transport", "queue transport: redis|inmem")
+	}
 	pf.Duration("queue-job-timeout", 0, "max wall-clock time per job")
 	pf.Duration("queue-agent-idle-timeout", 0, "max idle time for agent without output")
 	pf.Duration("queue-prepare-timeout", 0, "max time for prepare phase (clone/checkout)")
@@ -87,7 +96,10 @@ func addPersistentFlags(cmd *cobra.Command) {
 
 	// Logging.
 	pf.String("logging-dir", "", "directory for rotated log files")
-	pf.String("logging-level", "", "file log level")
+	{
+		var v logLevelFlag
+		pf.Var(&v, "logging-level", "file log level: debug|info|warn|error")
+	}
 	pf.Int("logging-retention-days", 0, "days to retain rotated log files")
 	pf.String("logging-agent-output-dir", "", "directory for raw agent stdout/stderr")
 
@@ -158,7 +170,37 @@ func buildFlagOverrideMap(cmd *cobra.Command) map[string]any {
 			if v, err := cmd.Flags().GetStringSlice(f.Name); err == nil {
 				out[key] = v
 			}
+		case "queue-transport", "log-level":
+			out[key] = f.Value.String()
 		}
 	})
 	return out
+}
+
+// queueTransportFlag is a pflag.Value that accepts only "redis" or "inmem".
+type queueTransportFlag string
+
+func (q *queueTransportFlag) String() string { return string(*q) }
+func (q *queueTransportFlag) Type() string   { return "queue-transport" }
+func (q *queueTransportFlag) Set(v string) error {
+	switch v {
+	case "redis", "inmem":
+		*q = queueTransportFlag(v)
+		return nil
+	}
+	return fmt.Errorf("must be one of [redis inmem]")
+}
+
+// logLevelFlag is a pflag.Value that accepts only debug/info/warn/error.
+type logLevelFlag string
+
+func (l *logLevelFlag) String() string { return string(*l) }
+func (l *logLevelFlag) Type() string   { return "log-level" }
+func (l *logLevelFlag) Set(v string) error {
+	switch strings.ToLower(v) {
+	case "debug", "info", "warn", "warning", "error":
+		*l = logLevelFlag(v)
+		return nil
+	}
+	return fmt.Errorf("must be one of [debug info warn error]")
 }
