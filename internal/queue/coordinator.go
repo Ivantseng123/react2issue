@@ -1,23 +1,41 @@
 package queue
 
-import "context"
+import (
+	"context"
+	"strconv"
+)
 
 // Coordinator implements JobQueue by routing Submit calls to the appropriate
 // queue based on Job.TaskType. All other methods delegate to a fallback queue.
 // This is the Decorator pattern -- callers continue using the JobQueue interface
 // unchanged.
 type Coordinator struct {
-	queues   map[string]JobQueue
-	fallback JobQueue
+	queues          map[string]JobQueue
+	fallback        JobQueue
+	onSubmit        func(priority string) // optional metric hook
+}
+
+// CoordinatorOption is a functional option for Coordinator.
+type CoordinatorOption func(*Coordinator)
+
+// WithCoordinatorSubmitHook sets a callback invoked on every Submit with the
+// job priority as a string. Use this to record metrics without creating an
+// import cycle.
+func WithCoordinatorSubmitHook(fn func(priority string)) CoordinatorOption {
+	return func(c *Coordinator) { c.onSubmit = fn }
 }
 
 // NewCoordinator creates a Coordinator that routes to task-type-specific queues
 // and falls back to the given queue for unmatched or empty task types.
-func NewCoordinator(fallback JobQueue) *Coordinator {
-	return &Coordinator{
+func NewCoordinator(fallback JobQueue, opts ...CoordinatorOption) *Coordinator {
+	c := &Coordinator{
 		queues:   make(map[string]JobQueue),
 		fallback: fallback,
 	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // RegisterQueue associates a task type with a specific JobQueue.
@@ -28,6 +46,9 @@ func (c *Coordinator) RegisterQueue(taskType string, q JobQueue) {
 // Submit routes the job to the queue registered for job.TaskType, or to
 // the fallback queue if no match is found.
 func (c *Coordinator) Submit(ctx context.Context, job *Job) error {
+	if c.onSubmit != nil {
+		c.onSubmit(strconv.Itoa(job.Priority))
+	}
 	if job.TaskType != "" {
 		if q, ok := c.queues[job.TaskType]; ok {
 			return q.Submit(ctx, job)

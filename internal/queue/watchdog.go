@@ -22,14 +22,25 @@ type Watchdog struct {
 	prepareTimeout time.Duration
 	interval       time.Duration
 	logger         *slog.Logger
+	onKill         func(reason string) // optional metric hook
 }
 
-func NewWatchdog(store JobStore, commands CommandBus, results ResultBus, cfg WatchdogConfig, logger *slog.Logger) *Watchdog {
+// WatchdogOption is a functional option for Watchdog.
+type WatchdogOption func(*Watchdog)
+
+// WithWatchdogKillHook sets a callback invoked on every killAndPublish call
+// with the kill reason. Use this to record metrics without creating an import
+// cycle.
+func WithWatchdogKillHook(fn func(reason string)) WatchdogOption {
+	return func(w *Watchdog) { w.onKill = fn }
+}
+
+func NewWatchdog(store JobStore, commands CommandBus, results ResultBus, cfg WatchdogConfig, logger *slog.Logger, opts ...WatchdogOption) *Watchdog {
 	interval := cfg.JobTimeout / 3
 	if interval < 30*time.Second {
 		interval = 30 * time.Second
 	}
-	return &Watchdog{
+	w := &Watchdog{
 		store:          store,
 		commands:       commands,
 		results:        results,
@@ -39,6 +50,10 @@ func NewWatchdog(store JobStore, commands CommandBus, results ResultBus, cfg Wat
 		interval:       interval,
 		logger:         logger,
 	}
+	for _, o := range opts {
+		o(w)
+	}
+	return w
 }
 
 func (w *Watchdog) Start(stop <-chan struct{}) {
@@ -100,6 +115,9 @@ func (w *Watchdog) check() {
 }
 
 func (w *Watchdog) killAndPublish(state *JobState, reason string) {
+	if w.onKill != nil {
+		w.onKill(reason)
+	}
 	w.logger.Warn("強制終止逾時工作", "phase", "失敗",
 		"job_id", state.Job.ID, "status", state.Status, "reason", reason)
 

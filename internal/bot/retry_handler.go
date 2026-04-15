@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"agentdock/internal/logging"
+	"agentdock/internal/metrics"
 	"agentdock/internal/queue"
 )
 
@@ -71,6 +72,7 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 		h.slack.PostMessage(channelID, ":x: 重試失敗: "+err.Error(), original.ThreadTS)
 		return
 	}
+	metrics.IssueRetryTotal.WithLabelValues("submitted").Inc()
 
 	// Post new status message with cancel button.
 	statusMsgTS, err := h.slack.PostMessageWithButton(original.ChannelID,
