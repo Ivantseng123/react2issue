@@ -204,11 +204,12 @@ func runApp(cfg *config.Config) error {
 	go statusListener.Listen(context.Background())
 
 	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
+	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
 	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, bundle.Results, queue.WatchdogConfig{
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,
 		PrepareTimeout: cfg.Queue.PrepareTimeout,
-	})
+	}, queueLogger)
 	go watchdog.Start(make(chan struct{})) // runs until process exits
 
 	if cfg.Server.Port > 0 {

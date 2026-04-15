@@ -21,9 +21,10 @@ type Watchdog struct {
 	idleTimeout    time.Duration
 	prepareTimeout time.Duration
 	interval       time.Duration
+	logger         *slog.Logger
 }
 
-func NewWatchdog(store JobStore, commands CommandBus, results ResultBus, cfg WatchdogConfig) *Watchdog {
+func NewWatchdog(store JobStore, commands CommandBus, results ResultBus, cfg WatchdogConfig, logger *slog.Logger) *Watchdog {
 	interval := cfg.JobTimeout / 3
 	if interval < 30*time.Second {
 		interval = 30 * time.Second
@@ -36,6 +37,7 @@ func NewWatchdog(store JobStore, commands CommandBus, results ResultBus, cfg Wat
 		idleTimeout:    cfg.IdleTimeout,
 		prepareTimeout: cfg.PrepareTimeout,
 		interval:       interval,
+		logger:         logger,
 	}
 }
 
@@ -43,7 +45,7 @@ func (w *Watchdog) Start(stop <-chan struct{}) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
-	slog.Info("job watchdog started",
+	w.logger.Info("Watchdog 已啟動", "phase", "處理中",
 		"job_timeout", w.jobTimeout,
 		"idle_timeout", w.idleTimeout,
 		"prepare_timeout", w.prepareTimeout,
@@ -55,7 +57,7 @@ func (w *Watchdog) Start(stop <-chan struct{}) {
 		case <-ticker.C:
 			w.check()
 		case <-stop:
-			slog.Info("job watchdog stopped")
+			w.logger.Info("Watchdog 已停止", "phase", "完成")
 			return
 		}
 	}
@@ -64,7 +66,7 @@ func (w *Watchdog) Start(stop <-chan struct{}) {
 func (w *Watchdog) check() {
 	all, err := w.store.ListAll()
 	if err != nil {
-		slog.Warn("watchdog: failed to list jobs", "error", err)
+		w.logger.Warn("Watchdog 列舉工作失敗", "phase", "失敗", "error", err)
 		return
 	}
 
@@ -98,7 +100,7 @@ func (w *Watchdog) check() {
 }
 
 func (w *Watchdog) killAndPublish(state *JobState, reason string) {
-	slog.Warn("watchdog: killing stuck job",
+	w.logger.Warn("強制終止逾時工作", "phase", "失敗",
 		"job_id", state.Job.ID, "status", state.Status, "reason", reason)
 
 	if w.commands != nil {
