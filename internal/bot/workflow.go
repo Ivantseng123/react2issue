@@ -465,7 +465,7 @@ func (w *Workflow) loadSkills(ctx context.Context) map[string]*queue.SkillPayloa
 	}
 	skills, err := w.skillProvider.LoadAll(ctx)
 	if err != nil {
-		slog.Warn("載入技能失敗", "phase", "失敗", "error", err)
+		slog.Warn("載入 skill 失敗", "phase", "失敗", "error", err)
 		return nil
 	}
 	return skills

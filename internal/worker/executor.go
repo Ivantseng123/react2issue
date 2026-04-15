@@ -63,7 +63,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 
 	// Mount skills to all agent skill directories.
 	if len(job.Skills) > 0 {
-		logger.Info("掛載技能中", "phase", "處理中", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
+		logger.Info("掛載 skill 中", "phase", "處理中", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
 		for _, sd := range deps.skillDirs {
 			if err := mountSkills(repoPath, job.Skills, sd); err != nil {
 				return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err))
@@ -71,7 +71,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 			defer cleanupSkills(repoPath, job.Skills, sd)
 		}
 	} else {
-		logger.Warn("工作中無技能 payload", "phase", "處理中")
+		logger.Warn("工作中無 skill payload", "phase", "處理中")
 	}
 
 	// Execute agent.

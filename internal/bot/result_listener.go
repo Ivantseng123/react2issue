@@ -59,7 +59,7 @@ func NewResultListener(
 func (r *ResultListener) Listen(ctx context.Context) {
 	ch, err := r.results.Subscribe(ctx)
 	if err != nil {
-		r.logger.Error("訂閱結果匯流排失敗", "phase", "失敗", "error", err)
+		r.logger.Error("訂閱 result bus 失敗", "phase", "失敗", "error", err)
 		return
 	}
 

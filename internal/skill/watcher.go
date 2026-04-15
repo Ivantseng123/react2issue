@@ -67,9 +67,9 @@ func (l *Loader) watchLoop(ctx context.Context, watcher *fsnotify.Watcher, confi
 			}
 			debounceTimer = time.AfterFunc(debounceDuration, func() {
 				if err := l.ReloadConfig(configPath); err != nil {
-					l.logger.Error("技能設定重新載入失敗", "phase", "失敗", "path", configPath, "error", err)
+					l.logger.Error("Skill 設定重新載入失敗", "phase", "失敗", "path", configPath, "error", err)
 				} else {
-					l.logger.Info("技能設定已重新載入", "phase", "完成", "path", configPath)
+					l.logger.Info("Skill 設定已重新載入", "phase", "完成", "path", configPath)
 				}
 			})
 
@@ -77,7 +77,7 @@ func (l *Loader) watchLoop(ctx context.Context, watcher *fsnotify.Watcher, confi
 			if !ok {
 				return
 			}
-			l.logger.Error("技能監視器錯誤", "phase", "失敗", "error", err)
+			l.logger.Error("Skill 監視器錯誤", "phase", "失敗", "error", err)
 		}
 	}
 }

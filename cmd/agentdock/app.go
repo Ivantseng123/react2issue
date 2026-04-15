@@ -95,7 +95,7 @@ func runApp(cfg *config.Config) error {
 	if cfg.SkillsConfig != "" {
 		stopWatcher, err := skillLoader.StartWatcher(cfg.SkillsConfig)
 		if err != nil {
-			appLogger.Warn("技能設定監視器啟動失敗", "phase", "失敗", "error", err)
+			appLogger.Warn("Skill 設定監視器啟動失敗", "phase", "失敗", "error", err)
 		} else {
 			defer stopWatcher()
 		}
@@ -127,10 +127,10 @@ func runApp(cfg *config.Config) error {
 			return fmt.Errorf("failed to connect to Redis: %w", err)
 		}
 		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
-		appLogger.Info("使用 Redis 傳輸層", "phase", "處理中", "addr", cfg.Redis.Addr)
+		appLogger.Info("使用 Redis transport", "phase", "處理中", "addr", cfg.Redis.Addr)
 	default:
 		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
-		appLogger.Info("使用記憶體內傳輸層", "phase", "處理中")
+		appLogger.Info("使用 in-memory transport", "phase", "處理中")
 	}
 
 	// Collect skill dirs from all agents in provider chain.

@@ -20,7 +20,7 @@ func NewStatusListener(status queue.StatusBus, store queue.JobStore, logger *slo
 func (l *StatusListener) Listen(ctx context.Context) {
 	ch, err := l.status.Subscribe(ctx)
 	if err != nil {
-		l.logger.Error("訂閱狀態匯流排失敗", "phase", "失敗", "error", err)
+		l.logger.Error("訂閱 status bus 失敗", "phase", "失敗", "error", err)
 		return
 	}
 	for {

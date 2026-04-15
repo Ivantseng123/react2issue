@@ -131,7 +131,7 @@ func (l *Loader) LoadAll(ctx context.Context) (map[string]*queue.SkillPayload, e
 			}
 
 		default:
-			l.logger.Warn("未知技能類型", "phase", "失敗", "type", sc.Type)
+			l.logger.Warn("未知 skill 類型", "phase", "失敗", "type", sc.Type)
 		}
 	}
 
@@ -196,7 +196,7 @@ func (l *Loader) loadLocal(sc *SkillConfig, result map[string]*queue.SkillPayloa
 
 	sf, ok := l.bakedIn[skillName]
 	if !ok {
-		l.logger.Warn("本地技能未找到", "phase", "失敗", "name", skillName)
+		l.logger.Warn("本地 skill 未找到", "phase", "失敗", "name", skillName)
 		return nil
 	}
 	return addSkill(result, sf.Name, "local:"+sc.Path, sf, sources)
@@ -254,7 +254,7 @@ func (l *Loader) loadRemote(ctx context.Context, sc *SkillConfig, cacheKey strin
 	})
 
 	if fetchErr != nil {
-		l.logger.Warn("技能下載失敗，記錄負向快取", "phase", "失敗", "pkg", cacheKey, "error", fetchErr)
+		l.logger.Warn("Skill 下載失敗，記錄負向快取", "phase", "失敗", "pkg", cacheKey, "error", fetchErr)
 		l.setCacheEntry(cacheKey, &cacheEntry{
 			status:    cacheFailed,
 			reason:    fetchErr.Error(),
@@ -268,7 +268,7 @@ func (l *Loader) loadRemote(ctx context.Context, sc *SkillConfig, cacheKey strin
 
 	// Validate each skill's files.
 	if valErr := l.validateSkillsBatch(sfr.skills); valErr != nil {
-		l.logger.Warn("技能驗證失敗，記錄負向快取", "phase", "失敗", "pkg", cacheKey, "error", valErr)
+		l.logger.Warn("Skill 驗證失敗，記錄負向快取", "phase", "失敗", "pkg", cacheKey, "error", valErr)
 		l.setCacheEntry(cacheKey, &cacheEntry{
 			status:    cacheInvalid,
 			reason:    valErr.Error(),
@@ -329,7 +329,7 @@ func loadBakedInSkills(dir string, logger *slog.Logger) map[string]*SkillFiles {
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		logger.Warn("無法讀取內建技能目錄", "phase", "失敗", "dir", dir, "error", err)
+		logger.Warn("無法讀取內建 skill 目錄", "phase", "失敗", "dir", dir, "error", err)
 		return result
 	}
 
@@ -340,7 +340,7 @@ func loadBakedInSkills(dir string, logger *slog.Logger) map[string]*SkillFiles {
 		skillDir := filepath.Join(dir, entry.Name())
 		sf, err := loadSingleBakedIn(skillDir)
 		if err != nil {
-			logger.Warn("跳過內建技能", "phase", "失敗", "dir", skillDir, "error", err)
+			logger.Warn("跳過內建 skill", "phase", "失敗", "dir", skillDir, "error", err)
 			continue
 		}
 		result[sf.Name] = sf
