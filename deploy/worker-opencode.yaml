@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentdock-worker-opencode
+  namespace: ai-tools
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agentdock-worker-opencode
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: agentdock-worker-opencode
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/ivantseng123/agentdock:0.2.7
+          args: ["worker"]
+          env:
+            - name: REDIS_ADDR
+              value: "redis-master.softleader-system:6379"
+            - name: PROVIDERS
+              value: "opencode"
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: agentdock-opencode
+                  key: GITHUB_TOKEN
+            - name: OPENCODE_CONFIG_CONTENT
+              value: |
+                {
+                  "$schema": "https://opencode.ai/config.json",
+                  "model": "opencode/minimax-m2.5-free"
+                }
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: repo-cache
+              mountPath: /data/repos
+      volumes:
+        - name: repo-cache
+          emptyDir:
+            sizeLimit: 10Gi
+      restartPolicy: Always
+  revisionHistoryLimit: 3

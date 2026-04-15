@@ -170,7 +170,7 @@ func loadAndStash(cmd *cobra.Command, configPath string, scope PreflightScope) e
 		return fmt.Errorf("preflight: %w", err)
 	}
 	if _, err := saveConfig(kSave, resolved, prompted, delta); err != nil {
-		slog.Warn("config save failed", "path", resolved, "error", err)
+		slog.Warn("設定儲存失敗", "phase", "失敗", "path", resolved, "error", err)
 	}
 
 	ctx := cmd.Context()
@@ -296,7 +296,7 @@ func warnUnknownKeys(k *koanf.Koanf) {
 			continue
 		}
 		if !valid[key] {
-			slog.Warn("unknown config key", "key", key)
+			slog.Warn("未知設定鍵", "phase", "失敗", "key", key)
 		}
 	}
 }
