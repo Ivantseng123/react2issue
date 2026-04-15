@@ -4,7 +4,7 @@ docs/
 !agents/skills/**/*.md
 config.yaml
 config.local.yaml
-bot
+agentdock
 .idea/
 .vscode/
 deploy/overlays/*/

@@ -2,8 +2,8 @@
 # does NOT compile Go. For local Go builds use `go build` or `./run.sh`.
 #
 # NOTE: direct `docker build -f Dockerfile.release .` from repo root will fail
-# because `.dockerignore` excludes `bot`. Use goreleaser, which stages its own
-# build context under `dist/`.
+# because `.dockerignore` excludes `agentdock`. Use goreleaser, which stages its
+# own build context under `dist/`.
 FROM node:22-alpine
 
 RUN apk add --no-cache git ca-certificates curl
@@ -33,8 +33,8 @@ COPY config.example.yaml /config.yaml
 
 # Binary last — invalidates only this layer per release.
 # COPY preserves the 0755 mode Go's linker writes; no chmod needed.
-COPY bot /bot
+COPY agentdock /agentdock
 
 USER node
-ENTRYPOINT ["/bot"]
+ENTRYPOINT ["/agentdock"]
 CMD ["-config", "/config.yaml"]

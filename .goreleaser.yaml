@@ -7,9 +7,9 @@ project_name: agentdock
 # add `gomod: { proxy: true }` back for reproducible builds.
 
 builds:
-  - id: bot
-    main: ./cmd/bot
-    binary: bot
+  - id: agentdock
+    main: ./cmd/agentdock
+    binary: agentdock
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
