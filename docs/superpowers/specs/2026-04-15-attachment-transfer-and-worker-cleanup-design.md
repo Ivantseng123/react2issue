@@ -18,7 +18,7 @@ Current state: App downloads files to `/tmp/triage-meta-*`, writes local paths i
 ## Scope
 
 ### In scope
-- Store compressed file bytes in Redis alongside metadata
+- Store raw file bytes in Redis alongside metadata (no compression — images are already compressed, text files too small to matter)
 - Worker downloads bytes from Redis, writes to local temp dir
 - Worker appends attachment section to prompt (instead of App)
 - Per-file size limit (10 MB) and per-job limit (30 MB)
@@ -42,16 +42,36 @@ App: Slack → download → /tmp/ → prompt has /tmp paths → Redis {filename,
 Worker: Resolve() → {filename, ""} → no-op loop → agent sees dead paths
 
 AFTER:
-App: Slack → download → gzip each file → Redis {filename, mimetype, compressed bytes}
-Worker: Resolve() → gunzip → write to local temp dir → append paths to prompt
+App: Slack → download → read bytes → Redis {filename, mimetype, raw bytes}
+Worker: Resolve() → write to local temp dir → append paths to prompt
 ```
+
+### Repo isolation: bare cache + worktree
+
+Multiple concurrent jobs may target the same repo. A shared working copy would cause race conditions (one job deletes the repo while another is using it). Solution: bare repo cache + per-job worktrees.
+
+```
+/cache/
+  bar.git/                ← bare repo (git objects only, no working files)
+                             cloned once, then only fetch. Deleted on shutdown/startup.
+
+/tmp/
+  triage-repo-<jobA>/     ← worktree for job A (independent working directory)
+  triage-repo-<jobB>/     ← worktree for job B (independent working directory)
+```
+
+- `git clone --bare` creates the cache (one-time cost)
+- `git worktree add` creates per-job working directories (fast, ~hundreds of ms)
+- Agent sees a normal repo directory — all files, git commands, skill mounting work identically
+- Job completion deletes only its own worktree; other jobs unaffected
+- Bare cache deleted only on shutdown / startup purge
 
 ### Worker lifecycle
 
 ```
-Startup:  PurgeStale() → wipe leftover cache dir from previous crash
-Job done: Remove(repoRef) → delete this job's repo clone + temp attachments
-Shutdown: CleanAll() → wipe entire cache dir (SIGTERM/SIGINT handler)
+Startup:  PurgeStale() → wipe leftover cache dir + stale worktrees
+Job done: RemoveWorktree(path) → delete this job's worktree only
+Shutdown: CleanAll() → wipe entire cache dir + all worktrees (SIGTERM/SIGINT handler)
 Crash:    next startup's PurgeStale() catches it
 ```
 
@@ -59,16 +79,17 @@ Crash:    next startup's PurgeStale() catches it
 
 ### `queue/job.go`
 
-`AttachmentReady` gains two fields:
+`AttachmentReady` replaces `URL` with `Data` and `MimeType`:
 
 ```go
 type AttachmentReady struct {
     Filename string `json:"filename"`
-    URL      string `json:"url"`       // kept for backward compat, unused
-    Data     []byte `json:"data"`      // gzip compressed file bytes
+    Data     []byte `json:"data"`      // raw file bytes (base64-encoded in JSON)
     MimeType string `json:"mime_type"` // "image", "text", or "document"
 }
 ```
+
+Note: `URL` field removed — it was never populated, no backward compat concern.
 
 New payload type for `Prepare`:
 
@@ -76,7 +97,7 @@ New payload type for `Prepare`:
 type AttachmentPayload struct {
     Filename string
     MimeType string
-    Data     []byte // raw file bytes (pre-compression)
+    Data     []byte // raw file bytes (no compression)
     Size     int64  // original size for limit checking
 }
 ```
@@ -95,14 +116,14 @@ type AttachmentStore interface {
 
 ### `worker/executor.go`
 
-`RepoProvider` gains cleanup methods:
+`RepoProvider` gains worktree and cleanup methods:
 
 ```go
 type RepoProvider interface {
-    Prepare(cloneURL, branch string) (string, error)
-    Remove(repoRef string) error // delete single repo clone
-    CleanAll() error             // delete entire cache dir
-    PurgeStale() error           // startup: wipe leftover state
+    Prepare(cloneURL, branch string) (string, error) // returns worktree path (not bare cache path)
+    RemoveWorktree(worktreePath string) error        // delete a single job's worktree
+    CleanAll() error                                  // delete entire cache dir + all worktrees
+    PurgeStale() error                                // startup: wipe leftover state
 }
 ```
 
@@ -110,11 +131,12 @@ type RepoProvider interface {
 
 ### Redis attachment store (`queue/redis_attachments.go`)
 
-**Prepare**: receives `[]AttachmentPayload`, gzip-compresses each `Data` field, marshals to JSON (bytes become base64 in JSON encoding), stores with 30-min TTL. Enforces limits before storing:
-- Single file > 10 MB (pre-compression): skip, log warning
-- Total job > 30 MB (pre-compression): skip remaining files, log warning
+**Prepare**: receives `[]AttachmentPayload`, marshals to JSON ([]byte fields become base64 in JSON encoding — adds ~33% size overhead), stores with 30-min TTL. No compression applied (images already compressed, text files too small to benefit). Enforces limits before storing:
+- Single file > 10 MB: skip, log warning
+- Total job > 30 MB: skip remaining files, log warning
+- Note: 30 MB raw → ~40 MB in Redis after base64. Acceptable for expected concurrency.
 
-**Resolve**: unchanged polling pattern. Returns `[]AttachmentReady` now containing `Data` (compressed bytes) and `MimeType`.
+**Resolve**: unchanged polling pattern. Returns `[]AttachmentReady` now containing `Data` (raw bytes) and `MimeType`.
 
 **Cleanup**: unchanged (`DEL` key).
 
@@ -130,6 +152,7 @@ Changes to `runTriage`:
 2. **New**: Read each downloaded file into `[]byte`, build `[]AttachmentPayload`
 3. `BuildPrompt` — **remove attachment section** (worker handles this now)
 4. `Prepare(ctx, jobID, payloads)` — now sends actual file bytes
+5. **Error handling**: if `Prepare` fails (Redis down, OOM, timeout), App must proactively fail the job (update status + publish failed result) so Worker doesn't poll for 3 minutes waiting for data that will never arrive
 
 `defer os.RemoveAll(tempDir)` stays — app cleans its own temp dir after pushing to Redis.
 
@@ -153,24 +176,25 @@ This generates the same format as before:
 Replace the no-op attachment loop with:
 
 1. Create temp dir: `/tmp/triage-attach-<jobID>/`
-2. For each `AttachmentReady`: gunzip `Data` → write to `<temp_dir>/<filename>`
-3. Build `[]AttachmentInfo` from written files
-4. Call `AppendAttachmentSection(job.Prompt, attachInfos)` to get final prompt
-5. `defer os.RemoveAll(tempDir)` for the attachment temp dir
+2. For each `AttachmentReady`: write `Data` to `<temp_dir>/<filename>` (no decompression needed — data is raw bytes)
+3. **Filename dedup**: if a filename already exists in temp dir, append suffix (`screenshot.png` → `screenshot_2.png`). Slack threads may have multiple files with the same name from different users.
+4. Build `[]AttachmentInfo` from written files
+5. Call `AppendAttachmentSection(job.Prompt, attachInfos)` to get final prompt
+6. `defer os.RemoveAll(tempDir)` for the attachment temp dir
 
 ### Worker pool (`worker/pool.go`)
 
 **Job completion** — in `executeWithTracking`, after publishing result:
 
 ```go
-// Clean up repo clone for this job.
-// Use job.CloneURL — same key passed to Prepare/EnsureRepo/dirName.
-if err := p.cfg.RepoCache.Remove(job.CloneURL); err != nil {
-    logger.Warn("repo cleanup failed", "error", err)
+// Clean up this job's worktree (not the bare cache).
+// repoPath is returned by Prepare() and scoped to this job.
+if err := p.cfg.RepoCache.RemoveWorktree(repoPath); err != nil {
+    logger.Warn("worktree cleanup failed", "error", err)
 }
 ```
 
-This replaces the current post-kill cleanup that only runs `git checkout .` / `git clean -fd` on failures. Now ALL jobs (success and failure) get full repo removal.
+This replaces the current post-kill cleanup that only runs `git checkout .` / `git clean -fd` on failures. Now ALL jobs (success and failure) get worktree removal. The bare cache persists for reuse by future jobs.
 
 **Shutdown** — in `workerHeartbeat`'s `ctx.Done()` branch, after unregistering workers:
 
@@ -182,18 +206,35 @@ if err := p.cfg.RepoCache.CleanAll(); err != nil {
 
 ### RepoCache (`github/repo.go`)
 
-Three new methods:
+**Core change**: `EnsureRepo` switches from full clone to `git clone --bare`. New `Prepare` adapter creates per-job worktrees via `git worktree add`.
+
+Modified methods:
 
 ```go
-// Remove deletes a single repo's clone directory and clears its cache entry.
-func (rc *RepoCache) Remove(repoRef string) error {
-    rc.mu.Lock()
-    defer rc.mu.Unlock()
-    delete(rc.lastPull, repoRef)
-    return os.RemoveAll(filepath.Join(rc.dir, rc.dirName(repoRef)))
+// EnsureRepo clones a bare repo (or fetches if cached).
+// Returns the bare repo path (not a working directory).
+func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
+    // Same logic but uses: git clone --bare <url> <path>
+    // Fetch uses: git -C <bare> fetch --all --prune
+}
+```
+
+New methods:
+
+```go
+// AddWorktree creates an isolated working directory from the bare cache.
+// Returns the worktree path. Caller must call RemoveWorktree when done.
+func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
+    // git -C <bare> worktree add <worktreePath> origin/<branch>
 }
 
-// CleanAll removes the entire cache directory.
+// RemoveWorktree deletes a job's worktree directory.
+func (rc *RepoCache) RemoveWorktree(worktreePath string) error {
+    // git worktree remove <worktreePath> --force
+    // fallback: os.RemoveAll(worktreePath) if git command fails
+}
+
+// CleanAll removes the entire cache directory (bare repos + any leftover worktrees).
 func (rc *RepoCache) CleanAll() error {
     rc.mu.Lock()
     defer rc.mu.Unlock()
@@ -212,18 +253,34 @@ func (rc *RepoCache) PurgeStale() error {
 }
 ```
 
+**repoCacheAdapter** (`cmd/agentdock/adapters.go`):
+
+```go
+func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
+    // 1. EnsureRepo(cloneURL) → bare cache path
+    // 2. worktreePath := /tmp/triage-repo-<uuid>/
+    // 3. AddWorktree(barePath, branch, worktreePath)
+    // 4. return worktreePath
+}
+
+func (a *repoCacheAdapter) RemoveWorktree(path string) error {
+    return a.cache.RemoveWorktree(path)
+}
+```
+
 ### Worker startup (`cmd/bot/main.go` or worker init)
 
 Call `RepoCache.PurgeStale()` before `Pool.Start()` in worker mode.
 
 ## Safety Limits
 
-| Limit | Value | Rationale |
-|-------|-------|-----------|
-| Per-file size | 10 MB | Slack typical max; keeps Redis reasonable |
-| Per-job total | 30 MB | ~3 files at max; compressed ~10-15 MB in Redis |
-| Redis TTL | 30 min | Existing value; sufficient for job lifecycle |
-| Gzip level | `gzip.DefaultCompression` | Good balance of speed vs size |
+| Limit | Value | Redis actual | Rationale |
+|-------|-------|-------------|-----------|
+| Per-file size | 10 MB | ~13.3 MB (base64) | Slack typical max; keeps Redis reasonable |
+| Per-job total | 30 MB | ~40 MB (base64) | ~3 files at max; acceptable for expected concurrency |
+| Redis TTL | 30 min | — | Existing value; sufficient for job lifecycle |
+
+No compression applied. JSON encoding of `[]byte` fields uses base64, adding ~33% overhead. This is acceptable — complexity of compression logic not worth the savings for files under 10 MB.
 
 Files exceeding limits are silently skipped with a log warning. The job proceeds with whatever files fit — partial attachment is better than no job.
 
@@ -231,28 +288,29 @@ Files exceeding limits are silently skipped with a log warning. The job proceeds
 
 | Scenario | Mechanism | What gets cleaned |
 |----------|-----------|-------------------|
-| Job completes (success) | `Remove(repoRef)` in `executeWithTracking` | Repo clone dir |
-| Job completes (failure) | Same as success (replaces current `git checkout .` hack) | Repo clone dir |
+| Job completes (success) | `RemoveWorktree(path)` in `executeWithTracking` | Job's worktree dir |
+| Job completes (failure) | Same as success (replaces current `git checkout .` hack) | Job's worktree dir |
 | Attachment temp files | `defer os.RemoveAll(tempDir)` in `executeJob` | Worker-side attachment dir |
 | Redis attachment data | `attachments.Cleanup()` in `ResultListener` (existing) | Redis key |
-| Graceful shutdown | `CleanAll()` in `workerHeartbeat` ctx.Done | Entire cache dir |
+| Graceful shutdown | `CleanAll()` in `workerHeartbeat` ctx.Done | Entire cache dir (bare repos + worktrees) |
 | SIGKILL / OOM / crash | `PurgeStale()` on next startup | Entire cache dir (recreated empty) |
 | App-side temp files | `defer os.RemoveAll(tempDir)` in `runTriage` (existing) | App's download dir |
+| Prepare fails | App proactively fails job (update status + publish result) | Redis key cleaned by ResultListener |
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `queue/job.go` | Add `Data`, `MimeType` to `AttachmentReady`; add `AttachmentPayload` struct |
+| `queue/job.go` | Replace `URL` with `Data` + `MimeType` on `AttachmentReady`; add `AttachmentPayload` struct |
 | `queue/interface.go` | Change `Prepare` signature to accept `[]AttachmentPayload` |
-| `queue/redis_attachments.go` | `Prepare`: gzip + store bytes; `Resolve`: return bytes; add size limit checks |
+| `queue/redis_attachments.go` | `Prepare`: store raw bytes; `Resolve`: return bytes; add size limit checks |
 | `queue/inmem_attachments.go` | Mirror changes for dev/test |
-| `bot/workflow.go` | Read file bytes, build payloads, pass to `Prepare`; remove attachment paths from prompt building |
+| `bot/workflow.go` | Read file bytes, build payloads, pass to `Prepare`; fail job on Prepare error; remove attachment paths from prompt building |
 | `bot/prompt.go` | Remove attachment section from `BuildPrompt`; add `AppendAttachmentSection` for worker use |
-| `worker/executor.go` | Replace no-op loop: gunzip, write files, append to prompt; add `RepoProvider.Remove`/`CleanAll`/`PurgeStale` to interface |
-| `worker/pool.go` | Add `Remove` after job completion; add `CleanAll` on shutdown |
-| `github/repo.go` | Add `Remove`, `CleanAll`, `PurgeStale` methods |
-| `cmd/agentdock/adapters.go` | Add `Remove`, `CleanAll`, `PurgeStale` to `repoCacheAdapter` (delegates to `RepoCache`) |
+| `worker/executor.go` | Replace no-op loop: write files (with dedup), append to prompt; update `RepoProvider` interface with `RemoveWorktree`/`CleanAll`/`PurgeStale` |
+| `worker/pool.go` | Add `RemoveWorktree` after job completion; add `CleanAll` on shutdown |
+| `github/repo.go` | Switch `EnsureRepo` to bare clone; add `AddWorktree`, `RemoveWorktree`, `CleanAll`, `PurgeStale` methods |
+| `cmd/agentdock/adapters.go` | Update `repoCacheAdapter.Prepare` to use bare+worktree; add `RemoveWorktree`, `CleanAll`, `PurgeStale` |
 | `cmd/bot/main.go` | Call `PurgeStale()` on worker startup |
 
 ## Testing
@@ -260,7 +318,10 @@ Files exceeding limits are silently skipped with a log warning. The job proceeds
 - Unit: `redis_attachments_test.go` — Prepare with bytes, Resolve returns bytes, size limit enforcement
 - Unit: `inmem_attachments_test.go` — same for in-memory store
 - Unit: `prompt_test.go` — `AppendAttachmentSection` output format
-- Unit: `repo_test.go` — `Remove`, `CleanAll`, `PurgeStale` filesystem behavior
+- Unit: `repo_test.go` — bare clone, `AddWorktree`, `RemoveWorktree`, `CleanAll`, `PurgeStale` filesystem behavior
+- Unit: `executor_test.go` — filename dedup (`screenshot.png` + `screenshot.png` → `screenshot.png` + `screenshot_2.png`)
 - Integration: full flow — Prepare with payloads on app side, Resolve + write on worker side, verify file content matches
+- Integration: two concurrent jobs same repo — worktrees isolated, one completing doesn't break the other
 - Edge: file exceeds 10 MB limit — skipped with warning, job continues
 - Edge: job exceeds 30 MB total — partial files stored, job continues
+- Edge: Prepare fails after Submit — job is proactively failed, Worker doesn't hang
