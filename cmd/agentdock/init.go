@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"agentdock/internal/config"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,6 +45,9 @@ func init() {
 // (.yaml/.yml → YAML w/ comments; .json → JSON; otherwise → YAML).
 // If interactive, runs prompts for required secrets first.
 func runInit(path string, interactive, force bool) error {
+	if interactive && !term.IsTerminal(int(syscall.Stdin)) {
+		return fmt.Errorf("--interactive requires a terminal (stdin is not a TTY)")
+	}
 	if _, err := os.Stat(path); err == nil && !force {
 		return fmt.Errorf("config already exists at %s; pass --force to overwrite", path)
 	}

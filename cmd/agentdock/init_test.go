@@ -75,6 +75,22 @@ func TestInitNonInteractive_ForceOverwrites(t *testing.T) {
 	}
 }
 
+func TestInitInteractive_RejectsNonTTY(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	err := runInit(path, true, false)
+	if err == nil {
+		t.Fatal("expected error for interactive mode without TTY")
+	}
+	if !strings.Contains(err.Error(), "requires a terminal") {
+		t.Errorf("expected 'requires a terminal' error, got: %v", err)
+	}
+	// File should NOT have been created.
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Error("config file should not exist after TTY rejection")
+	}
+}
+
 func TestAtomicWrite_RemovesStaleTmp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
