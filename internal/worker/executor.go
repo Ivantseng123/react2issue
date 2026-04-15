@@ -57,11 +57,10 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath)
 
-	// Write attachments to local temp dir and append to prompt.
+	// Write attachments into worktree — cleaned up together with RemoveWorktree.
 	prompt := job.Prompt
 	if len(attachments) > 0 {
-		attachDir := filepath.Join(os.TempDir(), fmt.Sprintf("triage-attach-%s", job.ID))
-		defer os.RemoveAll(attachDir)
+		attachDir := filepath.Join(repoPath, ".attachments")
 		attachInfos, err := writeAttachments(attachments, attachDir)
 		if err != nil {
 			logger.Warn("附件寫入失敗，繼續執行", "phase", "處理中", "error", err)
