@@ -1,10 +1,9 @@
 package slack
 
 import (
+	"bytes"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,9 +13,8 @@ import (
 )
 
 type Client struct {
-	api      *slack.Client
-	token    string
-	logger   *slog.Logger
+	api    *slack.Client
+	logger *slog.Logger
 }
 
 // ImageData holds a downloaded image for vision processing.
@@ -41,7 +39,6 @@ const (
 func NewClient(botToken string, logger *slog.Logger) *Client {
 	return &Client{
 		api:    slack.New(botToken),
-		token:  botToken,
 		logger: logger,
 	}
 }
@@ -144,34 +141,11 @@ func (c *Client) downloadBytes(dlURL string) ([]byte, error) {
 	if dlURL == "" {
 		return nil, fmt.Errorf("empty download URL")
 	}
-	// Custom HTTP client that preserves Authorization header across redirects.
-	// slack-go's GetFile uses http.DefaultClient which drops the header on redirect
-	// to a different host (e.g., files.slack.com → workspace.slack.com).
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			req.Header.Set("Authorization", "Bearer "+c.token)
-			return nil
-		},
-	}
-	req, err := http.NewRequest(http.MethodGet, dlURL, nil)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := c.api.GetFile(dlURL, &buf); err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download failed: status %d", resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
+	return buf.Bytes(), nil
 }
 
 func isTextFile(filetype, mimetype string) bool {
@@ -442,7 +416,7 @@ func (c *Client) DownloadAttachments(messages []ThreadRawMessage, tempDir string
 			if dlURL == "" {
 				dlURL = f.URLPrivate
 			}
-			c.logger.Info("下載附件", "phase", "處理中", "name", f.Name, "url_private_download", f.URLPrivateDownload, "url_private", f.URLPrivate, "size", f.Size)
+			c.logger.Debug("下載附件", "phase", "處理中", "name", f.Name, "url_private_download", f.URLPrivateDownload, "url_private", f.URLPrivate, "size", f.Size)
 			data, err := c.downloadBytes(dlURL)
 			if err != nil {
 				c.logger.Warn("附件下載失敗", "phase", "失敗", "name", f.Name, "error", err)
@@ -453,7 +427,7 @@ func (c *Client) DownloadAttachments(messages []ThreadRawMessage, tempDir string
 				})
 				continue
 			}
-			c.logger.Info("附件已下載", "phase", "處理中", "name", f.Name, "expected_size", f.Size, "actual_size", len(data))
+			c.logger.Debug("附件已下載", "phase", "處理中", "name", f.Name, "expected_size", f.Size, "actual_size", len(data))
 
 			path := filepath.Join(tempDir, f.Name)
 			if err := os.WriteFile(path, data, 0644); err != nil {
