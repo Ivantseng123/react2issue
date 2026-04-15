@@ -94,11 +94,14 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	owner, repo := splitRepo(job.Repo)
 
 	logger := slog.With("job_id", result.JobID, "repo", job.Repo, "status", result.Status)
-	if result.RawOutput != "" {
-		logger.Info("agent raw output", "output", result.RawOutput)
-	}
-	if result.Error != "" {
-		logger.Warn("job failed", "error", result.Error)
+	if result.Status == "failed" {
+		truncated := result.RawOutput
+		if len(truncated) > 2000 {
+			truncated = truncated[:2000] + "…(truncated)"
+		}
+		logger.Warn("job failed", "error", result.Error, "raw_output", truncated)
+	} else {
+		logger.Info("job completed", "title", result.Title, "confidence", result.Confidence, "files_found", result.FilesFound)
 	}
 
 	switch {
@@ -138,10 +141,13 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 		workerInfo = fmt.Sprintf(" | worker: %s", workerID)
 	}
 
-	// Extract short error reason for Slack (before first colon detail or 80 chars).
+	// Extract short error reason for Slack (before first colon detail, max 80 chars).
 	errMsg := result.Error
 	if idx := strings.Index(errMsg, ":"); idx > 0 {
 		errMsg = errMsg[:idx]
+	}
+	if len(errMsg) > 80 {
+		errMsg = errMsg[:80] + "…"
 	}
 
 	if job.RetryCount < 1 {

@@ -86,7 +86,11 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	// Parse agent output.
 	parsed, err := bot.ParseAgentOutput(output)
 	if err != nil {
-		logger.Warn("parse failed, dumping raw output", "output", output)
+		truncated := output
+		if len(truncated) > 2000 {
+			truncated = truncated[:2000] + "…(truncated)"
+		}
+		logger.Warn("parse failed, dumping raw output", "output", truncated)
 		return failedResult(job, startedAt, fmt.Errorf("parse failed: %w", err))
 	}
 	logger.Info("parse succeeded", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)

@@ -221,11 +221,13 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 				p.cfg.Queue.Register(ctx, info)
 			}
 		case <-ctx.Done():
-			// Unregister on shutdown.
+			// Best-effort unregister with short timeout; TTL expires in 30s anyway.
+			unregCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			for i := 0; i < p.cfg.WorkerCount; i++ {
 				wID := fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i)
-				p.cfg.Queue.Unregister(context.Background(), wID)
+				p.cfg.Queue.Unregister(unregCtx, wID)
 			}
+			cancel()
 			return
 		}
 	}
