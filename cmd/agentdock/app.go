@@ -62,8 +62,9 @@ func runApp(cfg *config.Config) error {
 	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
+	slackLogger := logging.ComponentLogger(slog.Default(), logging.CompSlack)
 
-	slackClient := slackclient.NewClient(cfg.Slack.BotToken)
+	slackClient := slackclient.NewClient(cfg.Slack.BotToken, slackLogger)
 
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
 	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token, githubLogger)
@@ -190,13 +191,13 @@ func runApp(cfg *config.Config) error {
 
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
-		&slackPosterAdapter{client: slackClient}, issueClient,
+		&slackPosterAdapter{client: slackClient, logger: slackLogger}, issueClient,
 		func(channelID, threadTS string) {
 			handler.ClearThreadDedup(channelID, threadTS)
 		})
 	go resultListener.Listen(context.Background())
 
-	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient})
+	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger})
 
 	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
 	go statusListener.Listen(context.Background())

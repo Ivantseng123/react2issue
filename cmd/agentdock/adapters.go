@@ -41,17 +41,18 @@ func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
 // SlackPoster.PostMessage has no return value, but Client.PostMessage returns error.
 type slackPosterAdapter struct {
 	client *slackclient.Client
+	logger *slog.Logger
 }
 
 func (a *slackPosterAdapter) PostMessage(channelID, text, threadTS string) {
 	if err := a.client.PostMessage(channelID, text, threadTS); err != nil {
-		slog.Warn("failed to post slack message", "channel", channelID, "error", err)
+		a.logger.Warn("發送訊息失敗", "phase", "失敗", "channel_id", channelID, "error", err)
 	}
 }
 
 func (a *slackPosterAdapter) UpdateMessage(channelID, messageTS, text string) {
 	if err := a.client.UpdateMessage(channelID, messageTS, text); err != nil {
-		slog.Warn("failed to update slack message", "channel", channelID, "error", err)
+		a.logger.Warn("更新訊息失敗", "phase", "失敗", "channel_id", channelID, "error", err)
 	}
 }
 
