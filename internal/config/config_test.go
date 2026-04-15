@@ -465,3 +465,45 @@ func TestEnvOverrideMap_ProvidersFiltersEmpty(t *testing.T) {
 		t.Errorf("providers should filter empty tokens, got %v", providers)
 	}
 }
+
+func TestDefaultsMap(t *testing.T) {
+	m := DefaultsMap()
+
+	workers, ok := m["workers"].(map[string]any)
+	if !ok {
+		t.Fatalf("workers should be a map, got %T", m["workers"])
+	}
+	if got := workers["count"]; got != 3 {
+		t.Errorf("workers.count = %v, want 3", got)
+	}
+
+	queue, ok := m["queue"].(map[string]any)
+	if !ok {
+		t.Fatalf("queue should be a map, got %T", m["queue"])
+	}
+	if got := queue["transport"]; got != "inmem" {
+		t.Errorf("queue.transport = %v, want inmem", got)
+	}
+	if got := queue["capacity"]; got != 50 {
+		t.Errorf("queue.capacity = %v, want 50", got)
+	}
+
+	logging, ok := m["logging"].(map[string]any)
+	if !ok {
+		t.Fatalf("logging should be a map, got %T", m["logging"])
+	}
+	if got := logging["dir"]; got != "logs" {
+		t.Errorf("logging.dir = %v, want logs", got)
+	}
+}
+
+func TestDefaultsMap_AgreesWithApplyDefaults(t *testing.T) {
+	var cfg Config
+	applyDefaults(&cfg)
+
+	m := DefaultsMap()
+	workers := m["workers"].(map[string]any)
+	if got := workers["count"]; got != cfg.Workers.Count {
+		t.Errorf("DefaultsMap.workers.count=%v != applyDefaults.Workers.Count=%v", got, cfg.Workers.Count)
+	}
+}

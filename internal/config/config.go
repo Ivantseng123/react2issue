@@ -266,6 +266,24 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
+// DefaultsMap returns a koanf-friendly map[string]any of all default values
+// produced by applyDefaults. Round-trips via YAML to preserve nested struct
+// shape and yaml tags. applyDefaults is the single source of truth; this is
+// just a different representation for the koanf provider chain (D12).
+func DefaultsMap() map[string]any {
+	var cfg Config
+	applyDefaults(&cfg)
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		panic("DefaultsMap marshal: " + err.Error())
+	}
+	out := map[string]any{}
+	if err := yaml.Unmarshal(data, &out); err != nil {
+		panic("DefaultsMap unmarshal: " + err.Error())
+	}
+	return out
+}
+
 // EnvOverrideMap returns a koanf-friendly map[string]any of values currently
 // set in env vars. Maps each known env var to its koanf path. Unset env vars
 // are absent from the result. Used by cmd/agentdock to build the env layer in
