@@ -39,13 +39,13 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 	cloneURL := rc.ResolveURL(repoRef)
 	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
 
-	if _, err := os.Stat(filepath.Join(localPath, ".git")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(localPath, "HEAD")); os.IsNotExist(err) {
 		rc.logger.Info("開始 clone repo", "phase", "處理中", "repo", SanitizeURL(repoRef), "path", localPath)
 		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 			return "", fmt.Errorf("mkdir: %w", err)
 		}
-		// Full clone (not shallow) so we can switch branches
-		cmd := exec.Command("git", "clone", cloneURL, localPath)
+		// Bare clone so multiple worktrees can share the same cache safely
+		cmd := exec.Command("git", "clone", "--bare", cloneURL, localPath)
 		if _, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("git clone failed: %w", err)
 		}
@@ -69,7 +69,7 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 			if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 				return "", fmt.Errorf("mkdir: %w", err)
 			}
-			cmd = exec.Command("git", "clone", cloneURL, localPath)
+			cmd = exec.Command("git", "clone", "--bare", cloneURL, localPath)
 			if _, err := cmd.CombinedOutput(); err != nil {
 				return "", fmt.Errorf("git clone (retry) failed: %w", err)
 			}
@@ -77,11 +77,6 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 			rc.logger.Info("Repo 同步完成", "phase", "完成", "repo", SanitizeURL(repoRef), "duration_ms", time.Since(start).Milliseconds())
 			return localPath, nil
 		}
-	}
-	// Fast-forward current branch to match remote
-	cmd = exec.Command("git", "-C", localPath, "pull", "--ff-only")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		rc.logger.Debug("Git pull fast-forward 失敗（可能在 detached head）", "phase", "處理中", "output", string(out))
 	}
 	rc.lastPull[repoRef] = time.Now()
 	rc.logger.Info("Repo 同步完成", "phase", "完成", "repo", SanitizeURL(repoRef), "duration_ms", time.Since(start).Milliseconds())
@@ -129,6 +124,47 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 	cmd = exec.Command("git", "-C", repoPath, "pull", "--ff-only")
 	cmd.CombinedOutput() // best-effort
 	return nil
+}
+
+// AddWorktree creates an isolated working directory from a bare cache.
+// If branch is empty, checks out the default branch (HEAD).
+func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
+	var cmd *exec.Cmd
+	if branch == "" {
+		cmd = exec.Command("git", "-C", barePath, "worktree", "add", worktreePath, "HEAD")
+	} else {
+		cmd = exec.Command("git", "-C", barePath, "worktree", "add", worktreePath, "origin/"+branch)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git worktree add: %w\n%s", err, out)
+	}
+	return nil
+}
+
+// RemoveWorktree removes a worktree directory.
+func (rc *RepoCache) RemoveWorktree(worktreePath string) error {
+	cmd := exec.Command("git", "worktree", "remove", "--force", worktreePath)
+	if err := cmd.Run(); err != nil {
+		return os.RemoveAll(worktreePath)
+	}
+	return nil
+}
+
+// CleanAll removes the entire cache directory (bare repos + any leftover worktrees).
+func (rc *RepoCache) CleanAll() error {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.lastPull = make(map[string]time.Time)
+	return os.RemoveAll(rc.dir)
+}
+
+// PurgeStale wipes and recreates the cache directory.
+func (rc *RepoCache) PurgeStale() error {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	rc.lastPull = make(map[string]time.Time)
+	os.RemoveAll(rc.dir)
+	return os.MkdirAll(rc.dir, 0755)
 }
 
 func (rc *RepoCache) ResolveURL(repoRef string) string {
