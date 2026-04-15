@@ -93,8 +93,13 @@ func (rc *RepoCache) ListBranches(repoPath string) ([]string, error) {
 		return nil, fmt.Errorf("list branches: %w", err)
 	}
 
+	// Detect default branch from HEAD.
+	var defaultBranch string
+	if headOut, err := exec.Command("git", "-C", repoPath, "symbolic-ref", "--short", "HEAD").Output(); err == nil {
+		defaultBranch = strings.TrimSpace(string(headOut))
+	}
+
 	seen := make(map[string]bool)
-	var primary []string
 	var rest []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
@@ -104,14 +109,15 @@ func (rc *RepoCache) ListBranches(repoPath string) ([]string, error) {
 		name := strings.TrimPrefix(line, "origin/")
 		if !seen[name] {
 			seen[name] = true
-			if name == "main" || name == "master" {
-				primary = append(primary, name)
-			} else {
+			if name != defaultBranch {
 				rest = append(rest, name)
 			}
 		}
 	}
-	return append(primary, rest...), nil
+	if defaultBranch != "" {
+		return append([]string{defaultBranch}, rest...), nil
+	}
+	return rest, nil
 }
 
 // Checkout switches the repo to the specified branch.
