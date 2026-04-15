@@ -84,6 +84,14 @@ docker_manifests:
     image_templates:
       - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
       - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
+  - name_template: 'ghcr.io/ivantseng123/agentdock:{{ .Major }}'
+    image_templates:
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
+  - name_template: 'ghcr.io/ivantseng123/agentdock:latest'
+    image_templates:
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-amd64'
+      - 'ghcr.io/ivantseng123/agentdock:{{ .Version }}-arm64'
 
 release:
   github:
