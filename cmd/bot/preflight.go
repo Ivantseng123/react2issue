@@ -42,6 +42,7 @@ func checkGitHubToken(token string) (string, error) {
 		return "", errors.New("token is empty")
 	}
 
+	httpClient := &http.Client{Timeout: 10 * time.Second}
 	doReq := func(url string) (*http.Response, error) {
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
@@ -49,7 +50,7 @@ func checkGitHubToken(token string) (string, error) {
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Accept", "application/vnd.github+json")
-		return http.DefaultClient.Do(req)
+		return httpClient.Do(req)
 	}
 
 	// Step 1: verify identity.
@@ -61,6 +62,9 @@ func checkGitHubToken(token string) (string, error) {
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		return "", errors.New("invalid or expired token")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub /user returned HTTP %d", resp.StatusCode)
 	}
 
 	var user struct {
@@ -80,6 +84,9 @@ func checkGitHubToken(token string) (string, error) {
 
 	if resp2.StatusCode == http.StatusForbidden || resp2.StatusCode == http.StatusNotFound {
 		return "", fmt.Errorf("token lacks repository access (user: %s)", login)
+	}
+	if resp2.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub /user/repos returned HTTP %d", resp2.StatusCode)
 	}
 
 	return login, nil
