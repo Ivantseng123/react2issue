@@ -30,35 +30,24 @@ var appCmd = &cobra.Command{
 	Use:          "app",
 	Short:        "Run the main Slack bot",
 	SilenceUsage: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runApp(appConfigPath)
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return loadAndStash(cmd, appConfigPath)
 	},
-}
-
-var workerCmd = &cobra.Command{
-	Use:                "worker",
-	Short:              "Run a worker process (Redis mode)",
-	DisableFlagParsing: true, // runWorker parses os.Args[2:] itself
-	Run: func(cmd *cobra.Command, args []string) {
-		runWorker()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runApp(cfgFromCtx(cmd.Context()))
 	},
 }
 
 func init() {
-	appCmd.Flags().StringVarP(&appConfigPath, "config", "c", "config.yaml", "path to config file")
+	appCmd.Flags().StringVarP(&appConfigPath, "config", "c", "", "path to config file (default ~/.config/agentdock/config.yaml)")
 	rootCmd.AddCommand(appCmd)
 	rootCmd.AddCommand(workerCmd)
 	addAppFlags(appCmd)
 }
 
-func runApp(configPath string) error {
+func runApp(cfg *config.Config) error {
 	// Use INFO until config is loaded.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
-
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
 
 	// Re-init logger with configured level.
 	stderrHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})

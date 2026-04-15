@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -109,6 +110,56 @@ func mergeBuiltinAgents(cfg *config.Config) {
 			cfg.Agents[name] = agent
 		}
 	}
+}
+
+// ctxKey is a private type for cmd.Context values so tests and other packages
+// can't accidentally collide.
+type ctxKey int
+
+const (
+	ctxKeyConfig ctxKey = iota
+	ctxKeyKSave
+	ctxKeyDelta
+)
+
+func cfgFromCtx(ctx context.Context) *config.Config {
+	return ctx.Value(ctxKeyConfig).(*config.Config)
+}
+
+func kSaveFromCtx(ctx context.Context) *koanf.Koanf {
+	return ctx.Value(ctxKeyKSave).(*koanf.Koanf)
+}
+
+func deltaFromCtx(ctx context.Context) DeltaInfo {
+	return ctx.Value(ctxKeyDelta).(DeltaInfo)
+}
+
+// loadAndStash resolves the config path, builds the koanf layer chain, and
+// stashes the resulting *config.Config, kSave, and DeltaInfo into
+// cmd.Context. Intended to be wired as PersistentPreRunE on subcommands that
+// need the loaded config.
+//
+// If the caller explicitly passed a config path that doesn't exist, it
+// returns a guided error pointing at `agentdock init`. Empty path falls back
+// to the default location silently (fine for first-run).
+func loadAndStash(cmd *cobra.Command, configPath string) error {
+	resolved, err := resolveConfigPath(configPath)
+	if err != nil {
+		return err
+	}
+	cfg, _, kSave, delta, err := buildKoanf(cmd, resolved)
+	if err != nil {
+		return err
+	}
+	if configPath != "" && !delta.FileExisted {
+		return fmt.Errorf("config file not found: %s; run 'agentdock init -c %s' first", resolved, resolved)
+	}
+	ctx := cmd.Context()
+	ctx = context.WithValue(ctx, ctxKeyConfig, cfg)
+	ctx = context.WithValue(ctx, ctxKeyKSave, kSave)
+	ctx = context.WithValue(ctx, ctxKeyDelta, delta)
+	cmd.SetContext(ctx)
+	return nil
 }
 
 // resolveConfigPath expands ~/ and returns an absolute path. Empty input
