@@ -94,7 +94,8 @@ func (rc *RepoCache) ListBranches(repoPath string) ([]string, error) {
 	}
 
 	seen := make(map[string]bool)
-	var branches []string
+	var primary []string
+	var rest []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.Contains(line, "HEAD") {
@@ -103,10 +104,14 @@ func (rc *RepoCache) ListBranches(repoPath string) ([]string, error) {
 		name := strings.TrimPrefix(line, "origin/")
 		if !seen[name] {
 			seen[name] = true
-			branches = append(branches, name)
+			if name == "main" || name == "master" {
+				primary = append(primary, name)
+			} else {
+				rest = append(rest, name)
+			}
 		}
 	}
-	return branches, nil
+	return append(primary, rest...), nil
 }
 
 // Checkout switches the repo to the specified branch.
