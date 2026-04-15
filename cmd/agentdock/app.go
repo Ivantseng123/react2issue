@@ -14,10 +14,13 @@ import (
 	ghclient "agentdock/internal/github"
 	"agentdock/internal/logging"
 	"agentdock/internal/mantis"
+	"agentdock/internal/metrics"
 	"agentdock/internal/queue"
 	"agentdock/internal/skill"
 	slackclient "agentdock/internal/slack"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
@@ -218,6 +221,8 @@ func runApp(cfg *config.Config) error {
 	}, queueLogger)
 	go watchdog.Start(make(chan struct{})) // runs until process exits
 
+	metrics.Register(prometheus.DefaultRegisterer, coordinator, jobStore)
+
 	if cfg.Server.Port > 0 {
 		go func() {
 			http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -226,8 +231,9 @@ func runApp(cfg *config.Config) error {
 			})
 			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, coordinator))
 			http.HandleFunc("/jobs/", queue.KillHandler(jobStore, bundle.Commands))
+			http.Handle("/metrics", promhttp.Handler())
 			addr := fmt.Sprintf(":%d", cfg.Server.Port)
-			appLogger.Info("HTTP 端點已啟動", "phase", "處理中", "addr", addr, "endpoints", []string{"/healthz", "/jobs", "/jobs/{id}"})
+			appLogger.Info("HTTP 端點已啟動", "phase", "處理中", "addr", addr, "endpoints", []string{"/healthz", "/jobs", "/jobs/{id}", "/metrics"})
 			http.ListenAndServe(addr, nil)
 		}()
 	}
