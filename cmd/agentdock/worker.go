@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,36 +13,31 @@ import (
 	ghclient "agentdock/internal/github"
 	"agentdock/internal/queue"
 	"agentdock/internal/worker"
+
+	"github.com/spf13/cobra"
 )
 
-func runWorker() {
-	fs := flag.NewFlagSet("worker", flag.ExitOnError)
-	configPath := fs.String("config", "", "path to worker config file (optional, can use env vars only)")
-	fs.Parse(os.Args[2:])
+var workerConfigPath string
 
-	var cfg *config.Config
-	var err error
-	if *configPath != "" {
-		cfg, err = config.Load(*configPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m failed to load config: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		cfg, err = config.LoadDefaults()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  \033[31m✗\033[0m failed to load defaults: %v\n", err)
-			os.Exit(1)
-		}
-	}
+var workerCmd = &cobra.Command{
+	Use:          "worker",
+	Short:        "Run a worker process (Redis mode)",
+	SilenceUsage: true,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return loadAndStash(cmd, workerConfigPath, ScopeWorker)
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runWorker(cfgFromCtx(cmd.Context()))
+	},
+}
 
-	// Preflight: validate dependencies, prompt if interactive.
-	if err := runPreflight(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "  Error: %v\n", err)
-		os.Exit(1)
-	}
+func init() {
+	workerCmd.Flags().StringVarP(&workerConfigPath, "config", "c", "", "path to worker config file (default ~/.config/agentdock/config.yaml)")
+}
 
-	// slog initialized AFTER preflight to keep interactive output clean.
+func runWorker(cfg *config.Config) error {
+	// Preflight runs in PersistentPreRunE. slog initialized AFTER preflight
+	// to keep interactive output clean.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{
@@ -53,8 +47,7 @@ func runWorker() {
 		TLS:      cfg.Redis.TLS,
 	})
 	if err != nil {
-		slog.Error("failed to connect to Redis", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 	slog.Info("connected to Redis", "addr", cfg.Redis.Addr)
 
@@ -106,4 +99,5 @@ func runWorker() {
 	slog.Info("shutting down", "signal", sig)
 	cancel()
 	bundle.Close()
+	return nil
 }

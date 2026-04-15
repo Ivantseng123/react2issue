@@ -1,13 +1,26 @@
 package config
 
 import (
-	"os"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
+// loadFromString parses YAML and applies defaults. Replaces the old
+// Load()/writeAndLoad helpers now that Load() is removed.
+func loadFromString(t *testing.T, yamlContent string) *Config {
+	t.Helper()
+	var cfg Config
+	if err := yaml.Unmarshal([]byte(yamlContent), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	applyDefaults(&cfg)
+	return &cfg
+}
+
 func TestLoadConfig_V2(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 slack:
   bot_token: xoxb-test
   app_token: xapp-test
@@ -62,16 +75,7 @@ mantis:
 repo_cache:
   dir: /tmp/repos
   max_age: 12h
-`
-	f, _ := os.CreateTemp("", "config-*.yaml")
-	f.WriteString(yaml)
-	f.Close()
-	defer os.Remove(f.Name())
-
-	cfg, err := Load(f.Name())
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
+`)
 
 	// Slack
 	if cfg.Slack.BotToken != "xoxb-test" {
@@ -159,74 +163,8 @@ repo_cache:
 	}
 }
 
-func TestLoadConfig_V1Warning(t *testing.T) {
-	yaml := `
-slack:
-  bot_token: xoxb-test
-  app_token: xapp-test
-github:
-  token: ghp-test
-reactions:
-  bug:
-    type: bug
-agents:
-  claude:
-    command: claude
-    args: ["--print", "-p", "{prompt}"]
-    timeout: 5m
-active_agent: claude
-`
-	f, _ := os.CreateTemp("", "config-*.yaml")
-	f.WriteString(yaml)
-	f.Close()
-	defer os.Remove(f.Name())
-
-	cfg, err := Load(f.Name())
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if cfg.ActiveAgent != "claude" {
-		t.Errorf("active_agent = %q", cfg.ActiveAgent)
-	}
-}
-
-func loadFromString(t *testing.T, yamlContent string) *Config {
-	t.Helper()
-	tmpFile, err := os.CreateTemp("", "config-*.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(tmpFile.Name())
-	tmpFile.WriteString(yamlContent)
-	tmpFile.Close()
-	cfg, err := Load(tmpFile.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cfg
-}
-
-func writeAndLoad(t *testing.T, yamlContent string) *Config {
-	t.Helper()
-	f, err := os.CreateTemp("", "config-*.yaml")
-	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
-	}
-	if _, err := f.WriteString(yamlContent); err != nil {
-		t.Fatalf("WriteString: %v", err)
-	}
-	f.Close()
-	t.Cleanup(func() { os.Remove(f.Name()) })
-
-	cfg, err := Load(f.Name())
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	return cfg
-}
-
 func TestLoggingConfigDefaults(t *testing.T) {
-	cfg := writeAndLoad(t, `
+	cfg := loadFromString(t, `
 slack:
   bot_token: "xoxb-test"
   app_token: "xapp-test"
@@ -246,7 +184,7 @@ slack:
 }
 
 func TestLoadConfig_Defaults(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 slack:
   bot_token: xoxb-test
   app_token: xapp-test
@@ -257,16 +195,7 @@ agents:
     command: claude
     args: ["--print", "-p", "{prompt}"]
 active_agent: claude
-`
-	f, _ := os.CreateTemp("", "config-*.yaml")
-	f.WriteString(yaml)
-	f.Close()
-	defer os.Remove(f.Name())
-
-	cfg, err := Load(f.Name())
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
+`)
 
 	if cfg.MaxConcurrent != 3 {
 		t.Errorf("default max_concurrent = %d, want 3", cfg.MaxConcurrent)
@@ -287,7 +216,7 @@ active_agent: claude
 }
 
 func TestLoad_QueueConfig(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 queue:
   capacity: 100
   transport: inmem
@@ -305,8 +234,7 @@ agents:
     command: claude
     args: ["--print"]
     skill_dir: ".claude/skills"
-`
-	cfg := loadFromString(t, yaml)
+`)
 	if cfg.Queue.Capacity != 100 {
 		t.Errorf("queue capacity = %d, want 100", cfg.Queue.Capacity)
 	}
@@ -330,12 +258,11 @@ agents:
 }
 
 func TestLoad_QueueDefaults(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 agents:
   claude:
     command: claude
-`
-	cfg := loadFromString(t, yaml)
+`)
 	if cfg.Queue.Capacity != 50 {
 		t.Errorf("default queue capacity = %d, want 50", cfg.Queue.Capacity)
 	}
@@ -345,20 +272,19 @@ agents:
 }
 
 func TestLoad_MaxConcurrentBackwardCompat(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 max_concurrent: 7
 agents:
   claude:
     command: claude
-`
-	cfg := loadFromString(t, yaml)
+`)
 	if cfg.Workers.Count != 7 {
 		t.Errorf("workers count = %d, want 7 (from max_concurrent)", cfg.Workers.Count)
 	}
 }
 
 func TestLoad_AgentStream(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 agents:
   claude:
     command: claude
@@ -367,8 +293,7 @@ agents:
   opencode:
     command: opencode
     args: ["--prompt", "{prompt}"]
-`
-	cfg := loadFromString(t, yaml)
+`)
 	if !cfg.Agents["claude"].Stream {
 		t.Error("claude stream should be true")
 	}
@@ -378,7 +303,7 @@ agents:
 }
 
 func TestLoad_TrackingTimeouts(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 queue:
   agent_idle_timeout: 3m
   prepare_timeout: 2m
@@ -386,8 +311,7 @@ queue:
 agents:
   claude:
     command: claude
-`
-	cfg := loadFromString(t, yaml)
+`)
 	if cfg.Queue.AgentIdleTimeout != 3*time.Minute {
 		t.Errorf("agent_idle_timeout = %v", cfg.Queue.AgentIdleTimeout)
 	}
@@ -400,12 +324,11 @@ agents:
 }
 
 func TestLoad_TrackingTimeoutDefaults(t *testing.T) {
-	yaml := `
+	cfg := loadFromString(t, `
 agents:
   claude:
     command: claude
-`
-	cfg := loadFromString(t, yaml)
+`)
 	if cfg.Queue.AgentIdleTimeout != 5*time.Minute {
 		t.Errorf("default agent_idle_timeout = %v, want 5m", cfg.Queue.AgentIdleTimeout)
 	}
@@ -414,5 +337,96 @@ agents:
 	}
 	if cfg.Queue.StatusInterval != 5*time.Second {
 		t.Errorf("default status_interval = %v, want 5s", cfg.Queue.StatusInterval)
+	}
+}
+
+func TestEnvOverrideMap(t *testing.T) {
+	t.Setenv("REDIS_ADDR", "10.0.0.1:6379")
+	t.Setenv("GITHUB_TOKEN", "ghp_test")
+	t.Setenv("PROVIDERS", "claude,codex")
+
+	m := EnvOverrideMap()
+
+	if got := m["redis.addr"]; got != "10.0.0.1:6379" {
+		t.Errorf("redis.addr = %v, want 10.0.0.1:6379", got)
+	}
+	if got := m["github.token"]; got != "ghp_test" {
+		t.Errorf("github.token = %v, want ghp_test", got)
+	}
+	providers, ok := m["providers"].([]string)
+	if !ok || len(providers) != 2 || providers[0] != "claude" || providers[1] != "codex" {
+		t.Errorf("providers = %v, want [claude codex]", m["providers"])
+	}
+}
+
+func TestEnvOverrideMap_UnsetAbsent(t *testing.T) {
+	t.Setenv("REDIS_ADDR", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("PROVIDERS", "")
+	t.Setenv("SLACK_BOT_TOKEN", "")
+	t.Setenv("SLACK_APP_TOKEN", "")
+	t.Setenv("MANTIS_API_TOKEN", "")
+	t.Setenv("REDIS_PASSWORD", "")
+	t.Setenv("ACTIVE_AGENT", "")
+
+	m := EnvOverrideMap()
+	for _, key := range []string{"redis.addr", "github.token", "providers", "slack.bot_token"} {
+		if _, ok := m[key]; ok {
+			t.Errorf("%s should be absent when env empty, got %v", key, m[key])
+		}
+	}
+}
+
+func TestEnvOverrideMap_ProvidersFiltersEmpty(t *testing.T) {
+	t.Setenv("PROVIDERS", "claude,,codex,")
+	m := EnvOverrideMap()
+	providers, ok := m["providers"].([]string)
+	if !ok {
+		t.Fatalf("providers missing or wrong type: %v", m["providers"])
+	}
+	if len(providers) != 2 || providers[0] != "claude" || providers[1] != "codex" {
+		t.Errorf("providers should filter empty tokens, got %v", providers)
+	}
+}
+
+func TestDefaultsMap(t *testing.T) {
+	m := DefaultsMap()
+
+	workers, ok := m["workers"].(map[string]any)
+	if !ok {
+		t.Fatalf("workers should be a map, got %T", m["workers"])
+	}
+	if got := workers["count"]; got != 3 {
+		t.Errorf("workers.count = %v, want 3", got)
+	}
+
+	queue, ok := m["queue"].(map[string]any)
+	if !ok {
+		t.Fatalf("queue should be a map, got %T", m["queue"])
+	}
+	if got := queue["transport"]; got != "inmem" {
+		t.Errorf("queue.transport = %v, want inmem", got)
+	}
+	if got := queue["capacity"]; got != 50 {
+		t.Errorf("queue.capacity = %v, want 50", got)
+	}
+
+	logging, ok := m["logging"].(map[string]any)
+	if !ok {
+		t.Fatalf("logging should be a map, got %T", m["logging"])
+	}
+	if got := logging["dir"]; got != "logs" {
+		t.Errorf("logging.dir = %v, want logs", got)
+	}
+}
+
+func TestDefaultsMap_AgreesWithApplyDefaults(t *testing.T) {
+	var cfg Config
+	applyDefaults(&cfg)
+
+	m := DefaultsMap()
+	workers := m["workers"].(map[string]any)
+	if got := workers["count"]; got != cfg.Workers.Count {
+		t.Errorf("DefaultsMap.workers.count=%v != applyDefaults.Workers.Count=%v", got, cfg.Workers.Count)
 	}
 }

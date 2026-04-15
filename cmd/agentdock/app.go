@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,48 +21,40 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	"github.com/spf13/cobra"
 )
 
-var (
-	version = "dev"
-	commit  = "unknown"
-	date    = "unknown"
-)
+var appConfigPath string
 
-func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "worker":
-			runWorker()
-			return
-		}
-	}
+var appCmd = &cobra.Command{
+	Use:          "app",
+	Short:        "Run the main Slack bot",
+	SilenceUsage: true,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		return loadAndStash(cmd, appConfigPath, ScopeApp)
+	},
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runApp(cfgFromCtx(cmd.Context()))
+	},
+}
 
-	configPath := flag.String("config", "config.yaml", "path to config file")
-	showVersion := flag.Bool("version", false, "Print version and exit")
-	flag.Parse()
+func init() {
+	appCmd.Flags().StringVarP(&appConfigPath, "config", "c", "", "path to config file (default ~/.config/agentdock/config.yaml)")
+	rootCmd.AddCommand(appCmd)
+	rootCmd.AddCommand(workerCmd)
+	addAppFlags(appCmd)
+}
 
-	if *showVersion {
-		fmt.Printf("agentdock %s (commit %s, built %s)\n", version, commit, date)
-		return
-	}
-
+func runApp(cfg *config.Config) error {
 	// Use INFO until config is loaded.
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
-
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
-	}
 
 	// Re-init logger with configured level.
 	stderrHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
-		slog.Error("failed to init log rotator", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to init log rotator: %w", err)
 	}
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
@@ -93,8 +84,7 @@ func main() {
 	}
 	skillLoader, err := skill.NewLoader(cfg.SkillsConfig, bakedInDir)
 	if err != nil {
-		slog.Error("failed to create skill loader", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to create skill loader: %w", err)
 	}
 	skillLoader.Warmup(context.Background())
 	if cfg.SkillsConfig != "" {
@@ -129,8 +119,7 @@ func main() {
 			TLS:      cfg.Redis.TLS,
 		})
 		if err != nil {
-			slog.Error("failed to connect to Redis", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("failed to connect to Redis: %w", err)
 		}
 		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
 		slog.Info("using Redis transport", "addr", cfg.Redis.Addr)
@@ -177,8 +166,7 @@ func main() {
 			Commands:    bundle.Commands,
 			Attachments: bundle.Attachments,
 		}); err != nil {
-			slog.Error("failed to start local adapter", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("failed to start local adapter: %w", err)
 		}
 	}
 
@@ -374,69 +362,7 @@ func main() {
 	}()
 
 	if err := sm.Run(); err != nil {
-		slog.Error("socket mode error", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("socket mode error: %w", err)
 	}
-}
-
-// agentRunnerAdapter wraps AgentRunner to satisfy worker.Runner interface.
-type agentRunnerAdapter struct {
-	runner *bot.AgentRunner
-}
-
-func (a *agentRunnerAdapter) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
-	return a.runner.Run(ctx, slog.Default(), workDir, prompt, opts)
-}
-
-// repoCacheAdapter wraps RepoCache to satisfy worker.RepoProvider interface.
-type repoCacheAdapter struct {
-	cache *ghclient.RepoCache
-}
-
-func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
-	repoPath, err := a.cache.EnsureRepo(cloneURL)
-	if err != nil {
-		return "", err
-	}
-	if branch != "" {
-		if err := a.cache.Checkout(repoPath, branch); err != nil {
-			return "", err
-		}
-	}
-	return repoPath, nil
-}
-
-// slackPosterAdapter wraps slackclient.Client to satisfy bot.SlackPoster interface.
-// SlackPoster.PostMessage has no return value, but Client.PostMessage returns error.
-type slackPosterAdapter struct {
-	client *slackclient.Client
-}
-
-func (a *slackPosterAdapter) PostMessage(channelID, text, threadTS string) {
-	if err := a.client.PostMessage(channelID, text, threadTS); err != nil {
-		slog.Warn("failed to post slack message", "channel", channelID, "error", err)
-	}
-}
-
-func (a *slackPosterAdapter) UpdateMessage(channelID, messageTS, text string) {
-	if err := a.client.UpdateMessage(channelID, messageTS, text); err != nil {
-		slog.Warn("failed to update slack message", "channel", channelID, "error", err)
-	}
-}
-
-func (a *slackPosterAdapter) PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error) {
-	return a.client.PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value)
-}
-
-func parseLogLevel(level string) slog.Level {
-	switch strings.ToLower(strings.TrimSpace(level)) {
-	case "debug":
-		return slog.LevelDebug
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
+	return nil
 }

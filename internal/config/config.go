@@ -137,67 +137,6 @@ type LoggingConfig struct {
 	AgentOutputDir string `yaml:"agent_output_dir"`
 }
 
-type v1RawCheck struct {
-	Reactions    map[string]any `yaml:"reactions"`
-	Integrations map[string]any `yaml:"integrations"`
-}
-
-func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var raw v1RawCheck
-	if yaml.Unmarshal(data, &raw) == nil {
-		if raw.Reactions != nil || raw.Integrations != nil {
-			slog.Warn("v1 config detected — reactions, llm, diagnosis, and integrations sections are no longer used in v2. Note: integrations.mantis has moved to top-level mantis.")
-		}
-	}
-
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-
-	applyDefaults(&cfg)
-	applyEnvOverrides(&cfg)
-	return &cfg, nil
-}
-
-// LoadDefaults creates a Config with sensible defaults + env overrides, no YAML file needed.
-// Includes a default claude agent config so workers can run with just env vars.
-func LoadDefaults() (*Config, error) {
-	cfg := Config{
-		Agents: map[string]AgentConfig{
-			"claude": {
-				Command:  "claude",
-				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
-				Timeout:  15 * time.Minute,
-				SkillDir: ".claude/skills",
-				Stream:   true,
-			},
-			"codex": {
-				Command:  "codex",
-				Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
-				Timeout:  15 * time.Minute,
-				SkillDir: ".codex/skills",
-				Stream:   true,
-			},
-			"opencode": {
-				Command:  "opencode",
-				Args:     []string{"--prompt", "{prompt}"},
-				Timeout:  15 * time.Minute,
-				SkillDir: ".opencode/skills",
-			},
-		},
-		Providers: []string{"claude"},
-	}
-	applyDefaults(&cfg)
-	applyEnvOverrides(&cfg)
-	return &cfg, nil
-}
-
 func applyDefaults(cfg *Config) {
 	// Workers.Count must be resolved before MaxConcurrent gets its own default,
 	// so that we can distinguish "user set max_concurrent" from "default applied".
@@ -269,29 +208,62 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
-func applyEnvOverrides(cfg *Config) {
+// DefaultsMap returns a koanf-friendly map[string]any of all default values
+// produced by applyDefaults. Round-trips via YAML to preserve nested struct
+// shape and yaml tags. applyDefaults is the single source of truth; this is
+// just a different representation for the koanf provider chain (D12).
+func DefaultsMap() map[string]any {
+	var cfg Config
+	applyDefaults(&cfg)
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		panic("DefaultsMap marshal: " + err.Error())
+	}
+	out := map[string]any{}
+	if err := yaml.Unmarshal(data, &out); err != nil {
+		panic("DefaultsMap unmarshal: " + err.Error())
+	}
+	return out
+}
+
+// EnvOverrideMap returns a koanf-friendly map[string]any of values currently
+// set in env vars. Maps each known env var to its koanf path. Unset env vars
+// are absent from the result. Used by cmd/agentdock to build the env layer in
+// the koanf provider chain (D1: env is its own layer, not persisted).
+func EnvOverrideMap() map[string]any {
+	out := map[string]any{}
 	if v := os.Getenv("SLACK_BOT_TOKEN"); v != "" {
-		cfg.Slack.BotToken = v
+		out["slack.bot_token"] = v
 	}
 	if v := os.Getenv("SLACK_APP_TOKEN"); v != "" {
-		cfg.Slack.AppToken = v
+		out["slack.app_token"] = v
 	}
 	if v := os.Getenv("GITHUB_TOKEN"); v != "" {
-		cfg.GitHub.Token = v
+		out["github.token"] = v
 	}
 	if v := os.Getenv("MANTIS_API_TOKEN"); v != "" {
-		cfg.Mantis.APIToken = v
+		out["mantis.api_token"] = v
 	}
 	if v := os.Getenv("REDIS_ADDR"); v != "" {
-		cfg.Redis.Addr = v
+		out["redis.addr"] = v
 	}
 	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
-		cfg.Redis.Password = v
+		out["redis.password"] = v
 	}
 	if v := os.Getenv("ACTIVE_AGENT"); v != "" {
-		cfg.ActiveAgent = v
+		out["active_agent"] = v
 	}
 	if v := os.Getenv("PROVIDERS"); v != "" {
-		cfg.Providers = strings.Split(v, ",")
+		var providers []string
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				providers = append(providers, p)
+			}
+		}
+		if len(providers) > 0 {
+			out["providers"] = providers
+		}
 	}
+	return out
 }
+

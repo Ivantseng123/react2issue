@@ -2,7 +2,7 @@
 
 [繁體中文](configuration.md)
 
-See `config.example.yaml` for all options.
+Run `agentdock init -c /tmp/sample.yaml` to generate a template with all fields (add `-i` for interactive prompts). Full schema below:
 
 ```yaml
 auto_bind: true

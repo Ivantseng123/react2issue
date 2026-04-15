@@ -2,6 +2,8 @@
 
 [繁體中文](README.md)
 
+> **Upgrading from v0.x?** See [docs/MIGRATION-v1.md](docs/MIGRATION-v1.md) (binary renamed to `agentdock`, subcommand required, default config path moved).
+
 AI agent dispatch platform — receives requests from any source, dispatches to CLI agents (claude/codex/opencode) for execution, returns structured results. Currently supports Slack → codebase triage → GitHub Issue workflow.
 
 Single Go binary, supports both in-memory and Redis transports. Workers can run in the same process, separate pods, or on a teammate's machine.
@@ -17,13 +19,22 @@ Single Go binary, supports both in-memory and Redis transports. Workers can run 
 
 ## Quick Start
 
+First time? Generate a starter config with `init`:
+
 ```bash
-cp config.example.yaml config.yaml
-# Fill in Slack / GitHub tokens
+go build -o agentdock ./cmd/agentdock/
+./agentdock init -i   # interactive prompts for Slack / GitHub tokens
 ./run.sh
 ```
 
-`run.sh` automatically sets up agent skills → build → start.
+Or directly:
+
+```bash
+./run.sh
+# equivalent to: go build -o agentdock ./cmd/agentdock/ && ./agentdock app -c config.yaml
+```
+
+`run.sh` automatically sets up agent skills → build → start the app.
 
 Haven't created the Slack App yet? See [docs/slack-setup.en.md](docs/slack-setup.en.md).
 
@@ -72,7 +83,7 @@ Bot uses a producer/consumer queue to decouple Slack event handling from agent e
 |------|-----------|-------------|
 | In-Memory | `queue.transport: inmem` | Everything in one process, Go channel communication (default) |
 | Redis Worker | `queue.transport: redis` | App and Worker deployed separately, Redis Stream/Pub/Sub |
-| External Worker | Redis + runner binary | External machines run `bot worker`, same Redis |
+| External Worker | Redis + runner binary | External machines run `agentdock worker`, same Redis |
 
 All three modes use the same interfaces (`JobQueue`, `ResultBus`, `StatusBus`, `CommandBus`, `AttachmentStore`), only the transport layer changes. Switch by changing config only.
 

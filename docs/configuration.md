@@ -2,7 +2,7 @@
 
 [English](configuration.en.md)
 
-完整選項見 `config.example.yaml`。
+跑 `agentdock init -c /tmp/sample.yaml` 可產生含所有欄位的範本（加 `-i` 進入互動式填入）。完整 schema 見下方：
 
 ```yaml
 auto_bind: true

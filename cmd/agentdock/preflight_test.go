@@ -83,7 +83,7 @@ func TestParseSelection_Empty(t *testing.T) {
 
 func TestNeedsInput_AllEmpty(t *testing.T) {
 	cfg := &config.Config{}
-	if !needsInput(cfg) {
+	if !needsInput(cfg, ScopeWorker) {
 		t.Fatal("expected true when all values empty")
 	}
 }
@@ -94,7 +94,23 @@ func TestNeedsInput_AllSet(t *testing.T) {
 	}
 	cfg.Redis.Addr = "localhost:6379"
 	cfg.GitHub.Token = "ghp_test"
-	if needsInput(cfg) {
+	if needsInput(cfg, ScopeWorker) {
 		t.Fatal("expected false when all values set")
+	}
+}
+
+func TestNeedsInput_AppScope_SlackRequired(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []string{"claude"},
+	}
+	cfg.Redis.Addr = "localhost:6379"
+	cfg.GitHub.Token = "ghp_test"
+	if !needsInput(cfg, ScopeApp) {
+		t.Fatal("expected true when Slack tokens empty under ScopeApp")
+	}
+	cfg.Slack.BotToken = "xoxb-test"
+	cfg.Slack.AppToken = "xapp-test"
+	if needsInput(cfg, ScopeApp) {
+		t.Fatal("expected false when Slack tokens set under ScopeApp")
 	}
 }

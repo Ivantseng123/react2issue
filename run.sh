@@ -5,6 +5,6 @@ cd "$(dirname "$0")"
 ./agents/setup.sh
 
 echo "Building..."
-go build -o bot ./cmd/bot/ || exit 1
+go build -o agentdock ./cmd/agentdock/ || exit 1
 echo "Starting react2issue..."
-exec ./bot -config config.yaml
+exec ./agentdock app -c config.yaml
