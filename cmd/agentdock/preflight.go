@@ -13,14 +13,64 @@ import (
 
 const maxRetries = 3
 
-// runPreflight validates Redis, GitHub token, and agent CLI availability.
-// In interactive mode (terminal + missing values), prompts the user.
-func runPreflight(cfg *config.Config) error {
-	interactive := term.IsTerminal(int(syscall.Stdin)) && needsInput(cfg)
+// PreflightScope distinguishes which subcommand is running preflight. The App
+// scope additionally requires Slack bot + app-level tokens; Worker skips them.
+type PreflightScope string
+
+const (
+	ScopeApp    PreflightScope = "app"
+	ScopeWorker PreflightScope = "worker"
+)
+
+// runPreflight validates Redis, GitHub token, Slack tokens (App only), and
+// agent CLI availability. In interactive mode (terminal + missing values),
+// prompts the user. Returns a map of keys the user was prompted for so the
+// caller can persist them via delta-only save-back.
+func runPreflight(cfg *config.Config, scope PreflightScope) (map[string]any, error) {
+	prompted := map[string]any{}
+	interactive := term.IsTerminal(int(syscall.Stdin)) && needsInput(cfg, scope)
 
 	fmt.Fprintln(stderr)
 
-	// --- Redis ---
+	if err := preflightRedis(cfg, interactive, prompted); err != nil {
+		return prompted, err
+	}
+	if err := preflightGitHub(cfg, interactive, prompted); err != nil {
+		return prompted, err
+	}
+	if err := preflightProviders(cfg, interactive, prompted); err != nil {
+		return prompted, err
+	}
+
+	if scope == ScopeApp {
+		if err := preflightSlackBot(cfg, interactive, prompted); err != nil {
+			return prompted, err
+		}
+		if err := preflightSlackApp(cfg, interactive, prompted); err != nil {
+			return prompted, err
+		}
+	}
+
+	if err := preflightAgentCLIs(cfg, interactive); err != nil {
+		return prompted, err
+	}
+
+	fmt.Fprintf(stderr, "\n  Starting %s with: %s\n\n", scope, strings.Join(cfg.Providers, ", "))
+	return prompted, nil
+}
+
+// needsInput returns true if any required config value (for the given scope)
+// is empty, meaning preflight should enter interactive mode when attached to
+// a terminal.
+func needsInput(cfg *config.Config, scope PreflightScope) bool {
+	base := cfg.Redis.Addr == "" || cfg.GitHub.Token == "" || len(cfg.Providers) == 0
+	if scope == ScopeApp {
+		return base || cfg.Slack.BotToken == "" || cfg.Slack.AppToken == ""
+	}
+	return base
+}
+
+func preflightRedis(cfg *config.Config, interactive bool, prompted map[string]any) error {
 	if cfg.Redis.Addr == "" {
 		if !interactive {
 			return fmt.Errorf("REDIS_ADDR is required")
@@ -42,18 +92,21 @@ func runPreflight(cfg *config.Config) error {
 				continue
 			}
 			cfg.Redis.Addr = addr
+			prompted["redis.addr"] = addr
 			printOK("Redis connected")
-			break
+			return nil
 		}
-	} else {
-		if err := checkRedis(cfg.Redis.Addr); err != nil {
-			printFail("Redis connect failed: %v", err)
-			return err
-		}
-		printOK("Redis connected (%s)", cfg.Redis.Addr)
+		return nil
 	}
+	if err := checkRedis(cfg.Redis.Addr); err != nil {
+		printFail("Redis connect failed: %v", err)
+		return err
+	}
+	printOK("Redis connected (%s)", cfg.Redis.Addr)
+	return nil
+}
 
-	// --- GitHub Token ---
+func preflightGitHub(cfg *config.Config, interactive bool, prompted map[string]any) error {
 	if cfg.GitHub.Token == "" {
 		if !interactive {
 			return fmt.Errorf("GITHUB_TOKEN is required")
@@ -80,19 +133,22 @@ func runPreflight(cfg *config.Config) error {
 				continue
 			}
 			cfg.GitHub.Token = token
+			prompted["github.token"] = token
 			printOK("Token valid (user: %s)", username)
-			break
+			return nil
 		}
-	} else {
-		username, err := checkGitHubToken(cfg.GitHub.Token)
-		if err != nil {
-			printFail("GitHub token invalid: %v", err)
-			return err
-		}
-		printOK("Token valid (user: %s)", username)
+		return nil
 	}
+	username, err := checkGitHubToken(cfg.GitHub.Token)
+	if err != nil {
+		printFail("GitHub token invalid: %v", err)
+		return err
+	}
+	printOK("Token valid (user: %s)", username)
+	return nil
+}
 
-	// --- Providers ---
+func preflightProviders(cfg *config.Config, interactive bool, prompted map[string]any) error {
 	if len(cfg.Providers) == 0 {
 		if !interactive {
 			return fmt.Errorf("PROVIDERS is required")
@@ -114,11 +170,84 @@ func runPreflight(cfg *config.Config) error {
 				continue
 			}
 			cfg.Providers = selected
-			break
+			prompted["providers"] = selected
+			return nil
 		}
 	}
+	return nil
+}
 
-	// --- Agent CLI version check ---
+func preflightSlackBot(cfg *config.Config, interactive bool, prompted map[string]any) error {
+	if cfg.Slack.BotToken != "" {
+		userID, err := checkSlackToken(cfg.Slack.BotToken)
+		if err != nil {
+			printFail("Slack bot token invalid: %v", err)
+			return err
+		}
+		printOK("Slack bot token valid (user_id: %s)", userID)
+		return nil
+	}
+	if !interactive {
+		return fmt.Errorf("SLACK_BOT_TOKEN is required")
+	}
+	fmt.Fprintln(stderr)
+	fmt.Fprintln(stderr, "  Slack bot token (xoxb-...):")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := promptHidden("Token: ")
+		if token == "" {
+			printFail("Slack bot token is required")
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Slack bot token")
+			}
+			continue
+		}
+		userID, err := checkSlackToken(token)
+		if err != nil {
+			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Slack bot token")
+			}
+			continue
+		}
+		cfg.Slack.BotToken = token
+		prompted["slack.bot_token"] = token
+		printOK("Slack bot token valid (user_id: %s)", userID)
+		return nil
+	}
+	return fmt.Errorf("unreachable")
+}
+
+func preflightSlackApp(cfg *config.Config, interactive bool, prompted map[string]any) error {
+	if cfg.Slack.AppToken != "" {
+		if !strings.HasPrefix(cfg.Slack.AppToken, "xapp-") {
+			return fmt.Errorf("Slack app token must start with xapp-")
+		}
+		printOK("Slack app token format OK")
+		return nil
+	}
+	if !interactive {
+		return fmt.Errorf("SLACK_APP_TOKEN is required")
+	}
+	fmt.Fprintln(stderr)
+	fmt.Fprintln(stderr, "  Slack app-level token (xapp-...):")
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		token := promptHidden("Token: ")
+		if token == "" || !strings.HasPrefix(token, "xapp-") {
+			printFail("must start with xapp- (attempt %d/%d)", attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for Slack app token")
+			}
+			continue
+		}
+		cfg.Slack.AppToken = token
+		prompted["slack.app_token"] = token
+		printOK("Slack app token format OK")
+		return nil
+	}
+	return fmt.Errorf("unreachable")
+}
+
+func preflightAgentCLIs(cfg *config.Config, interactive bool) error {
 	fmt.Fprintln(stderr)
 	var validProviders []string
 	for _, name := range cfg.Providers {
@@ -149,14 +278,7 @@ func runPreflight(cfg *config.Config) error {
 		}
 		cfg.Providers = validProviders
 	}
-
-	fmt.Fprintf(stderr, "\n  Starting worker with: %s\n\n", strings.Join(cfg.Providers, ", "))
 	return nil
-}
-
-// needsInput returns true if any required config value is empty.
-func needsInput(cfg *config.Config) bool {
-	return cfg.Redis.Addr == "" || cfg.GitHub.Token == "" || len(cfg.Providers) == 0
 }
 
 // sortedAgentNames returns agent names from config in stable order.

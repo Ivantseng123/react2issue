@@ -37,7 +37,7 @@ func init() {
 
 func runWorker(cfg *config.Config) error {
 	// Preflight: validate dependencies, prompt if interactive.
-	if err := runPreflight(cfg); err != nil {
+	if _, err := runPreflight(cfg, ScopeWorker); err != nil {
 		return fmt.Errorf("preflight: %w", err)
 	}
 
