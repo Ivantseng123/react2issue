@@ -21,6 +21,9 @@ type Runner interface {
 // RepoProvider abstracts repo clone/checkout (for testing).
 type RepoProvider interface {
 	Prepare(cloneURL, branch string) (string, error)
+	RemoveWorktree(worktreePath string) error
+	CleanAll() error
+	PurgeStale() error
 }
 
 type executionDeps struct {
@@ -54,10 +57,17 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath)
 
-	// Copy attachments to repo workspace.
-	for _, att := range attachments {
-		if att.URL != "" {
-			_ = att // For local file:// URLs, path is already accessible.
+	// Write attachments to local temp dir and append to prompt.
+	prompt := job.Prompt
+	if len(attachments) > 0 {
+		attachDir := filepath.Join(os.TempDir(), fmt.Sprintf("triage-attach-%s", job.ID))
+		defer os.RemoveAll(attachDir)
+		attachInfos, err := writeAttachments(attachments, attachDir)
+		if err != nil {
+			logger.Warn("附件寫入失敗，繼續執行", "phase", "處理中", "error", err)
+		} else {
+			prompt = bot.AppendAttachmentSection(prompt, attachInfos)
+			logger.Info("附件已寫入", "phase", "處理中", "count", len(attachInfos), "dir", attachDir)
 		}
 	}
 
@@ -77,7 +87,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	// Execute agent.
 	deps.store.UpdateStatus(job.ID, queue.JobRunning)
 	logger.Info("執行 agent 中", "phase", "處理中")
-	output, err := deps.runner.Run(ctx, repoPath, job.Prompt, opts)
+	output, err := deps.runner.Run(ctx, repoPath, prompt, opts)
 	if err != nil {
 		return failedResult(job, startedAt, err)
 	}
@@ -108,6 +118,36 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		StartedAt:  startedAt,
 		FinishedAt: time.Now(),
 	}
+}
+
+func writeAttachments(attachments []queue.AttachmentReady, dir string) ([]bot.AttachmentInfo, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("create attachment dir: %w", err)
+	}
+
+	seen := make(map[string]int)
+	var infos []bot.AttachmentInfo
+
+	for _, att := range attachments {
+		filename := att.Filename
+		if count, exists := seen[filename]; exists {
+			ext := filepath.Ext(filename)
+			base := strings.TrimSuffix(filename, ext)
+			filename = fmt.Sprintf("%s_%d%s", base, count+1, ext)
+		}
+		seen[att.Filename]++
+
+		path := filepath.Join(dir, filename)
+		if err := os.WriteFile(path, att.Data, 0644); err != nil {
+			return nil, fmt.Errorf("write attachment %s: %w", filename, err)
+		}
+		infos = append(infos, bot.AttachmentInfo{
+			Path: path,
+			Name: filename,
+			Type: att.MimeType,
+		})
+	}
+	return infos, nil
 }
 
 func failedResult(job *queue.Job, startedAt time.Time, err error) *queue.JobResult {
