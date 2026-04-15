@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -21,7 +22,7 @@ func TestWatchdog_PublishesFailedResultOnTimeout(t *testing.T) {
 		JobTimeout:     1 * time.Minute,
 		IdleTimeout:    0,
 		PrepareTimeout: 0,
-	})
+	}, slog.Default())
 
 	wd.check()
 

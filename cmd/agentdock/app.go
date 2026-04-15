@@ -47,10 +47,10 @@ func init() {
 
 func runApp(cfg *config.Config) error {
 	// Use INFO until config is loaded.
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	// Re-init logger with configured level.
-	stderrHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})
+	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
@@ -61,16 +61,20 @@ func runApp(cfg *config.Config) error {
 	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: parseLogLevel(cfg.Logging.Level)})
 	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 
-	slackClient := slackclient.NewClient(cfg.Slack.BotToken)
+	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
+	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
+	slackLogger := logging.ComponentLogger(slog.Default(), logging.CompSlack)
 
-	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token)
-	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token)
+	slackClient := slackclient.NewClient(cfg.Slack.BotToken, slackLogger)
+
+	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
+	repoDiscovery := ghclient.NewRepoDiscovery(cfg.GitHub.Token, githubLogger)
 
 	if cfg.AutoBind {
 		go func() {
 			_, err := repoDiscovery.ListRepos(context.Background())
 			if err != nil {
-				slog.Warn("failed to pre-warm repo cache", "error", err)
+				appLogger.Warn("Repo 快取預熱失敗", "phase", "失敗", "error", err)
 			}
 		}()
 	}
@@ -82,7 +86,8 @@ func runApp(cfg *config.Config) error {
 	if _, err := os.Stat("/opt/agents/skills"); err == nil {
 		bakedInDir = "/opt/agents/skills"
 	}
-	skillLoader, err := skill.NewLoader(cfg.SkillsConfig, bakedInDir)
+	skillLogger := logging.ComponentLogger(slog.Default(), logging.CompSkill)
+	skillLoader, err := skill.NewLoader(cfg.SkillsConfig, bakedInDir, skillLogger)
 	if err != nil {
 		return fmt.Errorf("failed to create skill loader: %w", err)
 	}
@@ -90,7 +95,7 @@ func runApp(cfg *config.Config) error {
 	if cfg.SkillsConfig != "" {
 		stopWatcher, err := skillLoader.StartWatcher(cfg.SkillsConfig)
 		if err != nil {
-			slog.Warn("failed to start skill config watcher", "error", err)
+			appLogger.Warn("Skill 設定監視器啟動失敗", "phase", "失敗", "error", err)
 		} else {
 			defer stopWatcher()
 		}
@@ -103,7 +108,7 @@ func runApp(cfg *config.Config) error {
 		cfg.Mantis.Password,
 	)
 	if mantisClient.IsConfigured() {
-		slog.Info("mantis integration enabled", "url", cfg.Mantis.BaseURL)
+		appLogger.Info("Mantis 整合已啟用", "phase", "處理中", "url", cfg.Mantis.BaseURL)
 	}
 
 	jobStore := queue.NewMemJobStore()
@@ -122,10 +127,10 @@ func runApp(cfg *config.Config) error {
 			return fmt.Errorf("failed to connect to Redis: %w", err)
 		}
 		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
-		slog.Info("using Redis transport", "addr", cfg.Redis.Addr)
+		appLogger.Info("使用 Redis transport", "phase", "處理中", "addr", cfg.Redis.Addr)
 	default:
 		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
-		slog.Info("using in-memory transport")
+		appLogger.Info("使用 in-memory transport", "phase", "處理中")
 	}
 
 	// Collect skill dirs from all agents in provider chain.
@@ -147,6 +152,9 @@ func runApp(cfg *config.Config) error {
 	coordinator := queue.NewCoordinator(bundle.Queue)
 	coordinator.RegisterQueue("triage", bundle.Queue)
 
+	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
+	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
+
 	// Create and start LocalAdapter (owns worker.Pool lifecycle).
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
@@ -158,6 +166,7 @@ func runApp(cfg *config.Config) error {
 			StatusInterval: cfg.Queue.StatusInterval,
 			Capabilities:   []string{"triage"},
 			Store:          jobStore,
+			Logger:         workerLogger,
 		})
 		if err := localAdapter.Start(queue.AdapterDeps{
 			Jobs:        bundle.Queue,
@@ -186,17 +195,19 @@ func runApp(cfg *config.Config) error {
 	})
 	wf.SetHandler(handler)
 
-	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token)
+	agentLogger := logging.ComponentLogger(slog.Default(), logging.CompAgent)
+
+	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
-		&slackPosterAdapter{client: slackClient}, issueClient,
+		&slackPosterAdapter{client: slackClient, logger: slackLogger}, issueClient,
 		func(channelID, threadTS string) {
 			handler.ClearThreadDedup(channelID, threadTS)
-		})
+		}, agentLogger)
 	go resultListener.Listen(context.Background())
 
-	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient})
+	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger)
 
-	statusListener := bot.NewStatusListener(bundle.Status, jobStore)
+	statusListener := bot.NewStatusListener(bundle.Status, jobStore, queueLogger)
 	go statusListener.Listen(context.Background())
 
 	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
@@ -204,7 +215,7 @@ func runApp(cfg *config.Config) error {
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,
 		PrepareTimeout: cfg.Queue.PrepareTimeout,
-	})
+	}, queueLogger)
 	go watchdog.Start(make(chan struct{})) // runs until process exits
 
 	if cfg.Server.Port > 0 {
@@ -216,7 +227,7 @@ func runApp(cfg *config.Config) error {
 			http.HandleFunc("/jobs", queue.StatusHandler(jobStore, coordinator))
 			http.HandleFunc("/jobs/", queue.KillHandler(jobStore, bundle.Commands))
 			addr := fmt.Sprintf(":%d", cfg.Server.Port)
-			slog.Info("http endpoints listening", "addr", addr, "endpoints", []string{"/healthz", "/jobs", "/jobs/{id}"})
+			appLogger.Info("HTTP 端點已啟動", "phase", "處理中", "addr", addr, "endpoints", []string{"/healthz", "/jobs", "/jobs/{id}"})
 			http.ListenAndServe(addr, nil)
 		}()
 	}
@@ -230,12 +241,12 @@ func runApp(cfg *config.Config) error {
 	botUserID := ""
 	if authResp, err := api.AuthTest(); err == nil {
 		botUserID = authResp.UserID
-		slog.Info("bot identity resolved", "userID", botUserID)
+		appLogger.Info("Bot 身份已解析", "phase", "處理中", "user_id", botUserID)
 	} else {
-		slog.Warn("failed to resolve bot identity, auto-bind may not filter correctly", "error", err)
+		appLogger.Warn("Bot 身份解析失敗", "phase", "失敗", "error", err)
 	}
 
-	slog.Info("starting bot", "version", version, "commit", commit, "date", date)
+	appLogger.Info("啟動 Bot", "phase", "處理中", "version", version, "commit", commit, "date", date)
 
 	go func() {
 		for evt := range sm.Events {
@@ -290,10 +301,10 @@ func runApp(cfg *config.Config) error {
 
 				// BlockSuggestion must ack WITH options — don't ack early.
 				if cb.Type == slack.InteractionTypeBlockSuggestion {
-					slog.Info("block suggestion received", "actionID", cb.ActionID, "value", cb.Value)
+					appLogger.Info("收到搜尋建議", "phase", "接收", "action_id", cb.ActionID, "value", cb.Value)
 					if cb.ActionID == "repo_search" {
 						options := wf.HandleRepoSuggestion(cb.Value)
-						slog.Info("repo suggestion results", "query", cb.Value, "count", len(options))
+						appLogger.Info("Repo 搜尋結果", "phase", "處理中", "query", cb.Value, "count", len(options))
 						var opts []*slack.OptionBlockObject
 						for _, r := range options {
 							opts = append(opts, slack.NewOptionBlockObject(r, slack.NewTextBlockObject("plain_text", r, false, false), nil))
@@ -314,7 +325,7 @@ func runApp(cfg *config.Config) error {
 					}
 					action := cb.ActionCallback.BlockActions[0]
 					selectorTS := cb.Message.Timestamp
-					slog.Info("block action received", "actionID", action.ActionID, "value", action.Value, "selectorTS", selectorTS)
+					appLogger.Info("收到按鈕互動", "phase", "接收", "action_id", action.ActionID, "value", action.Value, "selector_ts", selectorTS)
 
 					switch {
 					case action.ActionID == "repo_search" && action.SelectedOption.Value != "":

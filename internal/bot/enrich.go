@@ -44,11 +44,11 @@ func enrichMessage(message string, mantisClient *mantis.Client) string {
 
 		title, desc, err := mantisClient.FetchIssueSummary(issueID)
 		if err != nil {
-			slog.Warn("failed to fetch mantis issue", "id", issueID, "error", err)
+			slog.Warn("Mantis issue 擴充失敗", "phase", "失敗", "id", issueID, "error", err)
 			continue
 		}
 
-		slog.Info("enriched mantis issue", "id", issueID, "title", title)
+		slog.Info("Mantis issue 已擴充", "phase", "完成", "id", issueID, "title", title)
 		appendix.WriteString(fmt.Sprintf("\n\n--- Mantis #%s: %s ---\n%s\n[原始連結](%s)", issueID, title, desc, cleanURL))
 	}
 

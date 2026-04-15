@@ -17,12 +17,14 @@ type RepoDiscovery struct {
 	cache   []string
 	fetched time.Time
 	ttl     time.Duration
+	logger  *slog.Logger
 }
 
-func NewRepoDiscovery(token string) *RepoDiscovery {
+func NewRepoDiscovery(token string, logger *slog.Logger) *RepoDiscovery {
 	return &RepoDiscovery{
 		client: gh.NewClient(nil).WithAuthToken(token),
 		ttl:    5 * time.Minute,
+		logger: logger,
 	}
 }
 
@@ -57,7 +59,7 @@ func (d *RepoDiscovery) ListRepos(ctx context.Context) ([]string, error) {
 		opts.Page = resp.NextPage
 	}
 
-	slog.Info("discovered GitHub repos", "count", len(allRepos))
+	d.logger.Info("探索到 GitHub repos", "phase", "完成", "count", len(allRepos))
 
 	d.mu.Lock()
 	d.cache = allRepos

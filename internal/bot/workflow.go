@@ -196,7 +196,7 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 func (w *Workflow) HandleRepoSuggestion(query string) []string {
 	repos, err := w.repoDiscovery.SearchRepos(context.Background(), query)
 	if err != nil {
-		slog.Warn("repo search failed", "error", err)
+		slog.Warn("Repo 搜尋失敗", "phase", "失敗", "error", err)
 		return nil
 	}
 	return repos
@@ -354,7 +354,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		w.clearDedup(pt)
 		return
 	}
-	pt.Logger.Info("thread context read", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
+	pt.Logger.Info("訊息串已讀取", "phase", "處理中", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
 
 	// 2. Enrich messages.
 	var threadMsgs []ThreadMessage
@@ -398,7 +398,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		Reporter:         pt.Reporter,
 		Prompt:           w.cfg.Prompt,
 	})
-	pt.Logger.Info("prompt built", "length", len(prompt))
+	pt.Logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
 
 	// 5. Build attachment metadata for queue.
 	var attachMeta []queue.AttachmentMeta
@@ -465,7 +465,7 @@ func (w *Workflow) loadSkills(ctx context.Context) map[string]*queue.SkillPayloa
 	}
 	skills, err := w.skillProvider.LoadAll(ctx)
 	if err != nil {
-		slog.Warn("failed to load skills for job", "error", err)
+		slog.Warn("載入 skill 失敗", "phase", "失敗", "error", err)
 		return nil
 	}
 	return skills

@@ -11,6 +11,7 @@ import (
 	"agentdock/internal/bot"
 	"agentdock/internal/config"
 	ghclient "agentdock/internal/github"
+	"agentdock/internal/logging"
 	"agentdock/internal/queue"
 	"agentdock/internal/worker"
 
@@ -38,7 +39,8 @@ func init() {
 func runWorker(cfg *config.Config) error {
 	// Preflight runs in PersistentPreRunE. slog initialized AFTER preflight
 	// to keep interactive output clean.
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{
 		Addr:     cfg.Redis.Addr,
@@ -49,14 +51,15 @@ func runWorker(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to Redis: %w", err)
 	}
-	slog.Info("connected to Redis", "addr", cfg.Redis.Addr)
+	appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
 
 	jobStore := queue.NewMemJobStore() // local ephemeral store for in-flight jobs
 
 	bundle := queue.NewRedisBundle(rdb, jobStore, "triage")
 
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
-	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token)
+	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
+	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
 
 	// Collect skill dirs.
 	var skillDirs []string
@@ -73,6 +76,7 @@ func runWorker(cfg *config.Config) error {
 		hostname = "unknown"
 	}
 
+	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 	pool := worker.NewPool(worker.Config{
 		Queue:          bundle.Queue,
 		Attachments:    bundle.Attachments,
@@ -86,17 +90,18 @@ func runWorker(cfg *config.Config) error {
 		Commands:       bundle.Commands,
 		Status:         bundle.Status,
 		StatusInterval: cfg.Queue.StatusInterval,
+		Logger:         workerLogger,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pool.Start(ctx)
-	slog.Info("worker started", "workers", cfg.Workers.Count)
+	appLogger.Info("Worker 已啟動", "phase", "完成", "workers", cfg.Workers.Count)
 
 	// Wait for SIGTERM/SIGINT.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	sig := <-sigCh
-	slog.Info("shutting down", "signal", sig)
+	appLogger.Info("正在關閉", "phase", "完成", "signal", sig)
 	cancel()
 	bundle.Close()
 	return nil

@@ -38,7 +38,7 @@ func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 			if agent, ok := cfg.Agents[name]; ok {
 				chain = append(chain, agent)
 			} else {
-				slog.Warn("provider not found in agents config", "name", name)
+				slog.Warn("Provider 未找到", "phase", "失敗", "name", name)
 			}
 		}
 	} else if cfg.ActiveAgent != "" {
@@ -54,17 +54,17 @@ func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string, opts RunOptions) (string, error) {
 	var errs []string
 	for i, agent := range r.agents {
-		logger.Info("trying agent", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
+		logger.Info("嘗試 agent", "phase", "處理中", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
 		output, err := r.runOne(ctx, logger, agent, workDir, prompt, opts)
 		if err != nil {
-			logger.Warn("agent failed", "command", agent.Command, "index", i, "error", err)
+			logger.Warn("Agent 失敗", "phase", "失敗", "command", agent.Command, "index", i, "error", err)
 			errs = append(errs, fmt.Sprintf("%s: %s", agent.Command, err))
 			continue
 		}
-		logger.Info("agent succeeded", "command", agent.Command, "output_len", len(output))
+		logger.Info("Agent 執行成功", "phase", "完成", "command", agent.Command, "output_len", len(output))
 		return output, nil
 	}
-	logger.Error("all agents exhausted", "errors", strings.Join(errs, "; "))
+	logger.Error("所有 agent 已耗盡", "phase", "失敗", "errors", strings.Join(errs, "; "))
 	return "", fmt.Errorf("all agents failed: %s", strings.Join(errs, "; "))
 }
 
@@ -96,7 +96,7 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 				args = append(args, a)
 			}
 		}
-		logger.Info("prompt too large for args, using stdin", "prompt_len", len(prompt))
+		logger.Info("Prompt 過大，改用 stdin", "phase", "處理中", "prompt_len", len(prompt))
 	} else {
 		args = substitutePrompt(agent.Args, prompt)
 	}
@@ -132,7 +132,7 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 	if opts.OnStarted != nil {
 		opts.OnStarted(cmd.Process.Pid, agent.Command)
 	}
-	logger.Info("agent process started", "command", agent.Command, "pid", cmd.Process.Pid)
+	logger.Info("Agent process 已啟動", "phase", "處理中", "command", agent.Command, "pid", cmd.Process.Pid)
 
 	// Read stdout in a goroutine; wait for it before cmd.Wait().
 	var output string

@@ -143,7 +143,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.Workers.Count <= 0 {
 		if cfg.MaxConcurrent > 0 {
 			cfg.Workers.Count = cfg.MaxConcurrent
-			slog.Warn("max_concurrent is deprecated, use workers.count instead")
+			slog.Warn("max_concurrent 已棄用，請改用 workers.count", "phase", "失敗")
 		} else {
 			cfg.Workers.Count = 3
 		}

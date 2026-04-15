@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -55,7 +56,7 @@ func TestResultListener_CompletedCreatesIssue(t *testing.T) {
 	slackMock := &mockSlackPoster{}
 	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/1"}
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil)
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -95,7 +96,7 @@ func TestResultListener_FailedPostsError(t *testing.T) {
 
 	slackMock := &mockSlackPoster{}
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil)
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -131,7 +132,7 @@ func TestResultListener_LowConfidenceRejects(t *testing.T) {
 
 	slackMock := &mockSlackPoster{}
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil)
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -169,7 +170,7 @@ func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 	dedupCleared := false
 
 	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil,
-		func(channelID, threadTS string) { dedupCleared = true })
+		func(channelID, threadTS string) { dedupCleared = true }, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -208,7 +209,7 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 	dedupCleared := false
 
 	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil,
-		func(channelID, threadTS string) { dedupCleared = true })
+		func(channelID, threadTS string) { dedupCleared = true }, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -252,7 +253,7 @@ func TestResultListener_DedupDropsDuplicateResult(t *testing.T) {
 	slackMock := &mockSlackPoster{}
 
 	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil,
-		func(channelID, threadTS string) {})
+		func(channelID, threadTS string) {}, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

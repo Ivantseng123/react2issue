@@ -31,14 +31,14 @@ type executionDeps struct {
 	skillDirs   []string
 }
 
-func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions) *queue.JobResult {
+func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions, logger *slog.Logger) *queue.JobResult {
 	startedAt := time.Now()
-	logger := slog.With("job_id", job.ID, "repo", job.Repo)
+	logger = logger.With("job_id", job.ID, "repo", job.Repo)
 
 	// Resolve attachments (blocks until Prepare completes on app side).
 	var attachments []queue.AttachmentReady
 	if len(job.Attachments) > 0 {
-		logger.Info("resolving attachments", "count", len(job.Attachments))
+		logger.Info("解析附件中", "phase", "處理中", "count", len(job.Attachments))
 		var err error
 		attachments, err = deps.attachments.Resolve(ctx, job.ID)
 		if err != nil {
@@ -47,12 +47,12 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	}
 
 	// Clone/fetch repo.
-	logger.Info("preparing repo", "branch", job.Branch)
+	logger.Info("準備 repo 中", "phase", "處理中", "branch", job.Branch)
 	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch)
 	if err != nil {
 		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err))
 	}
-	logger.Info("repo ready", "path", repoPath)
+	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath)
 
 	// Copy attachments to repo workspace.
 	for _, att := range attachments {
@@ -63,7 +63,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 
 	// Mount skills to all agent skill directories.
 	if len(job.Skills) > 0 {
-		logger.Info("mounting skills", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
+		logger.Info("掛載 skill 中", "phase", "處理中", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
 		for _, sd := range deps.skillDirs {
 			if err := mountSkills(repoPath, job.Skills, sd); err != nil {
 				return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err))
@@ -71,17 +71,17 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 			defer cleanupSkills(repoPath, job.Skills, sd)
 		}
 	} else {
-		logger.Warn("no skills in job payload")
+		logger.Warn("工作中無 skill payload", "phase", "處理中")
 	}
 
 	// Execute agent.
 	deps.store.UpdateStatus(job.ID, queue.JobRunning)
-	logger.Info("executing agent")
+	logger.Info("執行 agent 中", "phase", "處理中")
 	output, err := deps.runner.Run(ctx, repoPath, job.Prompt, opts)
 	if err != nil {
 		return failedResult(job, startedAt, err)
 	}
-	logger.Info("agent finished", "output_len", len(output))
+	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
 
 	// Parse agent output.
 	parsed, err := bot.ParseAgentOutput(output)
@@ -90,10 +90,10 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		if len(truncated) > 2000 {
 			truncated = truncated[:2000] + "…(truncated)"
 		}
-		logger.Warn("parse failed, dumping raw output", "output", truncated)
+		logger.Warn("解析失敗，輸出原始內容", "phase", "失敗", "output", truncated)
 		return failedResult(job, startedAt, fmt.Errorf("parse failed: %w", err))
 	}
-	logger.Info("parse succeeded", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
+	logger.Info("解析成功", "phase", "完成", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
 
 	return &queue.JobResult{
 		JobID:      job.ID,

@@ -303,7 +303,7 @@ reactions:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logBuf.String(), "unknown config key") || !strings.Contains(logBuf.String(), "reactions") {
+	if !strings.Contains(logBuf.String(), "未知設定鍵") || !strings.Contains(logBuf.String(), "reactions") {
 		t.Errorf("expected warn about unknown key 'reactions', got log:\n%s", logBuf.String())
 	}
 }

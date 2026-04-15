@@ -7,12 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/slack-go/slack"
 )
 
 type Client struct {
-	api *slack.Client
+	api    *slack.Client
+	logger *slog.Logger
 }
 
 // ImageData holds a downloaded image for vision processing.
@@ -34,9 +36,10 @@ const (
 	maxImageCount = 5
 )
 
-func NewClient(botToken string) *Client {
+func NewClient(botToken string, logger *slog.Logger) *Client {
 	return &Client{
-		api: slack.New(botToken),
+		api:    slack.New(botToken),
+		logger: logger,
 	}
 }
 
@@ -70,7 +73,7 @@ func (c *Client) FetchMessage(channelID, messageTS string) (FetchedMessage, erro
 		if isTextFile(f.Filetype, f.Mimetype) {
 			content, dlErr := c.downloadFile(f.URLPrivateDownload)
 			if dlErr != nil {
-				slog.Warn("failed to download slack file", "name", f.Name, "error", dlErr)
+				c.logger.Warn("Slack 檔案下載失敗", "phase", "失敗", "name", f.Name, "error", dlErr)
 				text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
 				continue
 			}
@@ -82,13 +85,13 @@ func (c *Client) FetchMessage(channelID, messageTS string) (FetchedMessage, erro
 		} else if f.Filetype == "xlsx" {
 			data, dlErr := c.downloadBytes(f.URLPrivateDownload)
 			if dlErr != nil {
-				slog.Warn("failed to download xlsx", "name", f.Name, "error", dlErr)
+				c.logger.Warn("XLSX 下載失敗", "phase", "失敗", "name", f.Name, "error", dlErr)
 				text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
 				continue
 			}
 			parsed, parseErr := parseXlsx(data, defaultMaxXlsxRows)
 			if parseErr != nil {
-				slog.Warn("failed to parse xlsx", "name", f.Name, "error", parseErr)
+				c.logger.Warn("XLSX 解析失敗", "phase", "失敗", "name", f.Name, "error", parseErr)
 				text += fmt.Sprintf("\n\n[附件: %s](%s)", f.Name, f.Permalink)
 				continue
 			}
@@ -96,12 +99,12 @@ func (c *Client) FetchMessage(channelID, messageTS string) (FetchedMessage, erro
 		} else if isVisionImage(f.Filetype) && len(images) < maxImageCount {
 			data, dlErr := c.downloadBytes(f.URLPrivateDownload)
 			if dlErr != nil {
-				slog.Warn("failed to download image", "name", f.Name, "error", dlErr)
+				c.logger.Warn("圖片下載失敗", "phase", "失敗", "name", f.Name, "error", dlErr)
 				text += fmt.Sprintf("\n\n[圖片: %s](%s)", f.Name, f.Permalink)
 				continue
 			}
 			if len(data) > maxImageSize {
-				slog.Warn("image too large, skipping", "name", f.Name, "size", len(data))
+				c.logger.Warn("圖片過大，跳過", "phase", "失敗", "name", f.Name, "size", len(data))
 				text += fmt.Sprintf("\n\n[圖片: %s](%s)", f.Name, f.Permalink)
 				continue
 			}
@@ -171,7 +174,7 @@ func isVisionImage(filetype string) bool {
 func (c *Client) ResolveUser(userID string) string {
 	user, err := c.api.GetUserInfo(userID)
 	if err != nil {
-		slog.Warn("failed to resolve user", "userID", userID, "error", err)
+		c.logger.Warn("使用者名稱解析失敗", "phase", "失敗", "user_id", userID, "error", err)
 		return userID
 	}
 	if user.Profile.DisplayName != "" {
@@ -198,7 +201,7 @@ func (c *Client) GetChannelName(channelID string) string {
 		ChannelID: channelID,
 	})
 	if err != nil {
-		slog.Warn("failed to resolve channel name", "channelID", channelID, "error", err)
+		c.logger.Warn("頻道名稱解析失敗", "phase", "失敗", "channel_id", channelID, "error", err)
 		return channelID
 	}
 	return "#" + info.Name
@@ -342,6 +345,7 @@ type ThreadRawMessage struct {
 
 // FetchThreadContext reads all messages in a thread up to the trigger point.
 func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]ThreadRawMessage, error) {
+	start := time.Now()
 	if limit <= 0 {
 		limit = 50
 	}
@@ -370,7 +374,9 @@ func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID st
 		cursor = nextCursor
 	}
 
-	return filterThreadMessages(allMessages, triggerTS, botUserID), nil
+	result := filterThreadMessages(allMessages, triggerTS, botUserID)
+	c.logger.Debug("訊息串內容已讀取", "phase", "處理中", "channel_id", channelID, "message_count", len(result), "duration_ms", time.Since(start).Milliseconds())
+	return result, nil
 }
 
 // filterThreadMessages filters out bot messages and messages at/after the trigger.
@@ -409,7 +415,7 @@ func (c *Client) DownloadAttachments(messages []ThreadRawMessage, tempDir string
 		for _, f := range msg.Files {
 			data, err := c.downloadBytes(f.URLPrivateDownload)
 			if err != nil {
-				slog.Warn("attachment download failed", "name", f.Name, "error", err)
+				c.logger.Warn("附件下載失敗", "phase", "失敗", "name", f.Name, "error", err)
 				attachments = append(attachments, AttachmentDownload{
 					Name:   f.Name,
 					Type:   classifyAttachment(f.Filetype, f.Mimetype),
@@ -420,7 +426,7 @@ func (c *Client) DownloadAttachments(messages []ThreadRawMessage, tempDir string
 
 			path := filepath.Join(tempDir, f.Name)
 			if err := os.WriteFile(path, data, 0644); err != nil {
-				slog.Warn("attachment write failed", "name", f.Name, "error", err)
+				c.logger.Warn("附件寫入失敗", "phase", "失敗", "name", f.Name, "error", err)
 				continue
 			}
 
