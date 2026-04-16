@@ -97,10 +97,12 @@ brews:
     repository:
       owner: Ivantseng123
       name: homebrew-tap
-      branch: main
+      branch: "bump-agentdock-{{.Tag}}"
       token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
       pull_request:
         enabled: true
+        base:
+          branch: main
     directory: Formula
     commit_author:
       name: Ivantseng123
