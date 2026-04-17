@@ -25,7 +25,9 @@ const pendingTimeout = 1 * time.Minute
 // satisfies it; tests implement it with a stub.
 type slackAPI interface {
 	PostMessage(channelID, text, threadTS string) error
+	PostMessageWithTS(channelID, text, threadTS string) (string, error)
 	PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
+	UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value string) error
 	PostSelector(channelID, prompt, actionPrefix string, options []string, threadTS string) (string, error)
 	PostSelectorWithBack(channelID, prompt, actionPrefix string, options []string, threadTS, backActionID, backLabel string) (string, error)
 	PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error)
@@ -69,7 +71,7 @@ type Workflow struct {
 	attachments   queue.AttachmentStore
 	results       queue.ResultBus
 	skillProvider SkillProvider
-	secretKey    []byte // decoded AES key, nil if not configured
+	secretKey     []byte // decoded AES key, nil if not configured
 
 	mu        sync.Mutex
 	pending   map[string]*pendingTriage
@@ -388,7 +390,14 @@ func (w *Workflow) HandleDescriptionSubmit(selectorMsgTS, extraText string) {
 func (w *Workflow) runTriage(pt *pendingTriage) {
 	ctx := context.Background()
 
-	w.slack.PostMessage(pt.ChannelID, ":mag: 正在排入處理佇列...", pt.ThreadTS)
+	// Post the lifecycle status message once; later stages edit it in place
+	// instead of posting new messages. If posting fails we fall back to a
+	// second post after submit (rare — Slack outage etc.).
+	statusMsgTS, err := w.slack.PostMessageWithTS(pt.ChannelID, ":mag: 正在排入處理佇列...", pt.ThreadTS)
+	if err != nil {
+		pt.Logger.Warn("狀態訊息發送失敗，後續改為另起新訊息", "phase", "失敗", "error", err)
+		statusMsgTS = ""
+	}
 
 	// 1. Read thread context.
 	botUserID := ""
@@ -401,17 +410,23 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	pt.Logger.Info("訊息串已讀取", "phase", "處理中", "messages", len(rawMsgs), "repo", pt.SelectedRepo)
 
 	// 2. Enrich messages.
-	var threadMsgs []ThreadMessage
+	var threadMsgs []queue.ThreadMessage
 	for _, m := range rawMsgs {
 		text := m.Text
 		if w.mantisClient != nil {
 			text = enrichMessage(text, w.mantisClient)
 		}
-		threadMsgs = append(threadMsgs, ThreadMessage{
+		threadMsgs = append(threadMsgs, queue.ThreadMessage{
 			User:      w.slack.ResolveUser(m.User),
 			Timestamp: m.Timestamp,
 			Text:      text,
 		})
+	}
+
+	if len(threadMsgs) == 0 {
+		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Thread has no messages to process")
+		w.clearDedup(pt)
+		return
 	}
 
 	// 3. Collect attachment metadata.
@@ -425,16 +440,20 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	downloads := w.slack.DownloadAttachments(rawMsgs, tempDir)
 
-	// 4. Build prompt.
-	prompt := BuildPrompt(PromptInput{
-		ThreadMessages:   threadMsgs,
-		ExtraDescription: pt.ExtraDesc,
-		Branch:           pt.SelectedBranch,
-		Channel:          pt.ChannelName,
-		Reporter:         pt.Reporter,
-		Prompt:           w.cfg.Prompt,
-	})
-	pt.Logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
+	// 4. Assemble structured prompt context (worker renders the actual prompt).
+	promptCtx := AssemblePromptContext(
+		threadMsgs,
+		pt.ExtraDesc,
+		pt.ChannelName,
+		pt.Reporter,
+		pt.SelectedBranch,
+		w.cfg.Prompt,
+	)
+	pt.Logger.Info("Prompt context 已組裝", "phase", "處理中",
+		"thread_messages", len(promptCtx.ThreadMessages),
+		"has_extra_desc", promptCtx.ExtraDescription != "",
+	)
+	pt.Logger.Debug("Prompt context 詳細內容", "phase", "處理中", "prompt_context", promptCtx)
 
 	// 5. Build attachment metadata and payloads for queue.
 	var attachMeta []queue.AttachmentMeta
@@ -462,19 +481,19 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 
 	// 6. Submit to queue.
 	job := &queue.Job{
-		ID:          pt.RequestID,
-		Priority:    w.channelPriority(pt.ChannelID),
-		ChannelID:   pt.ChannelID,
-		ThreadTS:    pt.ThreadTS,
-		UserID:      pt.UserID,
-		Repo:        pt.SelectedRepo,
-		Branch:      pt.SelectedBranch,
-		CloneURL:    cleanCloneURL(pt.SelectedRepo),
-		Prompt:      prompt,
-		Skills:      w.loadSkills(ctx),
-		RequestID:   pt.RequestID,
-		Attachments: attachMeta,
-		SubmittedAt: time.Now(),
+		ID:            pt.RequestID,
+		Priority:      w.channelPriority(pt.ChannelID),
+		ChannelID:     pt.ChannelID,
+		ThreadTS:      pt.ThreadTS,
+		UserID:        pt.UserID,
+		Repo:          pt.SelectedRepo,
+		Branch:        pt.SelectedBranch,
+		CloneURL:      cleanCloneURL(pt.SelectedRepo),
+		PromptContext: &promptCtx,
+		Skills:        w.loadSkills(ctx),
+		RequestID:     pt.RequestID,
+		Attachments:   attachMeta,
+		SubmittedAt:   time.Now(),
 	}
 
 	if len(w.secretKey) > 0 && len(w.cfg.Secrets) > 0 {
@@ -526,9 +545,25 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 	} else {
 		statusMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
 	}
-	if msgTS, err := w.slack.PostMessageWithButton(pt.ChannelID,
-		statusMsg, pt.ThreadTS, "cancel_job", "取消", job.ID); err == nil {
-		job.StatusMsgTS = msgTS
+
+	// Prefer editing the earlier ":mag: 排入..." message so the thread has a
+	// single lifecycle message (排入 → 處理中 → 已建立 issue). Fall back to a
+	// fresh post if the earlier one failed.
+	if statusMsgTS != "" {
+		if err := w.slack.UpdateMessageWithButton(pt.ChannelID, statusMsgTS,
+			statusMsg, "cancel_job", "取消", job.ID); err != nil {
+			pt.Logger.Warn("狀態訊息更新失敗，改為另起新訊息", "phase", "失敗", "error", err)
+			statusMsgTS = ""
+		}
+	}
+	if statusMsgTS == "" {
+		if msgTS, err := w.slack.PostMessageWithButton(pt.ChannelID,
+			statusMsg, pt.ThreadTS, "cancel_job", "取消", job.ID); err == nil {
+			statusMsgTS = msgTS
+		}
+	}
+	if statusMsgTS != "" {
+		job.StatusMsgTS = statusMsgTS
 		w.store.Put(job) // update with StatusMsgTS
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.

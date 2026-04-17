@@ -33,7 +33,7 @@ type Config struct {
 	Logging           LoggingConfig            `yaml:"logging"`
 	Queue             QueueConfig              `yaml:"queue"`
 	ChannelPriority   map[string]int           `yaml:"channel_priority"`
-	Workers           WorkersConfig            `yaml:"workers"`
+	Worker            WorkerConfig             `yaml:"worker"`
 	Attachments       AttachmentsConfig        `yaml:"attachments"`
 	Redis             RedisConfig              `yaml:"redis"`
 	SkillsConfig      string                   `yaml:"skills_config"`
@@ -72,8 +72,13 @@ type QueueConfig struct {
 	StatusInterval   time.Duration `yaml:"status_interval"`
 }
 
-type WorkersConfig struct {
-	Count int `yaml:"count"`
+type WorkerConfig struct {
+	Count  int                `yaml:"count"`
+	Prompt WorkerPromptConfig `yaml:"prompt"`
+}
+
+type WorkerPromptConfig struct {
+	ExtraRules []string `yaml:"extra_rules"`
 }
 
 type AttachmentsConfig struct {
@@ -89,9 +94,22 @@ type RedisConfig struct {
 	TLS      bool   `yaml:"tls"`
 }
 
+// defaultPromptGoal is the hardcoded Goal applied when the operator hasn't set
+// one in YAML. Kept as a const so tests and applyDefaults share a single source.
+const defaultPromptGoal = "Use the /triage-issue skill to investigate and produce a triage result."
+
 type PromptConfig struct {
-	Language   string   `yaml:"language"`
-	ExtraRules []string `yaml:"extra_rules"`
+	Language         string   `yaml:"language"`
+	Goal             string   `yaml:"goal"`
+	OutputRules      []string `yaml:"output_rules"`
+	AllowWorkerRules *bool    `yaml:"allow_worker_rules"` // tri-state: nil = default true
+}
+
+// IsWorkerRulesAllowed returns whether worker-side ExtraRules should be
+// rendered into the prompt. Nil pointer is treated as true (default) so
+// callers don't have to duplicate the applyDefaults invariant.
+func (p PromptConfig) IsWorkerRulesAllowed() bool {
+	return p.AllowWorkerRules == nil || *p.AllowWorkerRules
 }
 
 type ChannelConfig struct {
@@ -144,15 +162,19 @@ type LoggingConfig struct {
 }
 
 func applyDefaults(cfg *Config) {
-	// Workers.Count must be resolved before MaxConcurrent gets its own default,
+	// Worker.Count must be resolved before MaxConcurrent gets its own default,
 	// so that we can distinguish "user set max_concurrent" from "default applied".
-	if cfg.Workers.Count <= 0 {
+	if cfg.Worker.Count <= 0 {
 		if cfg.MaxConcurrent > 0 {
-			cfg.Workers.Count = cfg.MaxConcurrent
-			slog.Warn("max_concurrent 已棄用，請改用 workers.count", "phase", "失敗")
+			cfg.Worker.Count = cfg.MaxConcurrent
+			slog.Warn("max_concurrent 已棄用，請改用 worker.count", "phase", "失敗")
 		} else {
-			cfg.Workers.Count = 3
+			cfg.Worker.Count = 3
 		}
+	}
+
+	if cfg.LogLevel == "" {
+		cfg.LogLevel = "info"
 	}
 
 	if cfg.MaxConcurrent <= 0 {
@@ -224,6 +246,17 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Attachments.TTL <= 0 {
 		cfg.Attachments.TTL = 30 * time.Minute
+	}
+	if cfg.Prompt.Goal == "" {
+		cfg.Prompt.Goal = defaultPromptGoal
+	}
+	// OutputRules default is empty slice — no <output_rules> section rendered unless operator sets values.
+	if cfg.Prompt.OutputRules == nil {
+		cfg.Prompt.OutputRules = []string{}
+	}
+	if cfg.Prompt.AllowWorkerRules == nil {
+		t := true
+		cfg.Prompt.AllowWorkerRules = &t
 	}
 	resolveSecrets(cfg)
 }
@@ -335,4 +368,3 @@ func DecodeSecretKey(hexKey string) ([]byte, error) {
 	}
 	return decoded, nil
 }
-

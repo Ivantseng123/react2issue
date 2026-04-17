@@ -5,6 +5,8 @@
 跑 `agentdock init -c /tmp/sample.yaml` 可產生含所有欄位的範本（加 `-i` 進入互動式填入）。完整 schema 見下方：
 
 ```yaml
+log_level: info                       # console / stderr 輸出層級：debug | info | warn | error（預設 info）
+
 auto_bind: true
 
 channel_defaults:
@@ -37,8 +39,11 @@ queue:
   prepare_timeout: 3m                 # clone/setup 超時
   status_interval: 5s                 # worker 回報狀態頻率
 
-workers:
+worker:
   count: 3                            # worker pool 大小
+  prompt:
+    extra_rules:                      # worker 層執行時規則
+      - "列出所有相關的檔案名稱與完整路徑"
 
 # Redis 設定（transport: redis 時使用）
 # redis:
@@ -59,9 +64,46 @@ channel_priority:
 
 prompt:
   language: "繁體中文"
-  extra_rules:
-    - "列出所有相關的檔案名稱與完整路徑"
+  goal: "使用 /triage-issue skill 調查 codebase 並產出結構化分類結果"
+  output_rules: []                    # app 層輸出規則（預設空，不渲染此段落）
+  allow_worker_rules: true            # 是否讓 worker.prompt.extra_rules 生效
 ```
+
+## Log 層級
+
+兩個獨立的 log 層級，分別控制 console 與檔案輸出：
+
+| 欄位 | 去哪 | 預設 |
+|---|---|---|
+| `log_level` | console / stderr（`./agentdock app` 輸出） | `info` |
+| `logging.level` | 滾動檔案 `logs/YYYY-MM-DD.jsonl` | `debug` |
+
+支援值：`debug` / `info` / `warn` / `error`。
+
+### 三種調法
+
+```yaml
+# 1. YAML（持久）
+log_level: debug
+```
+
+```bash
+# 2. CLI flag（一次性）
+./agentdock app -c ./config.yaml --log-level debug
+```
+
+```bash
+# 3. 環境變數
+LOG_LEVEL=debug ./agentdock app -c ./config.yaml   # 若有設 env mapping
+```
+
+### 什麼時候開 debug
+
+- 診斷 prompt 組裝：worker 端印出「Prompt XML 內容」完整 XML；app 端印出「Prompt context 詳細內容」結構化 context
+- 追 Slack 附件下載細節
+- 排查 skill 載入問題
+
+Debug log 量大，平常跑 `info` 就夠用。檔案端預設 `debug`（jsonl 可用 `jq -r` 事後翻查），console 端預設 `info` 讓你看得清重點。
 
 ## Secret 管理
 

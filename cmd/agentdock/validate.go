@@ -13,8 +13,8 @@ import (
 func validate(cfg *config.Config) error {
 	var errs []string
 
-	if cfg.Queue.Transport != "redis" && cfg.Workers.Count < 1 {
-		errs = append(errs, "workers.count must be >= 1")
+	if cfg.Queue.Transport != "redis" && cfg.Worker.Count < 1 {
+		errs = append(errs, "worker.count must be >= 1")
 	}
 	if cfg.Queue.Capacity < 1 {
 		errs = append(errs, "queue.capacity must be >= 1")

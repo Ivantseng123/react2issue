@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -50,14 +51,14 @@ func TestBuildKoanf_DefaultsLayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildKoanf: %v", err)
 	}
-	if cfg.Workers.Count != 3 {
-		t.Errorf("Workers.Count = %d, want 3", cfg.Workers.Count)
+	if cfg.Worker.Count != 3 {
+		t.Errorf("Worker.Count = %d, want 3", cfg.Worker.Count)
 	}
 	if cfg.Queue.Transport != "inmem" {
 		t.Errorf("Queue.Transport = %q, want inmem", cfg.Queue.Transport)
 	}
-	if got := kEff.Int("workers.count"); got != 3 {
-		t.Errorf("kEff workers.count = %d, want 3", got)
+	if got := kEff.Int("worker.count"); got != 3 {
+		t.Errorf("kEff worker.count = %d, want 3", got)
 	}
 }
 
@@ -65,7 +66,7 @@ func TestBuildKoanf_FileLayerOverridesDefaults(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 7\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -80,8 +81,8 @@ func TestBuildKoanf_FileLayerOverridesDefaults(t *testing.T) {
 	if !delta.FileExisted {
 		t.Error("FileExisted should be true")
 	}
-	if cfg.Workers.Count != 7 {
-		t.Errorf("Workers.Count = %d, want 7", cfg.Workers.Count)
+	if cfg.Worker.Count != 7 {
+		t.Errorf("Worker.Count = %d, want 7", cfg.Worker.Count)
 	}
 }
 
@@ -184,7 +185,7 @@ func TestSaveConfig_NoDelta_NoWrite(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 7\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,7 +206,7 @@ func TestSaveConfig_FlagOverride_Writes(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 7\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -233,7 +234,7 @@ func TestSaveConfig_PreflightPrompt_Writes(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 3\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 3\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +283,7 @@ func TestBuildKoanf_WarnsOnUnknownKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.yaml")
 	yamlBody := `
-workers:
+worker:
   count: 3
 reactions:
   approved: thumbsup
@@ -367,5 +368,89 @@ func TestResolveConfigPath_ExpandsTilde(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, home) {
 		t.Errorf("resolved path should start with home: %q", got)
+	}
+}
+
+// captureLogs temporarily replaces the default slog handler to capture all
+// output, then returns the captured logs as a string.
+func captureLogs(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(orig)
+	fn()
+	return buf.String()
+}
+
+// loadConfigTestHelper writes a YAML string to a temp file, then calls buildKoanf
+// to load it, returning the parsed Config.
+func loadConfigTestHelper(t *testing.T, yamlStr string) *config.Config {
+	t.Helper()
+	tmp := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(tmp, []byte(yamlStr), 0600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+	cmd := &cobra.Command{}
+	addPersistentFlags(cmd)
+	cfg, _, _, _, err := buildKoanf(cmd, tmp)
+	if err != nil {
+		t.Fatalf("buildKoanf: %v", err)
+	}
+	return cfg
+}
+
+func TestConfig_LegacyPromptExtraRules_Warns(t *testing.T) {
+	yaml := `
+prompt:
+  language: zh-TW
+  extra_rules:
+    - "legacy rule"
+`
+	logs := captureLogs(t, func() {
+		loadConfigTestHelper(t, yaml)
+	})
+	if !strings.Contains(logs, "prompt.extra_rules") {
+		t.Errorf("expected migration warn mentioning 'prompt.extra_rules', got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "worker.prompt.extra_rules") {
+		t.Errorf("expected warn to point at new location, got:\n%s", logs)
+	}
+}
+
+func TestConfig_LegacyWorkersCount_Warns(t *testing.T) {
+	yaml := `
+workers:
+  count: 5
+`
+	logs := captureLogs(t, func() {
+		loadConfigTestHelper(t, yaml)
+	})
+	if !strings.Contains(logs, "workers.count") {
+		t.Errorf("expected migration warn mentioning 'workers.count', got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "worker.count") {
+		t.Errorf("expected warn to point at new location, got:\n%s", logs)
+	}
+}
+
+// TestConfig_NoLegacyKeys_NoMigrationWarn locks in the kFile isolation: with a
+// clean, already-migrated YAML, the migration warn must not fire. This guards
+// against a future revert to `warnLegacyMigrationKeys(kEff)` — kEff includes
+// defaults which round-trip extra_rules: [], so the warn would fire on every
+// clean startup without kFile isolation.
+func TestConfig_NoLegacyKeys_NoMigrationWarn(t *testing.T) {
+	yaml := `
+worker:
+  count: 5
+  prompt:
+    extra_rules:
+      - "new location"
+`
+	logs := captureLogs(t, func() {
+		loadConfigTestHelper(t, yaml)
+	})
+	if strings.Contains(logs, "prompt-refactor") {
+		t.Errorf("clean YAML should not trigger migration warn, got:\n%s", logs)
 	}
 }

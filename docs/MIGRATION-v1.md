@@ -98,6 +98,93 @@ to defaults. Now the startup fails with a clear error message.
 If you have config files with intentionally-invalid values that v0.x
 silently fixed, update them to valid values before upgrading.
 
+## Worker prompt refactor (#61) — breaking YAML changes
+
+As of this release (worker prompt refactor), two YAML renaming changes are required:
+
+### 1. Rename `workers:` → `worker:` and move `count` inside
+
+The top-level `workers:` section is now `worker:`, with `count` inside:
+
+**Before:**
+```yaml
+workers:
+  count: 3
+```
+
+**After:**
+```yaml
+worker:
+  count: 3
+```
+
+### 2. Move `prompt.extra_rules` → `worker.prompt.extra_rules`
+
+The `prompt.extra_rules` array (agent execution rules) moved from the app-controlled top-level `prompt:` section to the worker-controlled `worker.prompt:` section. This aligns responsibility: app controls *what* the agent should do (goal, output format), worker controls *how* it executes locally (extra rules).
+
+**Before:**
+```yaml
+prompt:
+  language: zh-TW
+  extra_rules:
+    - "no guessing"
+    - "check all files"
+```
+
+**After:**
+```yaml
+prompt:
+  language: zh-TW
+worker:
+  prompt:
+    extra_rules:
+      - "no guessing"
+      - "check all files"
+```
+
+### Migration helper: startup warnings
+
+The app logs a specific WARN at startup if either old key is detected:
+- `prompt.extra_rules` found → point to `worker.prompt.extra_rules`
+- `workers:` found → point to `worker:`
+
+**These warnings appear only once per startup.** Values at the old paths are silently ignored (not remapped); you must edit your YAML.
+
+### Optional new fields (have sensible defaults)
+
+You can now also configure these at the app level (`prompt:` section):
+
+```yaml
+prompt:
+  language: "English"
+  goal: "Use the /triage-issue skill to investigate and produce a structured triage result."
+                             # default if omitted (shown above)
+  output_rules: []           # default empty; set to list of rules you want agent to follow
+  allow_worker_rules: true   # gate whether worker.prompt.extra_rules applies per job
+                             # default true; set false to disable worker rules globally
+```
+
+And at the worker level (`worker.prompt:` section):
+
+```yaml
+worker:
+  prompt:
+    extra_rules: []          # execution-time rules applied by this worker
+  count: 3                   # worker pool size
+```
+
+### Deploy procedure
+
+This refactor changed the job payload wire format. **Dual-schema support was explicitly rejected.** You must drain the queue before rolling the new binary:
+
+1. **Scale app to zero** (or manually stop it) so no new jobs arrive into the queue.
+2. **Wait for queue drain**. Check `/status` endpoint or logs until `queue_depth: 0` and no running jobs.
+3. **Deploy new binary + config** to both app and worker roles. Update your YAML files as shown above.
+4. **Start workers first**, then start the app.
+5. **Verify** the first few jobs complete successfully in logs/dashboard.
+
+Skipping the drain will cause in-flight jobs to fail when workers try to unmarshal the old job format.
+
 ## Need help?
 
 File an issue at https://github.com/Ivantseng123/agentdock/issues with
