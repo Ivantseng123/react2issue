@@ -27,7 +27,7 @@ type repoCacheAdapter struct {
 }
 
 func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
-	barePath, err := a.cache.EnsureRepo(cloneURL)
+	barePath, err := a.cache.EnsureRepo(cloneURL, "")
 	if err != nil {
 		return "", err
 	}

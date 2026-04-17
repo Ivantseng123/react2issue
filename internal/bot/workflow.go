@@ -241,7 +241,7 @@ func (w *Workflow) afterRepoSelected(pt *pendingTriage, channelCfg config.Channe
 		return
 	}
 
-	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo)
+	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo, "")
 	if err != nil {
 		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
 		return
