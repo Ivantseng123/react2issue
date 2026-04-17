@@ -351,6 +351,31 @@ func (c *Client) UpdateMessage(channelID, messageTS, text string) error {
 	return nil
 }
 
+// UpdateMessageWithButton replaces a message's text while preserving a single
+// action button (mirrors PostMessageWithButton's block structure). Used for the
+// status message where the cancel button must stay visible across updates.
+func (c *Client) UpdateMessageWithButton(
+	channelID, messageTS, text, actionID, buttonText, value string,
+) error {
+	btnBlock := slack.NewActionBlock("cancel_actions",
+		slack.NewButtonBlockElement(actionID, value,
+			slack.NewTextBlockObject("plain_text", buttonText, false, false)),
+	)
+	textBlock := slack.NewSectionBlock(
+		slack.NewTextBlockObject("mrkdwn", text, false, false), nil, nil)
+
+	start := time.Now()
+	_, _, _, err := c.api.UpdateMessage(channelID, messageTS,
+		slack.MsgOptionBlocks(textBlock, btnBlock),
+	)
+	metrics.ExternalDuration.WithLabelValues("slack", "post_message").Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "post_message").Inc()
+		return fmt.Errorf("update message with button: %w", err)
+	}
+	return nil
+}
+
 // ThreadRawMessage is a raw message from a Slack thread.
 type ThreadRawMessage struct {
 	User      string
