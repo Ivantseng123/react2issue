@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"agentdock/internal/bot"
+	"agentdock/internal/crypto"
 	"agentdock/internal/queue"
 )
 
@@ -27,11 +29,13 @@ type RepoProvider interface {
 }
 
 type executionDeps struct {
-	attachments queue.AttachmentStore
-	repoCache   RepoProvider
-	runner      Runner
-	store       queue.JobStore
-	skillDirs   []string
+	attachments   queue.AttachmentStore
+	repoCache     RepoProvider
+	runner        Runner
+	store         queue.JobStore
+	skillDirs     []string
+	secretKey     []byte
+	workerSecrets map[string]string
 }
 
 func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions, logger *slog.Logger) *queue.JobResult {
@@ -49,10 +53,40 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		}
 	}
 
+	// Decrypt and merge secrets.
+	var mergedSecrets map[string]string
+	if len(job.EncryptedSecrets) > 0 {
+		if len(deps.secretKey) == 0 {
+			return failedResult(job, startedAt, fmt.Errorf("job has encrypted secrets but worker has no secret_key configured"), "")
+		}
+		decrypted, err := crypto.Decrypt(deps.secretKey, job.EncryptedSecrets)
+		if err != nil {
+			return failedResult(job, startedAt, fmt.Errorf("decrypt secrets: %w", err), "")
+		}
+		var appSecrets map[string]string
+		if err := json.Unmarshal(decrypted, &appSecrets); err != nil {
+			return failedResult(job, startedAt, fmt.Errorf("unmarshal secrets: %w", err), "")
+		}
+		mergedSecrets = appSecrets
+	}
+	// Overlay worker secrets (worker wins)
+	if len(deps.workerSecrets) > 0 {
+		if mergedSecrets == nil {
+			mergedSecrets = make(map[string]string)
+		}
+		for k, v := range deps.workerSecrets {
+			mergedSecrets[k] = v
+		}
+	}
+
 	// Clone/fetch repo.
 	logger.Info("準備 repo 中", "phase", "處理中", "branch", job.Branch)
 	prepareStart := time.Now()
-	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch, "")
+	ghToken := ""
+	if mergedSecrets != nil {
+		ghToken = mergedSecrets["GH_TOKEN"]
+	}
+	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch, ghToken)
 	if err != nil {
 		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err), "")
 	}
@@ -88,6 +122,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	// Execute agent.
 	deps.store.UpdateStatus(job.ID, queue.JobRunning)
 	logger.Info("執行 agent 中", "phase", "處理中")
+	opts.Secrets = mergedSecrets
 	output, err := deps.runner.Run(ctx, repoPath, prompt, opts)
 	if err != nil {
 		return failedResult(job, startedAt, err, repoPath)

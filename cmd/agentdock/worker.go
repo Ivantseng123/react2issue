@@ -58,6 +58,17 @@ func runWorker(cfg *config.Config) error {
 	bundle := queue.NewRedisBundle(rdb, jobStore, "triage")
 
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
+
+	var secretKey []byte
+	if cfg.SecretKey != "" {
+		var err error
+		secretKey, err = config.DecodeSecretKey(cfg.SecretKey)
+		if err != nil {
+			return fmt.Errorf("invalid secret_key: %w", err)
+		}
+		appLogger.Info("Secret key 已載入", "phase", "完成")
+	}
+
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
 
@@ -97,6 +108,8 @@ func runWorker(cfg *config.Config) error {
 		Status:         bundle.Status,
 		StatusInterval: cfg.Queue.StatusInterval,
 		Logger:         workerLogger,
+		SecretKey:      secretKey,
+		WorkerSecrets:  cfg.Secrets,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

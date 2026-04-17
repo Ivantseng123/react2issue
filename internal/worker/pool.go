@@ -24,6 +24,8 @@ type Config struct {
 	Status         queue.StatusBus
 	StatusInterval time.Duration
 	Logger         *slog.Logger
+	SecretKey      []byte
+	WorkerSecrets  map[string]string
 }
 
 type Pool struct {
@@ -161,11 +163,13 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	p.cfg.Store.SetWorker(job.ID, wID)
 
 	deps := executionDeps{
-		attachments: p.cfg.Attachments,
-		repoCache:   p.cfg.RepoCache,
-		runner:      p.cfg.Runner,
-		store:       p.cfg.Store,
-		skillDirs:   p.cfg.SkillDirs,
+		attachments:   p.cfg.Attachments,
+		repoCache:     p.cfg.RepoCache,
+		runner:        p.cfg.Runner,
+		store:         p.cfg.Store,
+		skillDirs:     p.cfg.SkillDirs,
+		secretKey:     p.cfg.SecretKey,
+		workerSecrets: p.cfg.WorkerSecrets,
 	}
 
 	result := executeJob(jobCtx, job, deps, opts, logger)
