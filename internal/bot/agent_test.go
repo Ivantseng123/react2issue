@@ -157,6 +157,59 @@ echo "padding padding padding padding padding padding padding"
 	}
 }
 
+func TestAgentRunner_OutputFilePlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "outfile-agent")
+	// Script writes clean text to $2 (the -o path) and prints noise to stdout.
+	// Runner must return the file content, not the stdout noise.
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo "noisy stdout header"
+printf '%s' "clean answer from file" > "$2"
+echo "noisy stdout footer"
+`), 0755)
+
+	runner := NewAgentRunner([]config.AgentConfig{
+		{Command: script, Args: []string{"-o", "{output_file}", "{prompt}"}, Timeout: 5 * time.Second},
+	})
+
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test prompt", RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if output != "clean answer from file" {
+		t.Errorf("expected file content, got: %q", output)
+	}
+	if strings.Contains(output, "noisy") {
+		t.Errorf("output must not contain stdout noise, got: %q", output)
+	}
+}
+
+func TestAgentRunner_OutputFileCleanedUp(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "outfile-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+printf 'x' > "$2"
+echo "$2" > `+filepath.Join(dir, "captured-path.txt")+`
+`), 0755)
+
+	runner := NewAgentRunner([]config.AgentConfig{
+		{Command: script, Args: []string{"-o", "{output_file}", "{prompt}"}, Timeout: 5 * time.Second},
+	})
+
+	_, err := runner.Run(context.Background(), slog.Default(), dir, "p", RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	captured, err := os.ReadFile(filepath.Join(dir, "captured-path.txt"))
+	if err != nil {
+		t.Fatalf("read captured path: %v", err)
+	}
+	tmpPath := strings.TrimSpace(string(captured))
+	if _, statErr := os.Stat(tmpPath); !os.IsNotExist(statErr) {
+		t.Errorf("temp output file %q should have been removed, statErr=%v", tmpPath, statErr)
+	}
+}
+
 func TestAgentRunner_CancelShortCircuitsProviderChain(t *testing.T) {
 	runner := &AgentRunner{
 		agents: []config.AgentConfig{
