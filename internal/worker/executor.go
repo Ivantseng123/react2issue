@@ -49,7 +49,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		var err error
 		attachments, err = deps.attachments.Resolve(ctx, job.ID)
 		if err != nil {
-			return failedResult(job, startedAt, fmt.Errorf("attachments failed: %w", err), "")
+			return classifyResult(job, startedAt, fmt.Errorf("attachments failed: %w", err), "", ctx, deps.store)
 		}
 	}
 
@@ -57,15 +57,15 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	var mergedSecrets map[string]string
 	if len(job.EncryptedSecrets) > 0 {
 		if len(deps.secretKey) == 0 {
-			return failedResult(job, startedAt, fmt.Errorf("job has encrypted secrets but worker has no secret_key configured"), "")
+			return classifyResult(job, startedAt, fmt.Errorf("job has encrypted secrets but worker has no secret_key configured"), "", ctx, deps.store)
 		}
 		decrypted, err := crypto.Decrypt(deps.secretKey, job.EncryptedSecrets)
 		if err != nil {
-			return failedResult(job, startedAt, fmt.Errorf("decrypt secrets: %w", err), "")
+			return classifyResult(job, startedAt, fmt.Errorf("decrypt secrets: %w", err), "", ctx, deps.store)
 		}
 		var appSecrets map[string]string
 		if err := json.Unmarshal(decrypted, &appSecrets); err != nil {
-			return failedResult(job, startedAt, fmt.Errorf("unmarshal secrets: %w", err), "")
+			return classifyResult(job, startedAt, fmt.Errorf("unmarshal secrets: %w", err), "", ctx, deps.store)
 		}
 		mergedSecrets = appSecrets
 	}
@@ -86,9 +86,12 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	if mergedSecrets != nil {
 		ghToken = mergedSecrets["GH_TOKEN"]
 	}
+	if err := ctx.Err(); err != nil {
+		return classifyResult(job, startedAt, err, "", ctx, deps.store)
+	}
 	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch, ghToken)
 	if err != nil {
-		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err), "")
+		return classifyResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err), "", ctx, deps.store)
 	}
 	prepareSeconds := time.Since(prepareStart).Seconds()
 	logger.Info("Repo 已就緒", "phase", "處理中", "path", repoPath, "prepare_seconds", prepareSeconds)
@@ -111,7 +114,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 		logger.Info("掛載 skill 中", "phase", "處理中", "count", len(job.Skills), "skill_dirs", deps.skillDirs)
 		for _, sd := range deps.skillDirs {
 			if err := mountSkills(repoPath, job.Skills, sd); err != nil {
-				return failedResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err), repoPath)
+				return classifyResult(job, startedAt, fmt.Errorf("skill mount failed: %w", err), repoPath, ctx, deps.store)
 			}
 			defer cleanupSkills(repoPath, job.Skills, sd)
 		}
@@ -125,7 +128,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	opts.Secrets = mergedSecrets
 	output, err := deps.runner.Run(ctx, repoPath, prompt, opts)
 	if err != nil {
-		return failedResult(job, startedAt, err, repoPath)
+		return classifyResult(job, startedAt, err, repoPath, ctx, deps.store)
 	}
 	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
 
@@ -137,7 +140,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 			truncated = truncated[:2000] + "…(truncated)"
 		}
 		logger.Warn("解析失敗，輸出原始內容", "phase", "失敗", "output", truncated)
-		return failedResult(job, startedAt, fmt.Errorf("parse failed: %w", err), repoPath)
+		return classifyResult(job, startedAt, fmt.Errorf("parse failed: %w", err), repoPath, ctx, deps.store)
 	}
 	logger.Info("解析成功", "phase", "完成", "status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
 
