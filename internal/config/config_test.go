@@ -529,3 +529,43 @@ agents:
 		t.Errorf("cancel_timeout = %v, want 20s", cfg.Queue.CancelTimeout)
 	}
 }
+
+func TestPromptConfig_NewFields_YAMLLoad(t *testing.T) {
+	yaml := `
+prompt:
+  language: zh-TW
+  goal: "custom goal"
+  output_rules:
+    - "one"
+    - "two"
+  allow_worker_rules: false
+`
+	cfg := loadFromString(t, yaml)
+	if cfg.Prompt.Goal != "custom goal" {
+		t.Errorf("Goal = %q, want 'custom goal'", cfg.Prompt.Goal)
+	}
+	if len(cfg.Prompt.OutputRules) != 2 || cfg.Prompt.OutputRules[0] != "one" {
+		t.Errorf("OutputRules = %v, want [one two]", cfg.Prompt.OutputRules)
+	}
+	if cfg.Prompt.AllowWorkerRules == nil {
+		t.Fatal("AllowWorkerRules is nil after YAML explicitly set false")
+	}
+	if *cfg.Prompt.AllowWorkerRules {
+		t.Error("*AllowWorkerRules = true, want false")
+	}
+}
+
+func TestPromptConfig_Defaults(t *testing.T) {
+	cfg := loadFromString(t, "")
+
+	wantGoal := "Use the /triage-issue skill to investigate and produce a triage result."
+	if cfg.Prompt.Goal != wantGoal {
+		t.Errorf("default Goal = %q, want %q", cfg.Prompt.Goal, wantGoal)
+	}
+	if cfg.Prompt.OutputRules == nil || len(cfg.Prompt.OutputRules) != 0 {
+		t.Errorf("default OutputRules = %v, want empty non-nil", cfg.Prompt.OutputRules)
+	}
+	if cfg.Prompt.AllowWorkerRules == nil || !*cfg.Prompt.AllowWorkerRules {
+		t.Errorf("default AllowWorkerRules = %v, want &true", cfg.Prompt.AllowWorkerRules)
+	}
+}

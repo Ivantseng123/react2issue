@@ -90,8 +90,11 @@ type RedisConfig struct {
 }
 
 type PromptConfig struct {
-	Language   string   `yaml:"language"`
-	ExtraRules []string `yaml:"extra_rules"`
+	Language         string   `yaml:"language"`
+	ExtraRules       []string `yaml:"extra_rules"` // deprecated — removed in Task 7
+	Goal             string   `yaml:"goal"`
+	OutputRules      []string `yaml:"output_rules"`
+	AllowWorkerRules *bool    `yaml:"allow_worker_rules"` // tri-state: nil = default true
 }
 
 type ChannelConfig struct {
@@ -225,6 +228,17 @@ func applyDefaults(cfg *Config) {
 	if cfg.Attachments.TTL <= 0 {
 		cfg.Attachments.TTL = 30 * time.Minute
 	}
+	if cfg.Prompt.Goal == "" {
+		cfg.Prompt.Goal = "Use the /triage-issue skill to investigate and produce a triage result."
+	}
+	// OutputRules default is empty slice — no <output_rules> section rendered unless operator sets values.
+	if cfg.Prompt.OutputRules == nil {
+		cfg.Prompt.OutputRules = []string{}
+	}
+	if cfg.Prompt.AllowWorkerRules == nil {
+		t := true
+		cfg.Prompt.AllowWorkerRules = &t
+	}
 	resolveSecrets(cfg)
 }
 
@@ -335,4 +349,3 @@ func DecodeSecretKey(hexKey string) ([]byte, error) {
 	}
 	return decoded, nil
 }
-
