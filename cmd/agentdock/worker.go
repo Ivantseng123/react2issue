@@ -10,7 +10,6 @@ import (
 
 	"agentdock/internal/bot"
 	"agentdock/internal/config"
-	"agentdock/internal/crypto"
 	ghclient "agentdock/internal/github"
 	"agentdock/internal/logging"
 	"agentdock/internal/queue"
@@ -60,17 +59,11 @@ func runWorker(cfg *config.Config) error {
 
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
 
-	if cfg.SecretKey == "" {
-		return fmt.Errorf("secret_key is required for Redis worker — set it in config or via SECRET_KEY env var")
-	}
+	// secret_key is validated and beacon-verified during preflight.
 	secretKey, err := config.DecodeSecretKey(cfg.SecretKey)
 	if err != nil {
 		return fmt.Errorf("invalid secret_key: %w", err)
 	}
-	if err := crypto.VerifyBeacon(context.Background(), rdb, secretKey); err != nil {
-		return fmt.Errorf("secret key 驗證失敗: %w", err)
-	}
-	appLogger.Info("Secret key 已驗證", "phase", "完成")
 
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
