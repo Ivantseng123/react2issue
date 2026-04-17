@@ -287,3 +287,142 @@ func TestExecuteJob_NoSecretKey_EncryptedSecrets_Fails(t *testing.T) {
 		t.Error("expected job to fail when EncryptedSecrets present but no secretKey")
 	}
 }
+
+func TestPool_ShortCircuitsCancelledJobAsCancelled(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	job := &queue.Job{ID: "jc", Repo: "o/r", SubmittedAt: time.Now()}
+
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      &mockRunner{},
+		RepoCache:   &mockRepo{},
+		WorkerCount: 1,
+		Logger:      slog.Default(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Submit first (puts job in store as pending), then mark cancelled before
+	// starting the pool so the worker sees cancelled status deterministically.
+	if err := bundle.Queue.Submit(ctx, job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	store.UpdateStatus("jc", queue.JobCancelled)
+
+	pool.Start(ctx)
+
+	ch, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case r := <-ch:
+		if r.Status != "cancelled" {
+			t.Errorf("status = %q, want cancelled", r.Status)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result")
+	}
+}
+
+func TestPool_ShortCircuitsFailedJobAsFailed(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	job := &queue.Job{ID: "jf", Repo: "o/r", SubmittedAt: time.Now()}
+
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      &mockRunner{},
+		RepoCache:   &mockRepo{},
+		WorkerCount: 1,
+		Logger:      slog.Default(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	// Submit first (puts job in store as pending), then mark failed before
+	// starting the pool so the worker sees failed status deterministically.
+	if err := bundle.Queue.Submit(ctx, job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	store.UpdateStatus("jf", queue.JobFailed)
+
+	pool.Start(ctx)
+
+	ch, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case r := <-ch:
+		if r.Status != "failed" {
+			t.Errorf("status = %q, want failed", r.Status)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result")
+	}
+}
+
+type blockingRunner struct {
+	started chan struct{}
+}
+
+func (b *blockingRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+	if opts.OnStarted != nil {
+		opts.OnStarted(1234, "fake")
+	}
+	close(b.started)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	job := &queue.Job{ID: "jrun", Repo: "o/r", SubmittedAt: time.Now()}
+
+	runner := &blockingRunner{started: make(chan struct{})}
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      runner,
+		RepoCache:   &mockRepo{path: "/tmp/r"},
+		Commands:    bundle.Commands,
+		WorkerCount: 1,
+		Logger:      slog.Default(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool.Start(ctx)
+
+	if err := bundle.Queue.Submit(ctx, job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	<-runner.started
+	// User cancel: mark store then send kill.
+	store.UpdateStatus("jrun", queue.JobCancelled)
+	bundle.Commands.Send(ctx, queue.Command{JobID: "jrun", Action: "kill"})
+
+	ch, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case r := <-ch:
+		if r.Status != "cancelled" {
+			t.Errorf("status = %q, want cancelled", r.Status)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result")
+	}
+}

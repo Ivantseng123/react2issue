@@ -31,19 +31,6 @@ func NewProcessRegistry() *ProcessRegistry {
 	}
 }
 
-func (r *ProcessRegistry) Register(jobID string, pid int, command string, cancel context.CancelFunc) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.processes[jobID] = &RunningAgent{
-		JobID:     jobID,
-		PID:       pid,
-		Command:   command,
-		StartedAt: time.Now(),
-		cancel:    cancel,
-		done:      make(chan struct{}),
-	}
-}
-
 func (r *ProcessRegistry) RegisterPending(jobID string, cancel context.CancelFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
