@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"agentdock/internal/config"
@@ -50,6 +51,15 @@ func validate(cfg *config.Config) error {
 	}
 	if cfg.Logging.RetentionDays < 1 {
 		errs = append(errs, "logging.retention_days must be >= 1")
+	}
+	// repo_cache.dir must be absolute — relative/empty leaks clones into cwd.
+	if cfg.RepoCache.Dir == "" {
+		errs = append(errs, "repo_cache.dir must not be empty; delete the line to use the default, or set an absolute path")
+	} else if !filepath.IsAbs(cfg.RepoCache.Dir) {
+		errs = append(errs, fmt.Sprintf("repo_cache.dir must be an absolute path, got %q", cfg.RepoCache.Dir))
+	}
+	if cfg.RepoCache.MaxAge <= 0 {
+		errs = append(errs, "repo_cache.max_age must be > 0")
 	}
 
 	if len(errs) > 0 {
