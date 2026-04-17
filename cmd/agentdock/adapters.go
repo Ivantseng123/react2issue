@@ -26,8 +26,8 @@ type repoCacheAdapter struct {
 	cache *ghclient.RepoCache
 }
 
-func (a *repoCacheAdapter) Prepare(cloneURL, branch string) (string, error) {
-	barePath, err := a.cache.EnsureRepo(cloneURL, "")
+func (a *repoCacheAdapter) Prepare(cloneURL, branch, token string) (string, error) {
+	barePath, err := a.cache.EnsureRepo(cloneURL, token)
 	if err != nil {
 		return "", err
 	}

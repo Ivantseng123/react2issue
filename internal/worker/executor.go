@@ -20,7 +20,7 @@ type Runner interface {
 
 // RepoProvider abstracts repo clone/checkout (for testing).
 type RepoProvider interface {
-	Prepare(cloneURL, branch string) (string, error)
+	Prepare(cloneURL, branch, token string) (string, error)
 	RemoveWorktree(worktreePath string) error
 	CleanAll() error
 	PurgeStale() error
@@ -52,7 +52,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	// Clone/fetch repo.
 	logger.Info("準備 repo 中", "phase", "處理中", "branch", job.Branch)
 	prepareStart := time.Now()
-	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch)
+	repoPath, err := deps.repoCache.Prepare(job.CloneURL, job.Branch, "")
 	if err != nil {
 		return failedResult(job, startedAt, fmt.Errorf("repo prepare failed: %w", err), "")
 	}

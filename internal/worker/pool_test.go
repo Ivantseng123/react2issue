@@ -28,7 +28,7 @@ type mockRepo struct {
 	purgedStale      bool
 }
 
-func (m *mockRepo) Prepare(cloneURL, branch string) (string, error) {
+func (m *mockRepo) Prepare(cloneURL, branch, token string) (string, error) {
 	return m.path, m.err
 }
 
