@@ -315,7 +315,7 @@ func warnLegacyMigrationKeys(k *koanf.Koanf) {
 	if k.Exists("prompt.extra_rules") {
 		slog.Warn(
 			"prompt.extra_rules 已搬到 worker.prompt.extra_rules，本設定忽略",
-			"phase", "設定",
+			"phase", "失敗",
 			"migration", "prompt-refactor",
 			"old_key", "prompt.extra_rules",
 			"new_key", "worker.prompt.extra_rules",
@@ -324,7 +324,7 @@ func warnLegacyMigrationKeys(k *koanf.Koanf) {
 	if k.Exists("workers.count") && !k.Exists("worker.count") {
 		slog.Warn(
 			"workers.count 已 rename 為 worker.count，本設定忽略",
-			"phase", "設定",
+			"phase", "失敗",
 			"migration", "prompt-refactor",
 			"old_key", "workers.count",
 			"new_key", "worker.count",

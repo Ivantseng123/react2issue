@@ -433,3 +433,24 @@ workers:
 		t.Errorf("expected warn to point at new location, got:\n%s", logs)
 	}
 }
+
+// TestConfig_NoLegacyKeys_NoMigrationWarn locks in the kFile isolation: with a
+// clean, already-migrated YAML, the migration warn must not fire. This guards
+// against a future revert to `warnLegacyMigrationKeys(kEff)` — kEff includes
+// defaults which round-trip extra_rules: [], so the warn would fire on every
+// clean startup without kFile isolation.
+func TestConfig_NoLegacyKeys_NoMigrationWarn(t *testing.T) {
+	yaml := `
+worker:
+  count: 5
+  prompt:
+    extra_rules:
+      - "new location"
+`
+	logs := captureLogs(t, func() {
+		loadConfigTestHelper(t, yaml)
+	})
+	if strings.Contains(logs, "prompt-refactor") {
+		t.Errorf("clean YAML should not trigger migration warn, got:\n%s", logs)
+	}
+}
