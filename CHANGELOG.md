@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.5](https://github.com/Ivantseng123/agentdock/compare/v1.2.4...v1.2.5) (2026-04-17)
+
+
+### Bug Fixes
+
+* **bot:** tolerate non-array labels + prevent null labels to GitHub ([1068b77](https://github.com/Ivantseng123/agentdock/commit/1068b771039b8416eaba9bc92605cdacc0db2145))
+* **bot:** tolerate non-array labels + prevent null labels to GitHub ([d4b51f1](https://github.com/Ivantseng123/agentdock/commit/d4b51f147572a5e15c521a0f25ee5b7c168b3bb4))
+
 ## [1.2.4](https://github.com/Ivantseng123/agentdock/compare/v1.2.3...v1.2.4) (2026-04-17)
 
 
