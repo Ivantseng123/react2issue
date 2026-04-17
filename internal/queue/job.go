@@ -38,6 +38,7 @@ type Job struct {
 	RetryCount   int               `json:"retry_count,omitempty"`
 	RetryOfJobID string            `json:"retry_of_job_id,omitempty"`
 	SubmittedAt  time.Time         `json:"submitted_at"`
+	EncryptedSecrets []byte    `json:"encrypted_secrets,omitempty"`
 }
 
 type AttachmentMeta struct {

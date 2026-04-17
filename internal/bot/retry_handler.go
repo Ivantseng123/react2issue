@@ -61,6 +61,7 @@ func (h *RetryHandler) Handle(channelID, jobID, msgTS string) {
 		RetryCount:   original.RetryCount + 1,
 		RetryOfJobID: original.ID,
 		SubmittedAt:  time.Now(),
+		EncryptedSecrets: original.EncryptedSecrets,
 	}
 
 	// Put in store before posting button (so cancel_job can find it).
