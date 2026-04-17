@@ -156,3 +156,22 @@ echo "padding padding padding padding padding padding padding"
 		t.Errorf("githubToken fallback not working: %q", output)
 	}
 }
+
+func TestAgentRunner_CancelShortCircuitsProviderChain(t *testing.T) {
+	runner := &AgentRunner{
+		agents: []config.AgentConfig{
+			{Command: "nonexistent-agent-one", Args: []string{"{prompt}"}, Timeout: time.Second},
+			{Command: "nonexistent-agent-two", Args: []string{"{prompt}"}, Timeout: time.Second},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := runner.Run(ctx, slog.Default(), t.TempDir(), "noop", RunOptions{})
+	if err == nil {
+		t.Fatal("expected error on cancelled ctx")
+	}
+	if err.Error() != "cancelled" {
+		t.Errorf("err = %q, want \"cancelled\" (chain must not try the second agent)", err.Error())
+	}
+}
