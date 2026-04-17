@@ -41,7 +41,41 @@ Set by `HandleSelection` in the `case "repo", "repo_search":` branch immediately
 
 No changes to `Job`, `JobState`, or any persisted struct. This flag lives only in the in-memory `pending` map.
 
-### 2. Slack Client — `PostSelectorWithBack`
+### 2. Refactor — `slackAPI` Interface for Testability
+
+**`internal/bot/workflow.go`** — introduce an unexported interface capturing the Slack methods `Workflow` uses, following the existing `SlackPoster` precedent in `result_listener.go`:
+
+```go
+type slackAPI interface {
+    PostMessage(channelID, text, threadTS string) error
+    PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
+    PostSelector(channelID, prompt, actionPrefix string, options []string, threadTS string) (string, error)
+    PostSelectorWithBack(channelID, prompt, actionPrefix string, options []string, threadTS string, backActionID, backLabel string) (string, error)
+    PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error)
+    UpdateMessage(channelID, messageTS, text string) error
+    OpenDescriptionModal(triggerID, selectorMsgTS string) error
+    FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, maxMsgs int) ([]slackclient.ThreadRawMessage, error)
+    ResolveUser(userID string) string
+    GetChannelName(channelID string) string
+    DownloadAttachments(msgs []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload
+}
+```
+
+Change the struct field:
+
+```go
+type Workflow struct {
+    // ...
+    slack slackAPI // was *slackclient.Client
+    // ...
+}
+```
+
+`*slackclient.Client` satisfies the interface automatically — no changes to the constructor wiring in `cmd/agentdock/app.go`. Tests build a stub struct that implements the methods they exercise and return controllable errors.
+
+Exact method signatures must match the current `slackclient.Client` methods; if any signature has drifted, update the interface accordingly during implementation.
+
+### 3. Slack Client — `PostSelectorWithBack`
 
 **`internal/slack/client.go`** — add a new function that wraps the existing `PostSelector` logic with an optional trailing back button:
 
@@ -56,11 +90,13 @@ func (c *Client) PostSelectorWithBack(
 ) (string, error)
 ```
 
-Implementation: reuse the existing `PostSelector` body, but after appending option buttons, if `backActionID != ""` append one more `slack.NewButtonBlockElement(backActionID, backLabel, ...)`. All buttons go in the same `actions` block. Slack's 25-element limit per action block is not at risk (options lists are bounded by channel configs in practice).
+Implementation: reuse the existing `PostSelector` body, but after appending option buttons, if `backActionID != ""` append one more `slack.NewButtonBlockElement(backActionID, backLabel, ...)` **at the end** (rightmost in Slack's left-to-right render order). The back button uses default (grey) style — no `slack.StylePrimary` / `slack.StyleDanger`. All buttons share the same `actions` block.
+
+Rationale for trailing position: maximum visual distance from the main option buttons minimizes accidental re-click (the issue's primary pain). Consistent with Slack's convention of placing secondary / escape actions after primary ones. Slack's 25-element limit per action block is not at risk (options lists are bounded by channel configs in practice).
 
 `PostSelector` keeps its current signature and body untouched; `PostSelectorWithBack` is a net-new function. Existing callers of `PostSelector` are not modified.
 
-### 3. Workflow — `HandleBackToRepo`
+### 4. Workflow — `HandleBackToRepo`
 
 **`internal/bot/workflow.go`** — add:
 
@@ -74,13 +110,13 @@ Behavior, in order:
 2. **Delete old key.** `delete(w.pending, selectorMsgTS)` under the same lock, then unlock.
 3. **Resolve channel config.** Same lookup as `HandleSelection` (fallback to `ChannelDefaults` if the channel is not explicitly configured).
 4. **Clear carried-over fields.** `pt.SelectedRepo = ""`, `pt.SelectedBranch = ""`, `pt.ExtraDesc = ""`. Keep `RepoWasPicked=true` — the user has now gone through a repo selector twice, back should remain available on the next round.
-5. **Post new repo selector FIRST** (via the extracted `postRepoSelector` helper — see §4). If this fails, call `notifyError`, `clearDedup`, and return WITHOUT touching the old message (so the user still sees the original selector state and can retry manually by re-triggering `@bot`).
+5. **Post new repo selector FIRST** (via the extracted `postRepoSelector` helper — see §5 — or, if `len(repos) == 1`, auto-select and call `afterRepoSelected` directly instead). If the selector post fails, call `notifyError`, `clearDedup`, and return WITHOUT touching the old message (so the user still sees the original selector state and can retry manually by re-triggering `@bot`).
 6. **Freeze old message.** Only after the new selector is posted: `UpdateMessage(channelID, selectorMsgTS, ":leftwards_arrow_with_hook: 已返回 repo 選擇")`.
 7. **Register new pending entry.** `w.storePending(newSelectorTS, pt)` starts a fresh 1-minute timeout.
 
 The old selector's 1-minute timeout goroutine will find its key missing and no-op — no extra cleanup needed.
 
-### 4. Helper Extraction — `postRepoSelector`
+### 5. Helper Extraction — `postRepoSelector`
 
 Factor the repo-selector-posting logic out of `HandleTrigger` into a private method so `HandleBackToRepo` can reuse it:
 
@@ -88,15 +124,18 @@ Factor the repo-selector-posting logic out of `HandleTrigger` into a private met
 func (w *Workflow) postRepoSelector(pt *pendingTriage, channelCfg config.ChannelConfig) (string, error)
 ```
 
-The body mirrors the current `HandleTrigger` branches:
-- If `len(repos) > 1` → `pt.Phase = "repo"`, `PostSelector(... "repo_select" ...)`, return TS.
-- Else (no channel repos) → `pt.Phase = "repo_search"`, `PostExternalSelector(... "repo_search" ...)`, return TS.
+This helper covers **only the cases where a repo selector is actually posted**:
+- `len(repos) > 1` → `pt.Phase = "repo"`, `PostSelector(... "repo_select" ...)`, return TS.
+- `len(repos) == 0` → `pt.Phase = "repo_search"`, `PostExternalSelector(... "repo_search" ...)`, return TS.
 
-The single-repo case (`len(repos) == 1`) never reaches this helper — it's handled inline in `HandleTrigger` and bypasses selector entirely. `HandleBackToRepo` will never be called in that flow because the gate (§5) ensures no back button is rendered.
+**`len(repos) == 1` is NOT handled by this helper** — the name would lie. That case auto-selects without posting anything and is handled inline by the callers:
 
-`HandleTrigger` is updated to call `postRepoSelector` for the multi-repo / external-search branches; the existing single-repo short-circuit stays.
+- `HandleTrigger`: already has the inline `len==1 → pt.SelectedRepo = repos[0]; afterRepoSelected(...); return` shortcut. Unchanged.
+- `HandleBackToRepo` (rare case — channel config changed to single repo between `@bot` and back click): mirrors the inline pattern — `pt.SelectedRepo = repos[0]`, call `w.afterRepoSelected(pt, channelCfg)` directly. Does not call `postRepoSelector`.
 
-### 5. Downstream Selectors — Gate on `RepoWasPicked`
+This keeps the helper's name semantically honest ("post" means post) and puts the auto-select fallback in the two places where it's relevant.
+
+### 6. Downstream Selectors — Gate on `RepoWasPicked`
 
 **`afterRepoSelected`** (branch selector):
 
@@ -130,7 +169,7 @@ selectorTS, err := w.slack.PostSelectorWithBack(
 
 No other call site of `PostSelector` is affected.
 
-### 6. Router Wiring
+### 7. Router Wiring
 
 **`cmd/agentdock/app.go`** — inside the `case slack.InteractionTypeBlockActions:` switch, add one case (ordering doesn't matter — all are mutually exclusive by `ActionID`):
 
@@ -139,7 +178,7 @@ case action.ActionID == "back_to_repo":
     wf.HandleBackToRepo(cb.Channel.ID, selectorTS)
 ```
 
-### 7. Logging
+### 8. Logging
 
 Follow `internal/logging/GUIDE.md` — component/phase taxonomy, Chinese messages, structured attrs:
 
@@ -155,40 +194,49 @@ Follow `internal/logging/GUIDE.md` — component/phase taxonomy, Chinese message
 | `postRepoSelector` returns error | `notifyError` + `clearDedup` so user can re-`@bot`. Old selector message is NOT frozen (user still sees the previous step). |
 | `UpdateMessage` on old message fails after new selector posted | Log warn, proceed. User has the new selector in hand; a stale-looking old message is acceptable. |
 | Channel config changed between trigger and back | Re-read `w.cfg.Channels[pt.ChannelID]` inside `HandleBackToRepo`. Mirrors existing workflow pattern. |
+| Channel config changed so `len(repos) == 1` now | `HandleBackToRepo` auto-selects (`pt.SelectedRepo = repos[0]`) and calls `afterRepoSelected` directly, mirroring `HandleTrigger`'s shortcut. User sees a branch selector re-appear; acceptable for this rare race. |
+| Description modal open + user clicks back on background message | `HandleDescriptionAction("補充說明")` leaves pt in pending so the modal submit can find it. `HandleBackToRepo` steals pt first; a subsequent modal submit hits `HandleDescriptionSubmit` → pending absent → silent return. User's typed description is dropped. Acceptable: they explicitly asked to change repo, so the description (bound to the previous repo context) is stale anyway. No special handling added. |
 | Shortcut path (`@bot owner/repo[@branch]`) | `RepoWasPicked` stays false; back button never rendered; `HandleBackToRepo` never called. |
 | Single-repo channel | Same as above — selector bypassed, flag stays false. |
 | Channel with `branch_select: false` | `showDescriptionPrompt` called directly after repo pick; description selector carries back button if `RepoWasPicked=true`. |
 
 ## Testing
 
-### Unit — `internal/bot/workflow_test.go` (or new `workflow_back_test.go`)
+### Unit — `internal/bot/workflow_test.go` (new file — no existing workflow tests)
 
-Using the existing mock Slack client pattern:
+`workflow.go` currently has no test file. Adding `workflow_test.go` also requires the `slackAPI` interface refactor (§2) so tests can supply a stub. The stub struct records calls (method name + args) and returns configurable errors; tests assert against the recorded call log.
+
+Planned tests:
 
 - `TestHandleBackToRepo_FromBranchStep` — pending pt in `branch` phase with `RepoWasPicked=true`. Assert: old key deleted, new key present, `SelectedRepo`/`SelectedBranch` cleared, new repo selector posted, old message frozen.
 - `TestHandleBackToRepo_FromDescriptionStep` — same with `Phase=description` and `ExtraDesc="existing"`. Assert: `ExtraDesc == ""` after back.
 - `TestHandleBackToRepo_PendingNotFound` — empty pending map. Assert: no panic, no Slack calls.
-- `TestHandleBackToRepo_PostSelectorFails_NoFreeze` — stub `PostSelector`/`PostExternalSelector` to error. Assert: `UpdateMessage` NOT called, `notifyError` called, `clearDedup` called.
+- `TestHandleBackToRepo_PostSelectorFails_NoFreeze` — stub returns error for `PostSelector`/`PostExternalSelector`. Assert: `UpdateMessage` NOT called, error message posted via `notifyError`, `clearDedup` called.
+- `TestHandleBackToRepo_ConfigNowSingleRepo` — channel config returns 1 repo when `HandleBackToRepo` runs. Assert: `postRepoSelector` not called, `afterRepoSelected` path taken, `pt.SelectedRepo` set to the single repo.
 - `TestBranchSelector_HasBackButton_WhenRepoWasPicked` — set `pt.RepoWasPicked=true`, call `afterRepoSelected`. Assert: `PostSelectorWithBack` called with `backActionID="back_to_repo"`.
-- `TestBranchSelector_NoBackButton_OnShortcut` — `pt.RepoWasPicked=false`. Assert: `backActionID==""` (or equivalent).
+- `TestBranchSelector_NoBackButton_OnShortcut` — `pt.RepoWasPicked=false`. Assert: `backActionID==""`.
 - `TestDescriptionPrompt_BackButtonGate` — both gate variants, same pattern as branch selector tests.
 
-### Unit — `internal/slack/client_test.go`
+### No client_test.go additions
 
-- `TestPostSelectorWithBack_AppendsBackButton` — inspect the posted blocks payload; last element of the actions block has `action_id == backActionID`.
-- `TestPostSelectorWithBack_EmptyBackID_MatchesPostSelector` — payload identical to `PostSelector` when `backActionID==""`.
+`internal/slack/client_test.go` currently tests only pure functions (no Slack HTTP mocking). `PostSelectorWithBack` block-structure correctness is covered transitively: the workflow stub asserts `PostSelectorWithBack` is called with correct `backActionID` / `backLabel` (semantic coverage), and any malformed block payload would surface immediately during manual QA as Slack's `invalid_blocks` error (per existing project landmine noted in `CLAUDE.md`).
 
 ### Integration / Manual QA
 
-No router-level automated test (existing codebase has none for `cmd/agentdock/app.go` dispatch; not adding one here). PR description includes a Slack manual checklist:
+No router-level automated test (existing codebase has none for `cmd/agentdock/app.go` dispatch). PR description includes a Slack manual checklist:
 
 1. Multi-repo channel: `@bot` → search dropdown → pick repo → branch selector shows back button → click back → repo search shows again, state clean.
 2. Multi-repo channel: pick repo → pick branch → description prompt shows back button → click back → repo selector again, branch cleared.
 3. Single-repo channel: `@bot` → branch selector has NO back button.
 4. Shortcut `@bot owner/repo`: branch selector has NO back button.
 5. Shortcut `@bot owner/repo@branch`: no selector at all (no regression).
-6. Double-click back button: second click silently ignored.
+6. Double-click back button: second click silently ignored (no error, no duplicate selector).
 7. Back → wait 1 minute → "已超時" message appears.
+8. Click "補充說明" to open modal, then click back on background message: subsequent modal submit does nothing; new repo selector is usable.
+
+## Non-Instrumented
+
+No Prometheus metric for back-click frequency. The change is pure UX affordance with no SLO or alerting signal, and dashboards are already focused on queue/agent telemetry. If the back-click rate becomes a quality signal later, add then.
 
 ## Rollout
 
