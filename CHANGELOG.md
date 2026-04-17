@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.2.0](https://github.com/Ivantseng123/agentdock/compare/v1.1.2...v1.2.0) (2026-04-17)
+
+
+### Features
+
+* add secret_key to interactive preflight with auto-generate option ([5eff3bc](https://github.com/Ivantseng123/agentdock/commit/5eff3bcfe88e73aef7c7281e4e338fd10158fbaf))
+* **agent:** generic secret injection via RunOptions.Secrets ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([48ad639](https://github.com/Ivantseng123/agentdock/commit/48ad6396be162b20ac6279c89494b875621011f9))
+* **agent:** short-circuit provider chain on ctx.Canceled ([eeebcf2](https://github.com/Ivantseng123/agentdock/commit/eeebcf2df484c9b0a1959e3011b1d3f5a2bf85ea))
+* app-to-worker encrypted secret passing ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([da6cab8](https://github.com/Ivantseng123/agentdock/commit/da6cab8c2b77ffd38502680224676b6399f7f6a7))
+* **bot:** handle cancelled results with store-first semantics ([7fd1346](https://github.com/Ivantseng123/agentdock/commit/7fd1346d3aa825879c27447c0a66af14fb5314ab))
+* **config:** add queue.cancel_timeout with 60s default ([1504fba](https://github.com/Ivantseng123/agentdock/commit/1504fba6c669a8ade5513637033c884b2f4b4d97))
+* **config:** add SecretKey, Secrets fields with env var scan ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([a8575e0](https://github.com/Ivantseng123/agentdock/commit/a8575e0ca36a6078454de904303cd7a63d483c1a))
+* **crypto:** add AES-256-GCM encrypt/decrypt module ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([803dd23](https://github.com/Ivantseng123/agentdock/commit/803dd23aa4a902625fb1fae2ed63d43f9445c86e))
+* **queue:** add EncryptedSecrets field to Job struct ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([a6aeccd](https://github.com/Ivantseng123/agentdock/commit/a6aeccdb8ab1ea41b10c212a6d1337778186c522))
+* **queue:** add JobCancelled status and CancelledAt timestamp ([50fc26f](https://github.com/Ivantseng123/agentdock/commit/50fc26fdf9ad3657402fefec3c7a6fcc41e76d78))
+* **queue:** stamp CancelledAt when transitioning to JobCancelled ([a4699bf](https://github.com/Ivantseng123/agentdock/commit/a4699bf0a4c9ac3d87e99824b1e532e0e94b90d1))
+* **registry:** add RegisterPending and SetStarted ([10ac0b6](https://github.com/Ivantseng123/agentdock/commit/10ac0b69900fc2abe9d92a203c20ad4edff7e162))
+* **repo:** add per-call token to EnsureRepo ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([38b8eca](https://github.com/Ivantseng123/agentdock/commit/38b8eca162d75ca258344e58790f7cbe799c65c6))
+* require secret_key for Redis workers + beacon key verification ([b71a707](https://github.com/Ivantseng123/agentdock/commit/b71a70743c23444dea68166d89333c48b5cc8817))
+* **watchdog:** handle JobCancelled with fallback and back-off ([a6d7c34](https://github.com/Ivantseng123/agentdock/commit/a6d7c34096c37931295bad60603a41e5f5f6810f))
+* **worker:** add classifyResult to split cancel from failure ([cc90921](https://github.com/Ivantseng123/agentdock/commit/cc9092168898996ee308ea9ff63b905c20db2e17))
+* **worker:** add token param to RepoProvider.Prepare ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([3c0742c](https://github.com/Ivantseng123/agentdock/commit/3c0742c1ead2ae9090e8044dd78e4b65f253dd72))
+* **worker:** decrypt, merge, and inject secrets per-job ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([7f179ed](https://github.com/Ivantseng123/agentdock/commit/7f179edb51c8d55661c2c4302d5d41ee7f889b25))
+* **worker:** route executor failures through classifier; guard Prepare ([16b652a](https://github.com/Ivantseng123/agentdock/commit/16b652aa17deb66138183805702af0dbcc539d51))
+* **worker:** switch short-circuit, RegisterPending wiring, cancelled log ([f9667fa](https://github.com/Ivantseng123/agentdock/commit/f9667fab0b1d5b2643430723134b431e2c4852d8))
+* **workflow:** encrypt secrets into Job, clean CloneURL ([#56](https://github.com/Ivantseng123/agentdock/issues/56)) ([cd74421](https://github.com/Ivantseng123/agentdock/commit/cd744212095e96c4906c4277fe315701f0b3fa17))
+
+
+### Bug Fixes
+
+* address code review — decode secret key once, fix branch listing token ([1eaf64d](https://github.com/Ivantseng123/agentdock/commit/1eaf64dafd6a04e163d4bcc7a3ba5bb23713016a))
+* **app:** order UpdateStatus before kill; wire cancel_timeout; guard cancelled ([d9533e0](https://github.com/Ivantseng123/agentdock/commit/d9533e09ba8fc43944afa62456e6a933e5c87156))
+* distinguish user cancellation from agent failure ([#36](https://github.com/Ivantseng123/agentdock/issues/36)) ([6983cd1](https://github.com/Ivantseng123/agentdock/commit/6983cd147c2908f802a0c5e7d2f565c5c98afe2c))
+* only allow auto-generate secret_key in app scope, not worker ([78c6113](https://github.com/Ivantseng123/agentdock/commit/78c6113ae3d1c70c9eae27c86883fe2b5a305e2d))
+* **queue:** admin force-kill guard includes JobCancelled ([a0b8b61](https://github.com/Ivantseng123/agentdock/commit/a0b8b613991ed5f9126c125c7bf7078f7818002b))
+* **test:** race guard, dead code, missing integration scenarios ([b3c18ca](https://github.com/Ivantseng123/agentdock/commit/b3c18ca106b18351d66485fbb85729f71ed47970))
+* verify beacon during preflight, not after startup ([b09a7cb](https://github.com/Ivantseng123/agentdock/commit/b09a7cb4a64aa31e7c70ccb1fa653cb784172ee6))
+* **watchdog:** log cancel_timeout on startup ([3616d45](https://github.com/Ivantseng123/agentdock/commit/3616d45d99011808a21fa8b1bf4a722dc16a2d02))
+* **worker:** neutral wording for pre-execution terminated jobs ([d8469dd](https://github.com/Ivantseng123/agentdock/commit/d8469ddfd8152a4bad6ec10cdaf8af8ac4a8d51c))
+
 ## [1.1.2](https://github.com/Ivantseng123/agentdock/compare/v1.1.1...v1.1.2) (2026-04-16)
 
 
