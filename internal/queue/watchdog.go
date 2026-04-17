@@ -67,6 +67,7 @@ func (w *Watchdog) Start(stop <-chan struct{}) {
 		"job_timeout", w.jobTimeout,
 		"idle_timeout", w.idleTimeout,
 		"prepare_timeout", w.prepareTimeout,
+		"cancel_timeout", w.cancelTimeout,
 		"check_interval", w.interval,
 	)
 
