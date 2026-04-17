@@ -91,6 +91,7 @@ func TestNeedsInput_AllEmpty(t *testing.T) {
 func TestNeedsInput_AllSet(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []string{"claude"},
+		SecretKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
 	cfg.Redis.Addr = "localhost:6379"
 	cfg.GitHub.Token = "ghp_test"
@@ -102,6 +103,7 @@ func TestNeedsInput_AllSet(t *testing.T) {
 func TestNeedsInput_AppScope_SlackRequired(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []string{"claude"},
+		SecretKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}
 	cfg.Redis.Addr = "localhost:6379"
 	cfg.GitHub.Token = "ghp_test"

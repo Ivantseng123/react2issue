@@ -32,7 +32,7 @@ func (f *fakeRunner) Run(ctx context.Context, workDir, prompt string, opts bot.R
 
 type fakeRepo struct{}
 
-func (f *fakeRepo) Prepare(cloneURL, branch string) (string, error) {
+func (f *fakeRepo) Prepare(cloneURL, branch, token string) (string, error) {
 	return "/tmp/fake-repo", nil
 }
 

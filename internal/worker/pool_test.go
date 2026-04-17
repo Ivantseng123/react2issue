@@ -2,12 +2,15 @@ package worker
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"testing"
 	"time"
 
 	"agentdock/internal/bot"
+	"agentdock/internal/crypto"
 	"agentdock/internal/queue"
 )
 
@@ -28,7 +31,7 @@ type mockRepo struct {
 	purgedStale      bool
 }
 
-func (m *mockRepo) Prepare(cloneURL, branch string) (string, error) {
+func (m *mockRepo) Prepare(cloneURL, branch, token string) (string, error) {
 	return m.path, m.err
 }
 
@@ -188,5 +191,99 @@ func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("timeout")
+	}
+}
+
+type secretCapturingRunner struct {
+	onRun func(opts bot.RunOptions)
+}
+
+func (r *secretCapturingRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+	if r.onRun != nil {
+		r.onRun(opts)
+	}
+	return "Analysis done.\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "CREATED",
+  "title": "test",
+  "body": "## Problem\nTest",
+  "labels": ["bug"],
+  "confidence": "high",
+  "files_found": 0,
+  "open_questions": 0
+}`, nil
+}
+
+func TestExecuteJob_DecryptsAndMergesSecrets(t *testing.T) {
+	dir := t.TempDir()
+
+	secretKey := make([]byte, 32)
+	rand.Read(secretKey)
+
+	appSecrets := map[string]string{
+		"GH_TOKEN":  "ghp_from_app",
+		"K8S_TOKEN": "k8s_from_app",
+	}
+	secretsJSON, _ := json.Marshal(appSecrets)
+	encrypted, _ := crypto.Encrypt(secretKey, secretsJSON)
+
+	workerSecrets := map[string]string{
+		"GH_TOKEN": "ghp_worker_override",
+	}
+
+	var capturedSecrets map[string]string
+	runner := &secretCapturingRunner{
+		onRun: func(opts bot.RunOptions) {
+			capturedSecrets = opts.Secrets
+		},
+	}
+
+	job := &queue.Job{
+		ID:               "test-job",
+		CloneURL:         "https://github.com/owner/repo.git",
+		EncryptedSecrets: encrypted,
+	}
+
+	deps := executionDeps{
+		attachments:   queue.NewInMemAttachmentStore(),
+		repoCache:     &mockRepo{path: dir},
+		runner:        runner,
+		store:         queue.NewMemJobStore(),
+		secretKey:     secretKey,
+		workerSecrets: workerSecrets,
+	}
+
+	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+	if result.Status == "failed" {
+		t.Fatalf("job failed: %s", result.Error)
+	}
+
+	if capturedSecrets["GH_TOKEN"] != "ghp_worker_override" {
+		t.Errorf("GH_TOKEN = %q, want ghp_worker_override", capturedSecrets["GH_TOKEN"])
+	}
+	if capturedSecrets["K8S_TOKEN"] != "k8s_from_app" {
+		t.Errorf("K8S_TOKEN = %q, want k8s_from_app", capturedSecrets["K8S_TOKEN"])
+	}
+}
+
+func TestExecuteJob_NoSecretKey_EncryptedSecrets_Fails(t *testing.T) {
+	dir := t.TempDir()
+
+	job := &queue.Job{
+		ID:               "test-job",
+		CloneURL:         "https://github.com/owner/repo.git",
+		EncryptedSecrets: []byte("some-encrypted-data"),
+	}
+
+	deps := executionDeps{
+		attachments: queue.NewInMemAttachmentStore(),
+		repoCache:   &mockRepo{path: dir},
+		runner:      &mockRunner{output: "ok"},
+		store:       queue.NewMemJobStore(),
+		secretKey:   nil,
+	}
+
+	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+	if result.Status != "failed" {
+		t.Error("expected job to fail when EncryptedSecrets present but no secretKey")
 	}
 }

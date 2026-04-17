@@ -11,6 +11,7 @@ import (
 
 	"agentdock/internal/bot"
 	"agentdock/internal/config"
+	"agentdock/internal/crypto"
 	ghclient "agentdock/internal/github"
 	"agentdock/internal/logging"
 	"agentdock/internal/mantis"
@@ -131,6 +132,18 @@ func runApp(cfg *config.Config) error {
 		}
 		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
 		appLogger.Info("使用 Redis transport", "phase", "處理中", "addr", cfg.Redis.Addr)
+
+		// Write secret key beacon so workers can verify key match at startup.
+		if cfg.SecretKey != "" {
+			sk, err := config.DecodeSecretKey(cfg.SecretKey)
+			if err != nil {
+				return fmt.Errorf("invalid secret_key: %w", err)
+			}
+			if err := crypto.WriteBeacon(context.Background(), rdb, sk); err != nil {
+				return fmt.Errorf("failed to write secret beacon: %w", err)
+			}
+			appLogger.Info("Secret beacon 已寫入 Redis", "phase", "完成")
+		}
 	default:
 		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
 		appLogger.Info("使用 in-memory transport", "phase", "處理中")

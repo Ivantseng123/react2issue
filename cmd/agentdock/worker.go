@@ -58,6 +58,13 @@ func runWorker(cfg *config.Config) error {
 	bundle := queue.NewRedisBundle(rdb, jobStore, "triage")
 
 	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
+
+	// secret_key is validated and beacon-verified during preflight.
+	secretKey, err := config.DecodeSecretKey(cfg.SecretKey)
+	if err != nil {
+		return fmt.Errorf("invalid secret_key: %w", err)
+	}
+
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
 
@@ -97,6 +104,8 @@ func runWorker(cfg *config.Config) error {
 		Status:         bundle.Status,
 		StatusInterval: cfg.Queue.StatusInterval,
 		Logger:         workerLogger,
+		SecretKey:      secretKey,
+		WorkerSecrets:  cfg.Secrets,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())

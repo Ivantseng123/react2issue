@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,6 +12,8 @@ import (
 	"golang.org/x/term"
 
 	"agentdock/internal/config"
+	"agentdock/internal/crypto"
+	"agentdock/internal/queue"
 )
 
 const maxRetries = 3
@@ -51,6 +56,10 @@ func runPreflight(cfg *config.Config, scope PreflightScope) (map[string]any, err
 		}
 	}
 
+	if err := preflightSecretKey(cfg, interactive, prompted, scope); err != nil {
+		return prompted, err
+	}
+
 	if err := preflightAgentCLIs(cfg, interactive); err != nil {
 		return prompted, err
 	}
@@ -63,7 +72,7 @@ func runPreflight(cfg *config.Config, scope PreflightScope) (map[string]any, err
 // is empty, meaning preflight should enter interactive mode when attached to
 // a terminal.
 func needsInput(cfg *config.Config, scope PreflightScope) bool {
-	base := cfg.Redis.Addr == "" || cfg.GitHub.Token == "" || len(cfg.Providers) == 0
+	base := cfg.Redis.Addr == "" || cfg.GitHub.Token == "" || len(cfg.Providers) == 0 || cfg.SecretKey == ""
 	if scope == ScopeApp {
 		return base || cfg.Slack.BotToken == "" || cfg.Slack.AppToken == ""
 	}
@@ -245,6 +254,92 @@ func preflightSlackApp(cfg *config.Config, interactive bool, prompted map[string
 		return nil
 	}
 	return fmt.Errorf("unreachable")
+}
+
+func preflightSecretKey(cfg *config.Config, interactive bool, prompted map[string]any, scope PreflightScope) error {
+	if cfg.SecretKey != "" {
+		decoded, err := config.DecodeSecretKey(cfg.SecretKey)
+		if err != nil {
+			printFail("secret_key invalid: %v", err)
+			return err
+		}
+		if scope == ScopeWorker {
+			if err := verifyBeaconFromConfig(cfg, decoded); err != nil {
+				printFail("secret_key 與 app 不匹配: %v", err)
+				return err
+			}
+		}
+		printOK("Secret key configured")
+		return nil
+	}
+	if !interactive {
+		return fmt.Errorf("SECRET_KEY is required — set secret_key in config or SECRET_KEY env var")
+	}
+	fmt.Fprintln(stderr)
+	fmt.Fprintln(stderr, "  Secret key for encrypting secrets between app and workers.")
+	fmt.Fprintln(stderr, "  Must be a 64-character hex string (32 bytes).")
+
+	// Only app can auto-generate; worker must receive the key from app.
+	if scope == ScopeApp {
+		if promptYesNo("  Auto-generate a key?") {
+			keyBytes := make([]byte, 32)
+			if _, err := rand.Read(keyBytes); err != nil {
+				return fmt.Errorf("generate key: %w", err)
+			}
+			hexKey := hex.EncodeToString(keyBytes)
+			cfg.SecretKey = hexKey
+			prompted["secret_key"] = hexKey
+			fmt.Fprintf(stderr, "  Generated: %s\n", hexKey)
+			fmt.Fprintln(stderr, "  ⚠ Copy this key to all worker configs.")
+			printOK("Secret key generated (will be saved to config)")
+			return nil
+		}
+	} else {
+		fmt.Fprintln(stderr, "  Paste the secret key from the app config:")
+	}
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		key := promptHidden("Secret key: ")
+		decoded, err := config.DecodeSecretKey(key)
+		if err != nil {
+			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for secret key")
+			}
+			continue
+		}
+		// Worker: verify key matches app's beacon immediately.
+		if scope == ScopeWorker {
+			if err := verifyBeaconFromConfig(cfg, decoded); err != nil {
+				printFail("secret_key 與 app 不匹配 (attempt %d/%d)", attempt, maxRetries)
+				if attempt == maxRetries {
+					return fmt.Errorf("max retries exceeded — key does not match app")
+				}
+				continue
+			}
+		}
+		cfg.SecretKey = key
+		prompted["secret_key"] = key
+		printOK("Secret key valid")
+		return nil
+	}
+	return nil
+}
+
+// verifyBeaconFromConfig connects to Redis and verifies the secret key
+// matches the app's beacon. Uses cfg.Redis for connection details.
+func verifyBeaconFromConfig(cfg *config.Config, secretKey []byte) error {
+	rdb, err := queue.NewRedisClient(queue.RedisConfig{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+		TLS:      cfg.Redis.TLS,
+	})
+	if err != nil {
+		return fmt.Errorf("connect to Redis for beacon check: %w", err)
+	}
+	defer rdb.Close()
+	return crypto.VerifyBeacon(context.Background(), rdb, secretKey)
 }
 
 func preflightAgentCLIs(cfg *config.Config, interactive bool) error {

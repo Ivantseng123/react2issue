@@ -46,6 +46,13 @@ workers:
 #   password: ""
 #   db: 0
 
+# Secret encryption (required for Redis mode)
+secret_key: "64-char-hex-encoded-32-byte-AES-key"
+secrets:
+  GH_TOKEN: "ghp_xxx"
+  K8S_TOKEN: "your-k8s-token"
+  # key = env var name, value = plaintext
+
 channel_priority:
   # C_INCIDENTS: 100                  # production incidents get priority
   default: 50
@@ -55,6 +62,53 @@ prompt:
   extra_rules:
     - "List all related file names with full paths"
 ```
+
+## Secret Management
+
+In Redis mode, the app centrally manages secrets and sends them encrypted to workers.
+
+### How It Works
+
+1. App config defines `secret_key` (AES-256 encryption key) and `secrets` (key-value pairs)
+2. On startup, the app writes a beacon to Redis so workers can verify key consistency
+3. When submitting a job, `secrets` are AES-256-GCM encrypted into `Job.EncryptedSecrets`
+4. Workers decrypt and inject as environment variables for CLI agent processes (e.g., `GH_TOKEN`, `K8S_TOKEN`)
+
+### Configuration
+
+**App config (required):**
+```yaml
+secret_key: "0123456789abcdef..."   # 64 hex chars (32 bytes)
+secrets:
+  GH_TOKEN: "ghp_xxx"
+  K8S_TOKEN: "eyJhb..."
+```
+
+**Worker config (`secret_key` required, `secrets` optional override):**
+```yaml
+secret_key: "same-key-as-app"
+secrets:
+  GH_TOKEN: "ghp_worker_override"   # optional, overrides app-provided value
+```
+
+**Environment variable injection:**
+- `SECRET_KEY` → overrides `secret_key`
+- `AGENTDOCK_SECRET_<NAME>` → injects into `secrets["<NAME>"]` (e.g., `AGENTDOCK_SECRET_K8S_TOKEN=xxx`)
+
+### Interactive Startup
+
+When running `agentdock app` or `agentdock worker` for the first time without `secret_key`:
+- **App**: option to auto-generate a key (printed and saved to config)
+- **Worker**: prompted to paste the app's key, with immediate beacon verification
+
+### Priority Order
+
+Secrets are applied in this order (later overrides earlier):
+
+1. `github.token` (auto-merged as `secrets["GH_TOKEN"]`)
+2. App config `secrets`
+3. `AGENTDOCK_SECRET_*` environment variables
+4. Worker config `secrets` (overrides app-provided values)
 
 ## Agent Stream Mode
 

@@ -31,12 +31,37 @@ func NewRepoCache(dir string, maxAge time.Duration, githubPAT string, logger *sl
 	}
 }
 
-func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
+// resolveURLWithToken builds a clone URL. Uses perCallToken if non-empty,
+// otherwise falls back to rc.githubPAT. Full URLs (http/git@/file://) pass
+// through unchanged — callers must ensure they don't contain stale tokens.
+func (rc *RepoCache) resolveURLWithToken(repoRef, perCallToken string) string {
+	if strings.HasPrefix(repoRef, "http") || strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
+		return repoRef
+	}
+	token := perCallToken
+	if token == "" {
+		token = rc.githubPAT
+	}
+	if token != "" {
+		return fmt.Sprintf("https://%s@github.com/%s.git", token, repoRef)
+	}
+	return fmt.Sprintf("https://github.com/%s.git", repoRef)
+}
+
+func (rc *RepoCache) getRemoteURL(repoPath string) string {
+	out, err := exec.Command("git", "-C", repoPath, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
 	start := time.Now()
-	cloneURL := rc.ResolveURL(repoRef)
+	cloneURL := rc.resolveURLWithToken(repoRef, token)
 	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
 
 	if _, err := os.Stat(filepath.Join(localPath, "HEAD")); os.IsNotExist(err) {
@@ -56,6 +81,13 @@ func (rc *RepoCache) EnsureRepo(repoRef string) (string, error) {
 
 	if last, ok := rc.lastPull[repoRef]; ok && rc.maxAge > 0 && time.Since(last) < rc.maxAge {
 		return localPath, nil
+	}
+
+	// Update remote URL if token changed
+	currentURL := rc.getRemoteURL(localPath)
+	if cloneURL != currentURL && cloneURL != "" {
+		setCmd := exec.Command("git", "-C", localPath, "remote", "set-url", "origin", cloneURL)
+		setCmd.Run() // best-effort
 	}
 
 	rc.logger.Info("開始 fetch repo", "phase", "處理中", "repo", SanitizeURL(repoRef))

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"agentdock/internal/config"
+	"agentdock/internal/crypto"
 	ghclient "agentdock/internal/github"
 	"agentdock/internal/logging"
 	"agentdock/internal/mantis"
@@ -50,6 +52,7 @@ type Workflow struct {
 	attachments   queue.AttachmentStore
 	results       queue.ResultBus
 	skillProvider SkillProvider
+	secretKey    []byte // decoded AES key, nil if not configured
 
 	mu        sync.Mutex
 	pending   map[string]*pendingTriage
@@ -69,6 +72,15 @@ func NewWorkflow(
 	resultBus queue.ResultBus,
 	skillProvider SkillProvider,
 ) *Workflow {
+	// Decode secret key once at startup (nil if not configured).
+	var sk []byte
+	if cfg.SecretKey != "" {
+		var err error
+		sk, err = config.DecodeSecretKey(cfg.SecretKey)
+		if err != nil {
+			slog.Error("secret_key 無效，secret 加密功能停用", "phase", "失敗", "error", err)
+		}
+	}
 	return &Workflow{
 		cfg:           cfg,
 		slack:         slack,
@@ -81,6 +93,7 @@ func NewWorkflow(
 		attachments:   attachStore,
 		results:       resultBus,
 		skillProvider: skillProvider,
+		secretKey:     sk,
 		pending:       make(map[string]*pendingTriage),
 		autoBound:     make(map[string]bool),
 	}
@@ -241,7 +254,7 @@ func (w *Workflow) afterRepoSelected(pt *pendingTriage, channelCfg config.Channe
 		return
 	}
 
-	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo)
+	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo, w.cfg.Secrets["GH_TOKEN"])
 	if err != nil {
 		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
 		return
@@ -428,12 +441,28 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		UserID:      pt.UserID,
 		Repo:        pt.SelectedRepo,
 		Branch:      pt.SelectedBranch,
-		CloneURL:    w.repoCache.ResolveURL(pt.SelectedRepo),
+		CloneURL:    cleanCloneURL(pt.SelectedRepo),
 		Prompt:      prompt,
 		Skills:      w.loadSkills(ctx),
 		RequestID:   pt.RequestID,
 		Attachments: attachMeta,
 		SubmittedAt: time.Now(),
+	}
+
+	if len(w.secretKey) > 0 && len(w.cfg.Secrets) > 0 {
+		secretsJSON, err := json.Marshal(w.cfg.Secrets)
+		if err != nil {
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to marshal secrets: %v", err)
+			w.clearDedup(pt)
+			return
+		}
+		encrypted, err := crypto.Encrypt(w.secretKey, secretsJSON)
+		if err != nil {
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to encrypt secrets: %v", err)
+			w.clearDedup(pt)
+			return
+		}
+		job.EncryptedSecrets = encrypted
 	}
 
 	if err := w.queue.Submit(ctx, job); err != nil {
@@ -475,6 +504,13 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		w.store.Put(job) // update with StatusMsgTS
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.
+}
+
+func cleanCloneURL(repoRef string) string {
+	if strings.HasPrefix(repoRef, "http") || strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
+		return repoRef
+	}
+	return fmt.Sprintf("https://github.com/%s.git", repoRef)
 }
 
 func (w *Workflow) loadSkills(ctx context.Context) map[string]*queue.SkillPayload {

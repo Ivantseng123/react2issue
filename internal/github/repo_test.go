@@ -27,7 +27,7 @@ func TestRepoCache_EnsureRepo_ClonesNewRepo(t *testing.T) {
 	cacheDir := t.TempDir()
 	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
 
-	repoPath, err := cache.EnsureRepo("file://" + bareDir)
+	repoPath, err := cache.EnsureRepo("file://"+bareDir, "")
 	if err != nil {
 		t.Fatalf("EnsureRepo failed: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestRepoCache_EnsureRepo_PullsExistingRepo(t *testing.T) {
 	cacheDir := t.TempDir()
 	cache := NewRepoCache(cacheDir, 0, "", slog.Default())
 
-	repoPath, err := cache.EnsureRepo("file://" + bareDir)
+	repoPath, err := cache.EnsureRepo("file://"+bareDir, "")
 	if err != nil {
 		t.Fatalf("first EnsureRepo failed: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestRepoCache_EnsureRepo_PullsExistingRepo(t *testing.T) {
 	run(t, workDir, "git", "-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "v2")
 	run(t, workDir, "git", "push")
 
-	repoPath2, err := cache.EnsureRepo("file://" + bareDir)
+	repoPath2, err := cache.EnsureRepo("file://"+bareDir, "")
 	if err != nil {
 		t.Fatalf("second EnsureRepo failed: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRepoCache_BareCloneAndWorktree(t *testing.T) {
 	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
 
 	// EnsureRepo should create a bare clone.
-	barePath, err := cache.EnsureRepo("file://" + sourceDir)
+	barePath, err := cache.EnsureRepo("file://"+sourceDir, "")
 	if err != nil {
 		t.Fatalf("EnsureRepo failed: %v", err)
 	}
@@ -180,6 +180,33 @@ func TestRepoCache_PurgeStale(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("expected empty cache dir, got %d entries", len(entries))
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_PerCall(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "", slog.Default())
+	url := rc.resolveURLWithToken("owner/repo", "ghp_percall")
+	if url != "https://ghp_percall@github.com/owner/repo.git" {
+		t.Errorf("got %q", url)
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_Fallback(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "ghp_default", slog.Default())
+	url := rc.resolveURLWithToken("owner/repo", "")
+	if url != "https://ghp_default@github.com/owner/repo.git" {
+		t.Errorf("got %q", url)
+	}
+}
+
+func TestRepoCache_ResolveURLWithToken_NoToken(t *testing.T) {
+	dir := t.TempDir()
+	rc := NewRepoCache(dir, 0, "", slog.Default())
+	url := rc.resolveURLWithToken("owner/repo", "")
+	if url != "https://github.com/owner/repo.git" {
+		t.Errorf("got %q", url)
 	}
 }
 
