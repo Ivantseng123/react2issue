@@ -2,8 +2,11 @@ package queue
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func TestRedisJobQueue_SubmitAndReceive(t *testing.T) {
@@ -109,6 +112,78 @@ func TestRedisJobQueue_AckAndDepth(t *testing.T) {
 	}
 	if pos != 0 {
 		t.Errorf("QueuePosition = %d, want 0", pos)
+	}
+}
+
+func TestRedisJobQueue_QueueDepth_BeforeAnyConsumer(t *testing.T) {
+	client := testRedisClient(t)
+	store := NewMemJobStore()
+	q := NewRedisJobQueue(client, store, "triage")
+	defer q.Close()
+
+	ctx := context.Background()
+
+	// App pod submits before any worker connects — the consumer group does
+	// not exist yet. /jobs must still report an accurate pending count,
+	// otherwise operators can't tell if a submit landed.
+	for i := 1; i <= 2; i++ {
+		job := &Job{ID: fmt.Sprintf("pre-%d", i), Priority: 1, TaskType: "triage", SubmittedAt: time.Now()}
+		if err := q.Submit(ctx, job); err != nil {
+			t.Fatalf("Submit: %v", err)
+		}
+	}
+
+	if depth := q.QueueDepth(); depth != 2 {
+		t.Errorf("QueueDepth = %d before any consumer group, want 2", depth)
+	}
+}
+
+func TestRedisJobQueue_QueueDepth_ExcludesAckedEntries(t *testing.T) {
+	client := testRedisClient(t)
+	store := NewMemJobStore()
+	q := NewRedisJobQueue(client, store, "triage")
+	defer q.Close()
+
+	ctx := context.Background()
+
+	for i := 1; i <= 3; i++ {
+		job := &Job{ID: fmt.Sprintf("job-depth-%03d", i), Priority: 1, TaskType: "triage", SubmittedAt: time.Now()}
+		if err := q.Submit(ctx, job); err != nil {
+			t.Fatalf("Submit %s: %v", job.ID, err)
+		}
+	}
+
+	// Simulate two workers consuming + acking one job each via the raw Redis
+	// commands the pool uses internally. Bypassing q.Receive() here keeps the
+	// test insensitive to the eager-pre-read of its dispatch goroutine.
+	if err := client.XGroupCreateMkStream(ctx, q.stream, q.group, "0").Err(); err != nil && !isRedisError(err, "BUSYGROUP") {
+		t.Fatalf("XGroupCreateMkStream: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		res, err := client.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    q.group,
+			Consumer: fmt.Sprintf("test-%d", i),
+			Streams:  []string{q.stream, ">"},
+			Count:    1,
+			Block:    2 * time.Second,
+		}).Result()
+		if err != nil {
+			t.Fatalf("XReadGroup #%d: %v", i, err)
+		}
+		for _, s := range res {
+			for _, m := range s.Messages {
+				if err := client.XAck(ctx, q.stream, q.group, m.ID).Err(); err != nil {
+					t.Fatalf("XAck %s: %v", m.ID, err)
+				}
+			}
+		}
+	}
+
+	// XLEN stays at 3 (Redis Streams retain acked entries); QueueDepth must
+	// report only the un-dispatched remainder — otherwise an external monitor
+	// sees phantom backlog forever.
+	if depth := q.QueueDepth(); depth != 1 {
+		t.Errorf("QueueDepth = %d after 2/3 acked, want 1", depth)
 	}
 }
 

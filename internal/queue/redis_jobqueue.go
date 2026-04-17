@@ -57,9 +57,44 @@ func (q *RedisJobQueue) QueuePosition(_ string) (int, error) {
 	return 0, nil
 }
 
-// QueueDepth returns the number of messages in the stream.
+// QueueDepth returns the number of jobs still awaiting dispatch to any worker
+// — Redis' `lag` for the consumer group.
+//
+// Raw XLEN is intentionally avoided: Redis Streams keep entries after XACK,
+// so XLEN grows monotonically and drifts further from reality over time; an
+// external monitor polling /jobs would otherwise see phantom backlog forever.
+//
+// Prefers `lag` (Redis 7.0+). Falls back to `XLEN - entries-read` when lag is
+// unavailable (-1). When the consumer group has not been created yet (fresh
+// stream, no Receive call), XLEN is accurate — nothing has been consumed.
 func (q *RedisJobQueue) QueueDepth() int {
-	n, err := q.rdb.XLen(context.Background(), q.stream).Result()
+	ctx := context.Background()
+	groups, err := q.rdb.XInfoGroups(ctx, q.stream).Result()
+	if err != nil {
+		if n, xErr := q.rdb.XLen(ctx, q.stream).Result(); xErr == nil {
+			return int(n)
+		}
+		return 0
+	}
+	for _, g := range groups {
+		if g.Name != q.group {
+			continue
+		}
+		if g.Lag >= 0 {
+			return int(g.Lag)
+		}
+		total, err := q.rdb.XLen(ctx, q.stream).Result()
+		if err != nil {
+			return 0
+		}
+		depth := total - g.EntriesRead
+		if depth < 0 {
+			depth = 0
+		}
+		return int(depth)
+	}
+	// Group not yet created — nothing has been consumed, XLEN is accurate.
+	n, err := q.rdb.XLen(ctx, q.stream).Result()
 	if err != nil {
 		return 0
 	}
