@@ -37,8 +37,11 @@ queue:
   prepare_timeout: 3m                 # clone/setup 超時
   status_interval: 5s                 # worker 回報狀態頻率
 
-workers:
+worker:
   count: 3                            # worker pool 大小
+  prompt:
+    extra_rules:                      # worker 層執行時規則
+      - "列出所有相關的檔案名稱與完整路徑"
 
 # Redis 設定（transport: redis 時使用）
 # redis:
@@ -59,8 +62,9 @@ channel_priority:
 
 prompt:
   language: "繁體中文"
-  extra_rules:
-    - "列出所有相關的檔案名稱與完整路徑"
+  goal: "使用 /triage-issue skill 調查 codebase 並產出結構化分類結果"
+  output_rules: []                    # app 層輸出規則（預設空，不渲染此段落）
+  allow_worker_rules: true            # 是否讓 worker.prompt.extra_rules 生效
 ```
 
 ## Secret 管理

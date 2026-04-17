@@ -37,8 +37,11 @@ queue:
   prepare_timeout: 3m                 # clone/setup timeout
   status_interval: 5s                 # worker status report frequency
 
-workers:
+worker:
   count: 3                            # worker pool size
+  prompt:
+    extra_rules:                      # worker-side execution rules
+      - "List all related file names with full paths"
 
 # Redis config (used when transport: redis)
 # redis:
@@ -59,8 +62,9 @@ channel_priority:
 
 prompt:
   language: "English"
-  extra_rules:
-    - "List all related file names with full paths"
+  goal: "Use the /triage-issue skill to investigate and produce a structured triage result."
+  output_rules: []                    # app-level output rules (default empty; doesn't render section)
+  allow_worker_rules: true            # whether to apply worker.prompt.extra_rules for this job
 ```
 
 ## Secret Management
