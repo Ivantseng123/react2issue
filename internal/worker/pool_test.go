@@ -29,9 +29,13 @@ type mockRepo struct {
 	removedWorktrees []string
 	cleanAllCalled   bool
 	purgedStale      bool
+	prepareHook      func()
 }
 
 func (m *mockRepo) Prepare(cloneURL, branch, token string) (string, error) {
+	if m.prepareHook != nil {
+		m.prepareHook()
+	}
 	return m.path, m.err
 }
 
@@ -382,6 +386,66 @@ func (b *blockingRunner) Run(ctx context.Context, workDir, prompt string, opts b
 	<-ctx.Done()
 	return "", ctx.Err()
 }
+
+// prepBlockingRunner blocks inside Run (simulating prep-like work) until ctx is cancelled.
+// It does NOT call OnStarted so the process registry never transitions to "started".
+type prepBlockingRunner struct {
+	started chan struct{}
+}
+
+func (b *prepBlockingRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+	close(b.started)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// Scenario B — Kill arrives while runner is blocked during prep-like work (before OnStarted).
+func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
+	store := queue.NewMemJobStore()
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	job := &queue.Job{ID: "jprep", Repo: "o/r", SubmittedAt: time.Now()}
+
+	runner := &prepBlockingRunner{started: make(chan struct{})}
+	pool := NewPool(Config{
+		Queue:       bundle.Queue,
+		Attachments: bundle.Attachments,
+		Results:     bundle.Results,
+		Store:       store,
+		Runner:      runner,
+		RepoCache:   &mockRepo{path: "/tmp/r"},
+		Commands:    bundle.Commands,
+		WorkerCount: 1,
+		Logger:      slog.Default(),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool.Start(ctx)
+
+	if err := bundle.Queue.Submit(ctx, job); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	<-runner.started
+	store.UpdateStatus("jprep", queue.JobCancelled)
+	bundle.Commands.Send(ctx, queue.Command{JobID: "jprep", Action: "kill"})
+
+	ch, _ := bundle.Results.Subscribe(ctx)
+	select {
+	case r := <-ch:
+		if r.Status != "cancelled" {
+			t.Errorf("status = %q, want cancelled", r.Status)
+		}
+	case <-ctx.Done():
+		t.Fatal("no result")
+	}
+}
+
+// Scenario 7 — Watchdog-level cancel fallback (JobCancelled + CancelledAt past timeout + no worker publish)
+// is covered by TestWatchdog_CancelFallbackAfterTimeout in internal/queue/watchdog_test.go.
+// No pool-level duplication needed.
 
 func TestPool_KillOnRunningAgentProducesCancelledResult(t *testing.T) {
 	store := queue.NewMemJobStore()

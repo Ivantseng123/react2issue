@@ -116,8 +116,6 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 			truncated = truncated[:2000] + "…(truncated)"
 		}
 		logger.Warn("工作失敗", "phase", "降級", "error", result.Error, "raw_output", truncated)
-	case "cancelled":
-		logger.Info("工作已取消", "phase", "完成")
 	default:
 		logger.Info("工作完成", "phase", "完成", "title", result.Title, "confidence", result.Confidence, "files_found", result.FilesFound)
 	}

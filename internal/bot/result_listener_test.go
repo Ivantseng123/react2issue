@@ -167,10 +167,15 @@ func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
+	var dedupMu sync.Mutex
 	dedupCleared := false
 
 	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil,
-		func(channelID, threadTS string) { dedupCleared = true }, slog.Default())
+		func(channelID, threadTS string) {
+			dedupMu.Lock()
+			dedupCleared = true
+			dedupMu.Unlock()
+		}, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -193,7 +198,10 @@ func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 	if slackMock.buttons[0] != "retry_job:j1" {
 		t.Errorf("button = %q, want retry_job:j1", slackMock.buttons[0])
 	}
-	if dedupCleared {
+	dedupMu.Lock()
+	actualDedup := dedupCleared
+	dedupMu.Unlock()
+	if actualDedup {
 		t.Error("dedup should NOT be cleared when retry button is shown")
 	}
 }
@@ -206,10 +214,15 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
+	var dedupMu sync.Mutex
 	dedupCleared := false
 
 	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil,
-		func(channelID, threadTS string) { dedupCleared = true }, slog.Default())
+		func(channelID, threadTS string) {
+			dedupMu.Lock()
+			dedupCleared = true
+			dedupMu.Unlock()
+		}, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -238,7 +251,10 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 	if !found {
 		t.Errorf("expected retry-exhausted message, got %v", slackMock.messages)
 	}
-	if !dedupCleared {
+	dedupMu.Lock()
+	actualDedup := dedupCleared
+	dedupMu.Unlock()
+	if !actualDedup {
 		t.Error("dedup should be cleared when no retry button")
 	}
 }

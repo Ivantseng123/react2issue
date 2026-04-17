@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
+	"agentdock/internal/bot"
 	"agentdock/internal/queue"
 )
 
@@ -93,5 +95,41 @@ func TestClassifyResult_NoErrorRoutesToFailed(t *testing.T) {
 
 	if result.Status != "failed" {
 		t.Errorf("status = %q, want failed", result.Status)
+	}
+}
+
+// Scenario 6 — Admin kill path: store=JobFailed + ctx cancel yields "failed", not "cancelled".
+// Covered by TestClassifyResult_WatchdogKillFallsThroughToFailed above, which also
+// asserts result.Error is non-empty.
+
+// Scenario B-race — Pre-Prepare ctx guard: store set to JobCancelled before Prepare runs
+// → Prepare is not invoked and the result is cancelled.
+func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
+	store := queue.NewMemJobStore()
+	job := &queue.Job{ID: "jguard", Repo: "o/r"}
+	store.Put(job)
+	store.UpdateStatus("jguard", queue.JobCancelled)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	prepareCalled := false
+	deps := executionDeps{
+		attachments: queue.NewInMemAttachmentStore(),
+		repoCache: &mockRepo{
+			path:        "/tmp/r",
+			prepareHook: func() { prepareCalled = true },
+		},
+		runner: &mockRunner{},
+		store:  store,
+	}
+
+	result := executeJob(ctx, job, deps, bot.RunOptions{}, slog.Default())
+
+	if prepareCalled {
+		t.Error("Prepare must not be invoked when ctx is cancelled before prep")
+	}
+	if result.Status != "cancelled" {
+		t.Errorf("status = %q, want cancelled", result.Status)
 	}
 }
