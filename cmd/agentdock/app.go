@@ -235,6 +235,7 @@ func runApp(cfg *config.Config) error {
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,
 		PrepareTimeout: cfg.Queue.PrepareTimeout,
+		CancelTimeout:  cfg.Queue.CancelTimeout,
 	}, queueLogger,
 		queue.WithWatchdogKillHook(func(reason string) {
 			metrics.WatchdogKillsTotal.WithLabelValues(reason).Inc()
@@ -373,9 +374,14 @@ func runApp(cfg *config.Config) error {
 					case strings.HasPrefix(action.ActionID, "cancel_job"):
 						jobID := action.Value
 						state, err := jobStore.Get(jobID)
-						if err == nil && state.Status != queue.JobFailed && state.Status != queue.JobCompleted {
+						if err == nil &&
+							state.Status != queue.JobFailed &&
+							state.Status != queue.JobCompleted &&
+							state.Status != queue.JobCancelled {
+							// Order matters: UpdateStatus BEFORE Send so the worker's classifyResult
+							// observes JobCancelled when ctx cancellation propagates.
+							jobStore.UpdateStatus(jobID, queue.JobCancelled)
 							bundle.Commands.Send(context.Background(), queue.Command{JobID: jobID, Action: "kill"})
-							jobStore.UpdateStatus(jobID, queue.JobFailed)
 							slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":stop_sign: 正在取消...")
 							handler.ClearThreadDedup(cb.Channel.ID, state.Job.ThreadTS)
 						} else {

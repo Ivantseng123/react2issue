@@ -175,7 +175,7 @@ func KillHandler(store JobStore, commands CommandBus) http.HandlerFunc {
 			return
 		}
 
-		if state.Status == JobCompleted || state.Status == JobFailed {
+		if state.Status == JobCompleted || state.Status == JobFailed || state.Status == JobCancelled {
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]string{"error": "job not running"})
 			return

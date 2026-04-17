@@ -167,10 +167,15 @@ func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
+	var dedupMu sync.Mutex
 	dedupCleared := false
 
 	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil,
-		func(channelID, threadTS string) { dedupCleared = true }, slog.Default())
+		func(channelID, threadTS string) {
+			dedupMu.Lock()
+			dedupCleared = true
+			dedupMu.Unlock()
+		}, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -193,7 +198,10 @@ func TestResultListener_FailedShowsRetryButton(t *testing.T) {
 	if slackMock.buttons[0] != "retry_job:j1" {
 		t.Errorf("button = %q, want retry_job:j1", slackMock.buttons[0])
 	}
-	if dedupCleared {
+	dedupMu.Lock()
+	actualDedup := dedupCleared
+	dedupMu.Unlock()
+	if actualDedup {
 		t.Error("dedup should NOT be cleared when retry button is shown")
 	}
 }
@@ -206,10 +214,15 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
+	var dedupMu sync.Mutex
 	dedupCleared := false
 
 	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil,
-		func(channelID, threadTS string) { dedupCleared = true }, slog.Default())
+		func(channelID, threadTS string) {
+			dedupMu.Lock()
+			dedupCleared = true
+			dedupMu.Unlock()
+		}, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -238,8 +251,90 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 	if !found {
 		t.Errorf("expected retry-exhausted message, got %v", slackMock.messages)
 	}
-	if !dedupCleared {
+	dedupMu.Lock()
+	actualDedup := dedupCleared
+	dedupMu.Unlock()
+	if !actualDedup {
 		t.Error("dedup should be cleared when no retry button")
+	}
+}
+
+func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jcan", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{JobID: "jcan", Status: "cancelled"})
+	time.Sleep(200 * time.Millisecond)
+
+	slackMock.mu.Lock()
+	defer slackMock.mu.Unlock()
+	found := false
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "已取消") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cancelled message, got %v", slackMock.messages)
+	}
+	if len(slackMock.buttons) != 0 {
+		t.Errorf("no retry button expected, got %v", slackMock.buttons)
+	}
+
+	state, _ := store.Get("jcan")
+	if state.Status != queue.JobCancelled {
+		t.Errorf("store status = %q, want JobCancelled", state.Status)
+	}
+}
+
+func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jrace", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
+	store.UpdateStatus("jrace", queue.JobCancelled)
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	github := &mockIssueCreator{url: "https://github.com/o/r/issues/42"}
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, github, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID: "jrace", Status: "completed",
+		Title: "Bug", Body: "b", Confidence: "high", FilesFound: 2,
+	})
+	time.Sleep(200 * time.Millisecond)
+
+	slackMock.mu.Lock()
+	defer slackMock.mu.Unlock()
+
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "issues/42") {
+			t.Errorf("issue URL must not be posted when store says cancelled; messages=%v", slackMock.messages)
+		}
+	}
+	found := false
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "已取消") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cancelled message, got %v", slackMock.messages)
 	}
 }
 

@@ -58,6 +58,10 @@ func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, pro
 		logger.Info("嘗試 agent", "phase", "處理中", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
 		output, err := r.runOne(ctx, logger, agent, workDir, prompt, opts)
 		if err != nil {
+			if ctx.Err() == context.Canceled {
+				logger.Info("Agent 執行已中斷", "phase", "完成", "command", agent.Command, "index", i)
+				return "", fmt.Errorf("cancelled")
+			}
 			logger.Warn("Agent 失敗", "phase", "失敗", "command", agent.Command, "index", i, "error", err)
 			errs = append(errs, fmt.Sprintf("%s: %s", agent.Command, err))
 			continue

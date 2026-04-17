@@ -96,9 +96,21 @@ func (p *Pool) runWorker(ctx context.Context, id int) {
 			}
 			// Check if cancelled while pending.
 			state, err := p.cfg.Store.Get(job.ID)
-			if err != nil || state.Status == queue.JobFailed {
+			if err != nil {
 				p.cfg.Results.Publish(ctx, &queue.JobResult{
-					JobID: job.ID, Status: "failed", Error: "cancelled before execution",
+					JobID: job.ID, Status: "failed", Error: "state lookup failed",
+				})
+				continue
+			}
+			switch state.Status {
+			case queue.JobCancelled:
+				p.cfg.Results.Publish(ctx, &queue.JobResult{
+					JobID: job.ID, Status: "cancelled",
+				})
+				continue
+			case queue.JobFailed:
+				p.cfg.Results.Publish(ctx, &queue.JobResult{
+					JobID: job.ID, Status: "failed", Error: "terminated before execution",
 				})
 				continue
 			}
@@ -115,6 +127,16 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	jobCtx, jobCancel := context.WithCancel(ctx)
 	defer jobCancel()
 
+	p.registry.RegisterPending(job.ID, jobCancel)
+	defer p.registry.Remove(job.ID)
+
+	// Race mitigation: close the gap between queue-check and RegisterPending
+	// for both cancel and admin-failed states.
+	if s, _ := p.cfg.Store.Get(job.ID); s != nil &&
+		(s.Status == queue.JobCancelled || s.Status == queue.JobFailed) {
+		jobCancel()
+	}
+
 	wID := fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, workerIndex)
 
 	status := &statusAccumulator{
@@ -129,7 +151,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	opts := bot.RunOptions{
 		OnStarted: func(pid int, command string) {
 			status.setPID(pid, command)
-			p.registry.Register(job.ID, pid, command, jobCancel)
+			p.registry.SetStarted(job.ID, pid, command)
 			logger.Info("Agent 已註冊", "phase", "處理中", "pid", pid, "command", command)
 
 			// Now that we have a PID, send first report immediately + start periodic.
@@ -184,7 +206,6 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	if stopReporter != nil {
 		close(stopReporter)
 	}
-	p.registry.Remove(job.ID)
 
 	// Clean up this job's worktree.
 	if result.RepoPath != "" {
@@ -197,7 +218,12 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	if err := p.cfg.Results.Publish(ctx, result); err != nil {
 		logger.Error("failed to publish result", "error", err)
 	}
-	logger.Info("工作完成", "phase", "完成", "status", result.Status)
+
+	if result.Status == "cancelled" {
+		logger.Info("工作已取消", "phase", "完成")
+	} else {
+		logger.Info("工作完成", "phase", "完成", "status", result.Status)
+	}
 }
 
 func (p *Pool) workerHeartbeat(ctx context.Context) {
