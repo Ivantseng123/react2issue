@@ -306,6 +306,7 @@ On Linux/macOS, later entries override earlier ones with the same key, so append
 | `internal/worker/executor.go` | `RepoProvider.Prepare` adds `token` param |
 | `cmd/agentdock/adapters.go` | `repoCacheAdapter.Prepare` passes token; `agentRunnerAdapter` unchanged |
 | `cmd/agentdock/worker.go` | Pass `secretKey`/`workerSecrets` to Pool config |
+| `internal/bot/retry_handler.go` | Propagate `EncryptedSecrets` from original job to retry job |
 | `cmd/agentdock/init.go` / `prompts.go` | Init wizard: secret_key generation step |
 
 ## Out of Scope
