@@ -370,6 +370,9 @@ func runApp(cfg *config.Config) error {
 					case strings.HasPrefix(action.ActionID, "description_action"):
 						wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
 
+					case action.ActionID == "back_to_repo":
+						wf.HandleBackToRepo(cb.Channel.ID, selectorTS)
+
 					case action.ActionID == "retry_job":
 						retryHandler.Handle(cb.Channel.ID, action.Value, selectorTS)
 
