@@ -67,6 +67,9 @@ func (s *MemJobStore) UpdateStatus(jobID string, status JobStatus) error {
 		state.StartedAt = time.Now()
 		state.WaitTime = state.StartedAt.Sub(state.Job.SubmittedAt)
 	}
+	if status == JobCancelled && state.CancelledAt.IsZero() {
+		state.CancelledAt = time.Now()
+	}
 	return nil
 }
 

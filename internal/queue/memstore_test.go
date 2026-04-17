@@ -77,3 +77,37 @@ func TestMemJobStore_GetNotFound(t *testing.T) {
 		t.Error("expected error for nonexistent job")
 	}
 }
+
+func TestMemJobStore_UpdateStatus_StampsCancelledAt(t *testing.T) {
+	s := NewMemJobStore()
+	s.Put(&Job{ID: "j1"})
+
+	before := time.Now()
+	if err := s.UpdateStatus("j1", JobCancelled); err != nil {
+		t.Fatalf("UpdateStatus: %v", err)
+	}
+	state, _ := s.Get("j1")
+	if state.CancelledAt.IsZero() {
+		t.Fatal("CancelledAt should be stamped")
+	}
+	if state.CancelledAt.Before(before) {
+		t.Errorf("CancelledAt (%v) earlier than call start (%v)", state.CancelledAt, before)
+	}
+}
+
+func TestMemJobStore_UpdateStatus_CancelledAtIdempotent(t *testing.T) {
+	s := NewMemJobStore()
+	s.Put(&Job{ID: "j1"})
+
+	s.UpdateStatus("j1", JobCancelled)
+	state, _ := s.Get("j1")
+	first := state.CancelledAt
+
+	time.Sleep(5 * time.Millisecond)
+	s.UpdateStatus("j1", JobCancelled)
+	state, _ = s.Get("j1")
+
+	if !state.CancelledAt.Equal(first) {
+		t.Errorf("second UpdateStatus should not re-stamp; first=%v second=%v", first, state.CancelledAt)
+	}
+}
