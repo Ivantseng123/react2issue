@@ -46,6 +46,13 @@ workers:
 #   password: ""
 #   db: 0
 
+# Secret 加密（Redis 模式必填）
+secret_key: "64字元hex編碼的32-byte AES key"
+secrets:
+  GH_TOKEN: "ghp_xxx"
+  K8S_TOKEN: "your-k8s-token"
+  # key = 環境變數名稱，value = 明文值
+
 channel_priority:
   # C_INCIDENTS: 100                  # production incidents 優先
   default: 50
@@ -55,6 +62,53 @@ prompt:
   extra_rules:
     - "列出所有相關的檔案名稱與完整路徑"
 ```
+
+## Secret 管理
+
+Redis 模式下，app 集中管理 secrets 並加密傳給 worker。
+
+### 運作方式
+
+1. App config 設定 `secret_key`（AES-256 加密金鑰）和 `secrets`（key-value pairs）
+2. App 啟動時將 beacon 寫入 Redis，用於 worker 驗證金鑰一致性
+3. 每個 job 提交時，`secrets` 用 AES-256-GCM 加密後放入 `Job.EncryptedSecrets`
+4. Worker 解密後注入為子進程的環境變數（如 `GH_TOKEN`、`K8S_TOKEN`）
+
+### 設定
+
+**App config（必填）：**
+```yaml
+secret_key: "0123456789abcdef..."   # 64 字元 hex（32 bytes）
+secrets:
+  GH_TOKEN: "ghp_xxx"
+  K8S_TOKEN: "eyJhb..."
+```
+
+**Worker config（必填 `secret_key`，`secrets` 可選覆蓋）：**
+```yaml
+secret_key: "跟 app 同一把"
+secrets:
+  GH_TOKEN: "ghp_worker_override"   # 選填，會覆蓋 app 給的值
+```
+
+**環境變數注入：**
+- `SECRET_KEY` → 覆蓋 `secret_key`
+- `AGENTDOCK_SECRET_<NAME>` → 注入 `secrets["<NAME>"]`（例如 `AGENTDOCK_SECRET_K8S_TOKEN=xxx`）
+
+### 互動式啟動
+
+首次執行 `agentdock app` 或 `agentdock worker` 時，如果 `secret_key` 未設定：
+- **App**：可選擇自動產生金鑰，產生後會印出並寫入 config
+- **Worker**：提示貼入 app 的金鑰，並立即驗證與 app 的 beacon 是否匹配
+
+### 優先級
+
+Secret 的套用順序（後者覆蓋前者）：
+
+1. `github.token`（自動合併為 `secrets["GH_TOKEN"]`）
+2. App config 的 `secrets`
+3. `AGENTDOCK_SECRET_*` 環境變數
+4. Worker config 的 `secrets`（覆蓋 app 給的值）
 
 ## Agent Stream 模式
 
