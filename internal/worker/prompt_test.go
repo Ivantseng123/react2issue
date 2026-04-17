@@ -53,8 +53,14 @@ func TestBuildPrompt_Ordering_GoalFirst_OutputRulesLast(t *testing.T) {
 	if goalIdx == -1 || ctxIdx == -1 || rulesIdx == -1 {
 		t.Fatalf("missing sections: goal=%d thread=%d rules=%d", goalIdx, ctxIdx, rulesIdx)
 	}
+	if goalIdx != 0 {
+		t.Errorf("expected <goal> at index 0, got %d", goalIdx)
+	}
 	if !(goalIdx < ctxIdx && ctxIdx < rulesIdx) {
 		t.Errorf("expected goal < thread < output_rules, got goal=%d thread=%d rules=%d", goalIdx, ctxIdx, rulesIdx)
+	}
+	if !strings.HasSuffix(got, "</output_rules>") {
+		t.Errorf("expected output_rules to be last section, got suffix: %q", got[max(0, len(got)-60):])
 	}
 }
 
@@ -156,14 +162,43 @@ func TestBuildPrompt_XMLEscaping(t *testing.T) {
 	if strings.Contains(got, "<script>") {
 		t.Errorf("unescaped <script> in output:\n%s", got)
 	}
-	if !strings.Contains(got, "&lt;script&gt;") && !strings.Contains(got, "&#60;script&#62;") {
+	if !strings.Contains(got, "&lt;script&gt;") {
 		t.Errorf("expected escaped <script>, got:\n%s", got)
 	}
 	if !strings.Contains(got, "&amp;") {
 		t.Errorf("expected escaped &amp;, got:\n%s", got)
 	}
-	if !strings.Contains(got, "&lt; 100 chars") && !strings.Contains(got, "&#60; 100 chars") {
+	if !strings.Contains(got, "&quot;") {
+		t.Errorf("expected escaped &quot; for double quotes, got:\n%s", got)
+	}
+	if !strings.Contains(got, "&lt; 100 chars") {
 		t.Errorf("expected escaped '< 100 chars', got:\n%s", got)
+	}
+}
+
+// TestBuildPrompt_PreservesWhitespace guards against accidentally using
+// encoding/xml.EscapeText (which converts \n to &#xA;). Slack thread messages
+// often contain multi-line stack traces; those newlines must reach the LLM
+// verbatim, not as entity references.
+func TestBuildPrompt_PreservesWhitespace(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{
+			{User: "Alice", Timestamp: "1", Text: "line1\nline2\n\tindented"},
+		},
+		Channel:  "c",
+		Reporter: "r",
+		Goal:     "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+
+	if !strings.Contains(got, "line1\nline2\n\tindented") {
+		t.Errorf("expected raw newlines/tabs preserved in message text, got:\n%s", got)
+	}
+	if strings.Contains(got, "&#xA;") || strings.Contains(got, "&#10;") {
+		t.Errorf("newline was entity-encoded (should be raw), got:\n%s", got)
+	}
+	if strings.Contains(got, "&#x9;") || strings.Contains(got, "&#9;") {
+		t.Errorf("tab was entity-encoded (should be raw), got:\n%s", got)
 	}
 }
 

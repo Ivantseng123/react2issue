@@ -1,8 +1,6 @@
 package worker
 
 import (
-	"bytes"
-	"encoding/xml"
 	"fmt"
 	"strings"
 
@@ -98,12 +96,32 @@ func BuildPrompt(ctx queue.PromptContext, extraRules []string, attachments []Att
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// xmlEscape escapes < > & ' " for XML text or attribute-value context.
-// Uses encoding/xml.EscapeText which covers both.
+// xmlEscape escapes the five XML special characters (< > & " ') but leaves
+// whitespace (\n \t \r) as-is. encoding/xml.EscapeText would convert newlines
+// to &#xA;, which wrecks readability when Slack thread messages contain
+// multi-line content like stack traces. Since this output is read by an LLM
+// rather than parsed as strict XML, preserving visible whitespace is worth
+// more than strict attribute-value normalization.
 func xmlEscape(s string) string {
-	var buf bytes.Buffer
-	_ = xml.EscapeText(&buf, []byte(s))
-	return buf.String()
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		case '&':
+			b.WriteString("&amp;")
+		case '"':
+			b.WriteString("&quot;")
+		case '\'':
+			b.WriteString("&apos;")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func attachmentHint(attType string) string {
