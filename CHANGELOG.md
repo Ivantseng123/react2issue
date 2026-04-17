@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.3.0](https://github.com/Ivantseng123/agentdock/compare/v1.2.7...v1.3.0) (2026-04-17)
+
+
+### Features
+
+* **bot:** add handle back-to-repo for mis-clicked repo ([77dd0c4](https://github.com/Ivantseng123/agentdock/commit/77dd0c43308a342fc399792ecb7e37449fa715bb))
+* **bot:** add render helpers for status message templates ([d118501](https://github.com/Ivantseng123/agentdock/commit/d118501694c8c0805b623e070bf022fa6fbfa10a))
+* **bot:** defensive double-write of final status message ([c6dedb5](https://github.com/Ivantseng123/agentdock/commit/c6dedb5daa3a8a1bb8a061266090e5c99b43fcdb))
+* **bot:** gate back button on description prompt ([bc4fd26](https://github.com/Ivantseng123/agentdock/commit/bc4fd2646816d20fff9135ec3398be2b00459d7d))
+* **bot:** introduce slackAPI interface; add RepoWasPicked gate ([a37f21e](https://github.com/Ivantseng123/agentdock/commit/a37f21e8bfc90c54e065dadac635d481ec06cce9))
+* **bot:** push status progress updates to slack ([7d9cf93](https://github.com/Ivantseng123/agentdock/commit/7d9cf933ac816a879251328f979e46fb5da7003a))
+* Slack UX — progress visibility + repo re-select back button ([57c098c](https://github.com/Ivantseng123/agentdock/commit/57c098cbaa18932c9ca839155c604c07cd15181f))
+* **slack:** add PostSelectorWithBack with optional trailing back button ([e3f0aa5](https://github.com/Ivantseng123/agentdock/commit/e3f0aa58ef9f328139778dcb466ecb095dcd06b5))
+* **slack:** add UpdateMessageWithButton for status updates ([2cef28d](https://github.com/Ivantseng123/agentdock/commit/2cef28d071353aaf2b05def5b673e942b5073443))
+* **worker:** emit prep-phase StatusReport on job pickup ([edfe79a](https://github.com/Ivantseng123/agentdock/commit/edfe79a23eafb18d73ae6945015341b1e8d863ec))
+
+
+### Bug Fixes
+
+* **bot:** route REJECTED/ERROR parser results to skip/fail lanes ([7995d78](https://github.com/Ivantseng123/agentdock/commit/7995d78c4ba663cdd764a68f3beb3f2aa50491e7))
+* **bot:** route REJECTED/ERROR parser results to skip/fail lanes ([df2e43b](https://github.com/Ivantseng123/agentdock/commit/df2e43b4f85c08d183312cc9128ade6030263be1))
+* **worker:** replace time.Sleep with signaling channel in prep test ([c4f4103](https://github.com/Ivantseng123/agentdock/commit/c4f4103be177663dae49b5729c6e0ff0a0216899))
+
 ## [1.2.7](https://github.com/Ivantseng123/agentdock/compare/v1.2.6...v1.2.7) (2026-04-17)
 
 
