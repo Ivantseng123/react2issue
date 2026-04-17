@@ -53,7 +53,7 @@ func runPreflight(cfg *config.Config, scope PreflightScope) (map[string]any, err
 		}
 	}
 
-	if err := preflightSecretKey(cfg, interactive, prompted); err != nil {
+	if err := preflightSecretKey(cfg, interactive, prompted, scope); err != nil {
 		return prompted, err
 	}
 
@@ -253,9 +253,8 @@ func preflightSlackApp(cfg *config.Config, interactive bool, prompted map[string
 	return fmt.Errorf("unreachable")
 }
 
-func preflightSecretKey(cfg *config.Config, interactive bool, prompted map[string]any) error {
+func preflightSecretKey(cfg *config.Config, interactive bool, prompted map[string]any, scope PreflightScope) error {
 	if cfg.SecretKey != "" {
-		// Validate existing key.
 		if _, err := config.DecodeSecretKey(cfg.SecretKey); err != nil {
 			printFail("secret_key invalid: %v", err)
 			return err
@@ -269,18 +268,26 @@ func preflightSecretKey(cfg *config.Config, interactive bool, prompted map[strin
 	fmt.Fprintln(stderr)
 	fmt.Fprintln(stderr, "  Secret key for encrypting secrets between app and workers.")
 	fmt.Fprintln(stderr, "  Must be a 64-character hex string (32 bytes).")
-	if promptYesNo("  Auto-generate a key?") {
-		keyBytes := make([]byte, 32)
-		if _, err := rand.Read(keyBytes); err != nil {
-			return fmt.Errorf("generate key: %w", err)
+
+	// Only app can auto-generate; worker must receive the key from app.
+	if scope == ScopeApp {
+		if promptYesNo("  Auto-generate a key?") {
+			keyBytes := make([]byte, 32)
+			if _, err := rand.Read(keyBytes); err != nil {
+				return fmt.Errorf("generate key: %w", err)
+			}
+			hexKey := hex.EncodeToString(keyBytes)
+			cfg.SecretKey = hexKey
+			prompted["secret_key"] = hexKey
+			fmt.Fprintf(stderr, "  Generated: %s\n", hexKey)
+			fmt.Fprintln(stderr, "  ⚠ Copy this key to all worker configs.")
+			printOK("Secret key generated (will be saved to config)")
+			return nil
 		}
-		hexKey := hex.EncodeToString(keyBytes)
-		cfg.SecretKey = hexKey
-		prompted["secret_key"] = hexKey
-		fmt.Fprintf(stderr, "  Generated: %s\n", hexKey)
-		printOK("Secret key generated (will be saved to config)")
-		return nil
+	} else {
+		fmt.Fprintln(stderr, "  Paste the secret key from the app config:")
 	}
+
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		key := promptHidden("Secret key: ")
 		if _, err := config.DecodeSecretKey(key); err != nil {
