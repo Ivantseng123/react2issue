@@ -13,6 +13,7 @@ const (
 	JobRunning   JobStatus = "running"
 	JobCompleted JobStatus = "completed"
 	JobFailed    JobStatus = "failed"
+	JobCancelled JobStatus = "cancelled"
 )
 
 type SkillPayload struct {
@@ -90,6 +91,7 @@ type JobState struct {
 	StartedAt   time.Time
 	WaitTime    time.Duration
 	AgentStatus *StatusReport
+	CancelledAt time.Time
 }
 
 type WorkerInfo struct {
