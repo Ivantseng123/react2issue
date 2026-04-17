@@ -34,8 +34,9 @@ type ResultListener struct {
 	onDedupClear  func(channelID, threadTS string)
 	logger        *slog.Logger
 
-	mu            sync.Mutex
-	processedJobs map[string]bool
+	mu                 sync.Mutex
+	processedJobs      map[string]bool
+	clearStatusMapping func(jobID string)
 }
 
 func NewResultListener(
@@ -304,9 +305,25 @@ func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job,
 	r.updateStatus(job, fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url))
 }
 
+// SetStatusJobClearer installs a hook called after a result is fully handled,
+// so the StatusListener can drop its debounce bookkeeping for that job.
+func (r *ResultListener) SetStatusJobClearer(f func(jobID string)) {
+	r.clearStatusMapping = f
+}
+
 func (r *ResultListener) updateStatus(job *queue.Job, text string) {
 	if job.StatusMsgTS != "" {
 		r.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, text)
+		// Defensive re-write 2s later narrows the race with StatusListener's
+		// in-flight update (spec §7). Same text is idempotent.
+		ch, ts, finalText := job.ChannelID, job.StatusMsgTS, text
+		time.AfterFunc(2*time.Second, func() {
+			r.slack.UpdateMessage(ch, ts, finalText)
+		})
+		// Tell StatusListener to wipe its debounce bookkeeping for this job.
+		if r.clearStatusMapping != nil {
+			r.clearStatusMapping(job.ID)
+		}
 	} else {
 		r.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
 	}
