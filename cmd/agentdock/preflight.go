@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -51,6 +53,10 @@ func runPreflight(cfg *config.Config, scope PreflightScope) (map[string]any, err
 		}
 	}
 
+	if err := preflightSecretKey(cfg, interactive, prompted); err != nil {
+		return prompted, err
+	}
+
 	if err := preflightAgentCLIs(cfg, interactive); err != nil {
 		return prompted, err
 	}
@@ -63,7 +69,7 @@ func runPreflight(cfg *config.Config, scope PreflightScope) (map[string]any, err
 // is empty, meaning preflight should enter interactive mode when attached to
 // a terminal.
 func needsInput(cfg *config.Config, scope PreflightScope) bool {
-	base := cfg.Redis.Addr == "" || cfg.GitHub.Token == "" || len(cfg.Providers) == 0
+	base := cfg.Redis.Addr == "" || cfg.GitHub.Token == "" || len(cfg.Providers) == 0 || cfg.SecretKey == ""
 	if scope == ScopeApp {
 		return base || cfg.Slack.BotToken == "" || cfg.Slack.AppToken == ""
 	}
@@ -245,6 +251,51 @@ func preflightSlackApp(cfg *config.Config, interactive bool, prompted map[string
 		return nil
 	}
 	return fmt.Errorf("unreachable")
+}
+
+func preflightSecretKey(cfg *config.Config, interactive bool, prompted map[string]any) error {
+	if cfg.SecretKey != "" {
+		// Validate existing key.
+		if _, err := config.DecodeSecretKey(cfg.SecretKey); err != nil {
+			printFail("secret_key invalid: %v", err)
+			return err
+		}
+		printOK("Secret key configured")
+		return nil
+	}
+	if !interactive {
+		return fmt.Errorf("SECRET_KEY is required — set secret_key in config or SECRET_KEY env var")
+	}
+	fmt.Fprintln(stderr)
+	fmt.Fprintln(stderr, "  Secret key for encrypting secrets between app and workers.")
+	fmt.Fprintln(stderr, "  Must be a 64-character hex string (32 bytes).")
+	if promptYesNo("  Auto-generate a key?") {
+		keyBytes := make([]byte, 32)
+		if _, err := rand.Read(keyBytes); err != nil {
+			return fmt.Errorf("generate key: %w", err)
+		}
+		hexKey := hex.EncodeToString(keyBytes)
+		cfg.SecretKey = hexKey
+		prompted["secret_key"] = hexKey
+		fmt.Fprintf(stderr, "  Generated: %s\n", hexKey)
+		printOK("Secret key generated (will be saved to config)")
+		return nil
+	}
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		key := promptHidden("Secret key: ")
+		if _, err := config.DecodeSecretKey(key); err != nil {
+			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
+			if attempt == maxRetries {
+				return fmt.Errorf("max retries exceeded for secret key")
+			}
+			continue
+		}
+		cfg.SecretKey = key
+		prompted["secret_key"] = key
+		printOK("Secret key valid")
+		return nil
+	}
+	return nil
 }
 
 func preflightAgentCLIs(cfg *config.Config, interactive bool) error {
