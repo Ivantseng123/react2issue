@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestNormalizeLabels_NilBecomesEmptySlice(t *testing.T) {
+	out := normalizeLabels(nil)
+	if out == nil {
+		t.Fatal("normalizeLabels(nil) must not return nil — GitHub rejects null labels")
+	}
+	if len(out) != 0 {
+		t.Errorf("normalizeLabels(nil) = %v, want []", out)
+	}
+}
+
+func TestNormalizeLabels_PreservesExisting(t *testing.T) {
+	in := []string{"bug", "mobile"}
+	out := normalizeLabels(in)
+	if len(out) != 2 || out[0] != "bug" || out[1] != "mobile" {
+		t.Errorf("normalizeLabels(%v) = %v", in, out)
+	}
+}
+
 func TestIssueBody_WithHeader(t *testing.T) {
 	header := "**Channel**: #general\n**Reporter**: alice\n**Branch**: main\n\n---\n\n"
 	agentBody := "## Summary\n\nLogin page broken."

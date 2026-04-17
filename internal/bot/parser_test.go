@@ -35,6 +35,61 @@ func TestParseAgentOutput_JSONCreated(t *testing.T) {
 	}
 }
 
+func TestParseAgentOutput_LabelsAsString(t *testing.T) {
+	// Some agents (observed with opencode + minimax) emit labels as a single
+	// string instead of an array. Parser must accept it and preserve the rest
+	// of the struct — prior behavior was a type error that zeroed everything.
+	output := "Investigation done.\n\n===TRIAGE_RESULT===\n" + `{
+  "status": "CREATED",
+  "title": "T",
+  "body": "B",
+  "labels": "bug",
+  "confidence": "high",
+  "files_found": 3
+}`
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if result.Status != "CREATED" || result.Title != "T" || result.Confidence != "high" || result.FilesFound != 3 {
+		t.Errorf("non-labels fields lost: %+v", result)
+	}
+	if len(result.Labels) != 1 || result.Labels[0] != "bug" {
+		t.Errorf("labels = %v, want [bug]", result.Labels)
+	}
+}
+
+func TestParseAgentOutput_LabelsAsNullOrMissing(t *testing.T) {
+	cases := []string{
+		`{"status":"CREATED","title":"T","body":"B","labels":null,"confidence":"high"}`,
+		`{"status":"CREATED","title":"T","body":"B","confidence":"high"}`,
+	}
+	for i, jsonBody := range cases {
+		output := "x\n\n===TRIAGE_RESULT===\n" + jsonBody
+		result, err := ParseAgentOutput(output)
+		if err != nil {
+			t.Fatalf("case %d parse failed: %v", i, err)
+		}
+		if result.Status != "CREATED" || result.Title != "T" {
+			t.Errorf("case %d: fields lost: %+v", i, result)
+		}
+		if result.Labels != nil && len(result.Labels) != 0 {
+			t.Errorf("case %d: labels should be nil/empty, got %v", i, result.Labels)
+		}
+	}
+}
+
+func TestParseAgentOutput_LabelsEmptyString(t *testing.T) {
+	output := "x\n\n===TRIAGE_RESULT===\n" + `{"status":"CREATED","title":"T","body":"B","labels":""}`
+	result, err := ParseAgentOutput(output)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if len(result.Labels) != 0 {
+		t.Errorf("empty string should yield no labels, got %v", result.Labels)
+	}
+}
+
 func TestParseAgentOutput_JSONRejected(t *testing.T) {
 	output := "Investigation complete.\n\n===TRIAGE_RESULT===\n" + `{
   "status": "REJECTED",

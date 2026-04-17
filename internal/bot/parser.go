@@ -11,17 +11,45 @@ const (
 	minOutputLength = 10
 )
 
+// Labels is a JSON-tolerant []string. Accepts array, single string, or null —
+// some agent/model combos (observed with opencode + minimax) emit a bare string
+// like "bug" instead of ["bug"], which previously failed TriageResult unmarshal
+// and zeroed every other field.
+type Labels []string
+
+func (l *Labels) UnmarshalJSON(data []byte) error {
+	if len(data) == 0 || string(data) == "null" {
+		*l = nil
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*l = arr
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		if s == "" {
+			*l = nil
+		} else {
+			*l = []string{s}
+		}
+		return nil
+	}
+	return fmt.Errorf("labels must be string or array, got %s", string(data))
+}
+
 // TriageResult is the parsed result from agent output.
 type TriageResult struct {
-	Status     string   `json:"status"`
-	IssueURL   string   `json:"issue_url,omitempty"`
-	Message    string   `json:"message,omitempty"`
-	Title      string   `json:"title,omitempty"`
-	Body       string   `json:"body,omitempty"`
-	Labels     []string `json:"labels,omitempty"`
-	Confidence string   `json:"confidence,omitempty"`
-	FilesFound int      `json:"files_found,omitempty"`
-	Questions  int      `json:"open_questions,omitempty"`
+	Status     string `json:"status"`
+	IssueURL   string `json:"issue_url,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Title      string `json:"title,omitempty"`
+	Body       string `json:"body,omitempty"`
+	Labels     Labels `json:"labels,omitempty"`
+	Confidence string `json:"confidence,omitempty"`
+	FilesFound int    `json:"files_found,omitempty"`
+	Questions  int    `json:"open_questions,omitempty"`
 }
 
 // ParseAgentOutput extracts the triage result from agent stdout.

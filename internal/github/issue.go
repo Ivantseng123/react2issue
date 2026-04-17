@@ -29,10 +29,11 @@ func NewIssueClient(token string, logger *slog.Logger) *IssueClient {
 // Returns the issue HTML URL.
 func (ic *IssueClient) CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (string, error) {
 	start := time.Now()
+	normalized := normalizeLabels(labels)
 	req := &gh.IssueRequest{
 		Title:  gh.String(title),
 		Body:   gh.String(body),
-		Labels: &labels,
+		Labels: &normalized,
 	}
 
 	issue, _, err := ic.client.Issues.Create(ctx, owner, repo, req)
@@ -45,4 +46,14 @@ func (ic *IssueClient) CreateIssue(ctx context.Context, owner, repo, title, body
 
 	ic.logger.Info("Issue 建立成功", "phase", "完成", "owner", owner, "repo", repo, "url", issue.GetHTMLURL(), "duration_ms", time.Since(start).Milliseconds())
 	return issue.GetHTMLURL(), nil
+}
+
+// normalizeLabels ensures the value sent to GitHub is a non-nil slice.
+// go-github marshals a nil []string into JSON null, which GitHub rejects with
+// "For 'properties/labels', nil is not an array." (422).
+func normalizeLabels(labels []string) []string {
+	if labels == nil {
+		return []string{}
+	}
+	return labels
 }
