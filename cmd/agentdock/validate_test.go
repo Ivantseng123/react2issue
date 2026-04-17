@@ -17,19 +17,19 @@ func TestValidate_OK(t *testing.T) {
 
 func TestValidate_WorkersZero(t *testing.T) {
 	cfg := goodConfig()
-	cfg.Workers.Count = 0
+	cfg.Worker.Count = 0
 	err := validate(cfg)
-	if err == nil || !strings.Contains(err.Error(), "workers.count must be >= 1") {
-		t.Errorf("expected workers.count error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "worker.count must be >= 1") {
+		t.Errorf("expected worker.count error, got %v", err)
 	}
 }
 
 func TestValidate_WorkersZero_RedisTransport(t *testing.T) {
 	cfg := goodConfig()
-	cfg.Workers.Count = 0
+	cfg.Worker.Count = 0
 	cfg.Queue.Transport = "redis"
 	if err := validate(cfg); err != nil {
-		t.Errorf("redis transport should allow workers.count=0, got %v", err)
+		t.Errorf("redis transport should allow worker.count=0, got %v", err)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestValidate_RepoCacheMaxAgeZero(t *testing.T) {
 
 func TestValidate_MultipleErrors_ListedAtOnce(t *testing.T) {
 	cfg := goodConfig()
-	cfg.Workers.Count = 0
+	cfg.Worker.Count = 0
 	cfg.Queue.Capacity = -5
 	cfg.Queue.JobTimeout = 0
 	err := validate(cfg)
@@ -71,7 +71,7 @@ func TestValidate_MultipleErrors_ListedAtOnce(t *testing.T) {
 	}
 	msg := err.Error()
 	for _, want := range []string{
-		"workers.count must be >= 1",
+		"worker.count must be >= 1",
 		"queue.capacity must be >= 1",
 		"queue.job_timeout must be > 0",
 	} {
@@ -83,7 +83,7 @@ func TestValidate_MultipleErrors_ListedAtOnce(t *testing.T) {
 
 func goodConfig() *config.Config {
 	return &config.Config{
-		Workers: config.WorkersConfig{Count: 3},
+		Worker: config.WorkerConfig{Count: 3},
 		Queue: config.QueueConfig{
 			Capacity:         50,
 			JobTimeout:       20 * time.Minute,

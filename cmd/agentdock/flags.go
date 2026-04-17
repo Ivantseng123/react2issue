@@ -39,7 +39,7 @@ var flagToKey = map[string]string{
 	"attachments-store":        "attachments.store",
 	"attachments-temp-dir":     "attachments.temp_dir",
 	"attachments-ttl":          "attachments.ttl",
-	"workers":                  "workers.count",
+	"workers":                  "worker.count",
 	"active-agent":             "active_agent",
 	"providers":                "providers",
 	"skills-config":            "skills_config",
@@ -113,7 +113,7 @@ func addPersistentFlags(cmd *cobra.Command) {
 	pf.Duration("attachments-ttl", 0, "attachment retention TTL")
 
 	// Workers.
-	pf.Int("workers", 0, "number of worker goroutines (alias for workers.count)")
+	pf.Int("workers", 0, "number of worker goroutines (alias for worker.count)")
 
 	// Agents.
 	pf.String("active-agent", "", "active agent name (single-agent mode)")

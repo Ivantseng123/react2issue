@@ -33,7 +33,7 @@ type Config struct {
 	Logging           LoggingConfig            `yaml:"logging"`
 	Queue             QueueConfig              `yaml:"queue"`
 	ChannelPriority   map[string]int           `yaml:"channel_priority"`
-	Workers           WorkersConfig            `yaml:"workers"`
+	Worker            WorkerConfig             `yaml:"worker"`
 	Attachments       AttachmentsConfig        `yaml:"attachments"`
 	Redis             RedisConfig              `yaml:"redis"`
 	SkillsConfig      string                   `yaml:"skills_config"`
@@ -72,8 +72,13 @@ type QueueConfig struct {
 	StatusInterval   time.Duration `yaml:"status_interval"`
 }
 
-type WorkersConfig struct {
-	Count int `yaml:"count"`
+type WorkerConfig struct {
+	Count  int                `yaml:"count"`
+	Prompt WorkerPromptConfig `yaml:"prompt"`
+}
+
+type WorkerPromptConfig struct {
+	ExtraRules []string `yaml:"extra_rules"`
 }
 
 type AttachmentsConfig struct {
@@ -158,14 +163,14 @@ type LoggingConfig struct {
 }
 
 func applyDefaults(cfg *Config) {
-	// Workers.Count must be resolved before MaxConcurrent gets its own default,
+	// Worker.Count must be resolved before MaxConcurrent gets its own default,
 	// so that we can distinguish "user set max_concurrent" from "default applied".
-	if cfg.Workers.Count <= 0 {
+	if cfg.Worker.Count <= 0 {
 		if cfg.MaxConcurrent > 0 {
-			cfg.Workers.Count = cfg.MaxConcurrent
-			slog.Warn("max_concurrent 已棄用，請改用 workers.count", "phase", "失敗")
+			cfg.Worker.Count = cfg.MaxConcurrent
+			slog.Warn("max_concurrent 已棄用，請改用 worker.count", "phase", "失敗")
 		} else {
-			cfg.Workers.Count = 3
+			cfg.Worker.Count = 3
 		}
 	}
 

@@ -145,7 +145,7 @@ func runApp(cfg *config.Config) error {
 			appLogger.Info("Secret beacon 已寫入 Redis", "phase", "完成")
 		}
 	default:
-		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Workers.Count, jobStore)
+		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Worker.Count, jobStore)
 		appLogger.Info("使用 in-memory transport", "phase", "處理中")
 	}
 
@@ -182,7 +182,7 @@ func runApp(cfg *config.Config) error {
 			Runner:         &agentRunnerAdapter{runner: agentRunner},
 			RepoCache:      &repoCacheAdapter{cache: repoCache},
 			SkillDirs:      skillDirs,
-			WorkerCount:    cfg.Workers.Count,
+			WorkerCount:    cfg.Worker.Count,
 			StatusInterval: cfg.Queue.StatusInterval,
 			Capabilities:   []string{"triage"},
 			Store:          jobStore,

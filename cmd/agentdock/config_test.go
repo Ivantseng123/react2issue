@@ -50,14 +50,14 @@ func TestBuildKoanf_DefaultsLayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildKoanf: %v", err)
 	}
-	if cfg.Workers.Count != 3 {
-		t.Errorf("Workers.Count = %d, want 3", cfg.Workers.Count)
+	if cfg.Worker.Count != 3 {
+		t.Errorf("Worker.Count = %d, want 3", cfg.Worker.Count)
 	}
 	if cfg.Queue.Transport != "inmem" {
 		t.Errorf("Queue.Transport = %q, want inmem", cfg.Queue.Transport)
 	}
-	if got := kEff.Int("workers.count"); got != 3 {
-		t.Errorf("kEff workers.count = %d, want 3", got)
+	if got := kEff.Int("worker.count"); got != 3 {
+		t.Errorf("kEff worker.count = %d, want 3", got)
 	}
 }
 
@@ -65,7 +65,7 @@ func TestBuildKoanf_FileLayerOverridesDefaults(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cfg.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 7\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -80,8 +80,8 @@ func TestBuildKoanf_FileLayerOverridesDefaults(t *testing.T) {
 	if !delta.FileExisted {
 		t.Error("FileExisted should be true")
 	}
-	if cfg.Workers.Count != 7 {
-		t.Errorf("Workers.Count = %d, want 7", cfg.Workers.Count)
+	if cfg.Worker.Count != 7 {
+		t.Errorf("Worker.Count = %d, want 7", cfg.Worker.Count)
 	}
 }
 
@@ -184,7 +184,7 @@ func TestSaveConfig_NoDelta_NoWrite(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 7\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -205,7 +205,7 @@ func TestSaveConfig_FlagOverride_Writes(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 7\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 7\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -233,7 +233,7 @@ func TestSaveConfig_PreflightPrompt_Writes(t *testing.T) {
 	clearEnv(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("workers:\n  count: 3\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("worker:\n  count: 3\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +282,7 @@ func TestBuildKoanf_WarnsOnUnknownKey(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.yaml")
 	yamlBody := `
-workers:
+worker:
   count: 3
 reactions:
   approved: thumbsup

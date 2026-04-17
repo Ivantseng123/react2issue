@@ -97,7 +97,7 @@ func runWorker(cfg *config.Config) error {
 		Store:          jobStore,
 		Runner:         &agentRunnerAdapter{runner: agentRunner},
 		RepoCache:      repoAdapter,
-		WorkerCount:    cfg.Workers.Count,
+		WorkerCount:    cfg.Worker.Count,
 		Hostname:       hostname,
 		SkillDirs:      skillDirs,
 		Commands:       bundle.Commands,
@@ -110,7 +110,7 @@ func runWorker(cfg *config.Config) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	pool.Start(ctx)
-	appLogger.Info("Worker 已啟動", "phase", "完成", "workers", cfg.Workers.Count)
+	appLogger.Info("Worker 已啟動", "phase", "完成", "workers", cfg.Worker.Count)
 
 	// Wait for SIGTERM/SIGINT.
 	sigCh := make(chan os.Signal, 1)

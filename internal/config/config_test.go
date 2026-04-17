@@ -223,7 +223,7 @@ queue:
 channel_priority:
   C_INCIDENTS: 100
   C_ONCALL: 80
-workers:
+worker:
   count: 5
 attachments:
   store: local
@@ -238,8 +238,8 @@ agents:
 	if cfg.Queue.Capacity != 100 {
 		t.Errorf("queue capacity = %d, want 100", cfg.Queue.Capacity)
 	}
-	if cfg.Workers.Count != 5 {
-		t.Errorf("workers count = %d, want 5", cfg.Workers.Count)
+	if cfg.Worker.Count != 5 {
+		t.Errorf("workers count = %d, want 5", cfg.Worker.Count)
 	}
 	pri, ok := cfg.ChannelPriority["C_INCIDENTS"]
 	if !ok || pri != 100 {
@@ -266,8 +266,8 @@ agents:
 	if cfg.Queue.Capacity != 50 {
 		t.Errorf("default queue capacity = %d, want 50", cfg.Queue.Capacity)
 	}
-	if cfg.Workers.Count != 3 {
-		t.Errorf("default workers count = %d, want 3", cfg.Workers.Count)
+	if cfg.Worker.Count != 3 {
+		t.Errorf("default workers count = %d, want 3", cfg.Worker.Count)
 	}
 }
 
@@ -278,8 +278,8 @@ agents:
   claude:
     command: claude
 `)
-	if cfg.Workers.Count != 7 {
-		t.Errorf("workers count = %d, want 7 (from max_concurrent)", cfg.Workers.Count)
+	if cfg.Worker.Count != 7 {
+		t.Errorf("workers count = %d, want 7 (from max_concurrent)", cfg.Worker.Count)
 	}
 }
 
@@ -392,12 +392,12 @@ func TestEnvOverrideMap_ProvidersFiltersEmpty(t *testing.T) {
 func TestDefaultsMap(t *testing.T) {
 	m := DefaultsMap()
 
-	workers, ok := m["workers"].(map[string]any)
+	worker, ok := m["worker"].(map[string]any)
 	if !ok {
-		t.Fatalf("workers should be a map, got %T", m["workers"])
+		t.Fatalf("worker should be a map, got %T", m["worker"])
 	}
-	if got := workers["count"]; got != 3 {
-		t.Errorf("workers.count = %v, want 3", got)
+	if got := worker["count"]; got != 3 {
+		t.Errorf("worker.count = %v, want 3", got)
 	}
 
 	queue, ok := m["queue"].(map[string]any)
@@ -425,9 +425,9 @@ func TestDefaultsMap_AgreesWithApplyDefaults(t *testing.T) {
 	applyDefaults(&cfg)
 
 	m := DefaultsMap()
-	workers := m["workers"].(map[string]any)
-	if got := workers["count"]; got != cfg.Workers.Count {
-		t.Errorf("DefaultsMap.workers.count=%v != applyDefaults.Workers.Count=%v", got, cfg.Workers.Count)
+	worker := m["worker"].(map[string]any)
+	if got := worker["count"]; got != cfg.Worker.Count {
+		t.Errorf("DefaultsMap.worker.count=%v != applyDefaults.Worker.Count=%v", got, cfg.Worker.Count)
 	}
 }
 
@@ -590,4 +590,25 @@ func TestPromptConfig_IsWorkerRulesAllowed(t *testing.T) {
 			t.Error("explicit false should return false")
 		}
 	})
+}
+
+func TestWorkerConfig_NewSection_YAMLLoad(t *testing.T) {
+	yaml := `
+worker:
+  count: 7
+  prompt:
+    extra_rules:
+      - "no guessing"
+      - "only real files"
+`
+	cfg := loadFromString(t, yaml)
+	if cfg.Worker.Count != 7 {
+		t.Errorf("Worker.Count = %d, want 7", cfg.Worker.Count)
+	}
+	if len(cfg.Worker.Prompt.ExtraRules) != 2 {
+		t.Errorf("ExtraRules len = %d, want 2", len(cfg.Worker.Prompt.ExtraRules))
+	}
+	if cfg.Worker.Prompt.ExtraRules[0] != "no guessing" {
+		t.Errorf("ExtraRules[0] = %q, want 'no guessing'", cfg.Worker.Prompt.ExtraRules[0])
+	}
 }
