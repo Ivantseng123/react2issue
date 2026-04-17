@@ -21,6 +21,22 @@ import (
 
 const pendingTimeout = 1 * time.Minute
 
+// slackAPI is the narrow Slack surface used by Workflow. *slackclient.Client
+// satisfies it; tests implement it with a stub.
+type slackAPI interface {
+	PostMessage(channelID, text, threadTS string) error
+	PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
+	PostSelector(channelID, prompt, actionPrefix string, options []string, threadTS string) (string, error)
+	PostSelectorWithBack(channelID, prompt, actionPrefix string, options []string, threadTS, backActionID, backLabel string) (string, error)
+	PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error)
+	UpdateMessage(channelID, messageTS, text string) error
+	OpenDescriptionModal(triggerID, selectorMsgTS string) error
+	ResolveUser(userID string) string
+	GetChannelName(channelID string) string
+	FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]slackclient.ThreadRawMessage, error)
+	DownloadAttachments(messages []slackclient.ThreadRawMessage, tempDir string) []slackclient.AttachmentDownload
+}
+
 type pendingTriage struct {
 	ChannelID      string
 	ThreadTS       string
@@ -37,11 +53,12 @@ type pendingTriage struct {
 	CmdArgs        string
 	RequestID      string
 	Logger         *slog.Logger
+	RepoWasPicked  bool
 }
 
 type Workflow struct {
 	cfg           *config.Config
-	slack         *slackclient.Client
+	slack         slackAPI // was *slackclient.Client
 	handler       *slackclient.Handler
 	repoCache     *ghclient.RepoCache
 	repoDiscovery *ghclient.RepoDiscovery
@@ -61,7 +78,7 @@ type Workflow struct {
 
 func NewWorkflow(
 	cfg *config.Config,
-	slack *slackclient.Client,
+	slack slackAPI, // was *slackclient.Client
 	repoCache *ghclient.RepoCache,
 	repoDiscovery *ghclient.RepoDiscovery,
 	agentRunner *AgentRunner,
@@ -183,30 +200,30 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		return
 	}
 
-	if len(repos) > 1 {
-		pt.Phase = "repo"
-		selectorTS, err := w.slack.PostSelector(event.ChannelID,
-			":point_right: Which repo should this issue go to?",
-			"repo_select", repos, pt.ThreadTS)
-		if err != nil {
-			w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo selector: %v", err)
-			return
-		}
-		pt.SelectorTS = selectorTS
-		w.storePending(selectorTS, pt)
-		return
-	}
-
-	pt.Phase = "repo_search"
-	selectorTS, err := w.slack.PostExternalSelector(event.ChannelID,
-		":point_right: Search and select a repo:",
-		"repo_search", "Type to search repos...", pt.ThreadTS)
+	selectorTS, err := w.postRepoSelector(pt, channelCfg)
 	if err != nil {
-		w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo search: %v", err)
+		w.notifyError(pt.Logger, event.ChannelID, pt.ThreadTS, "Failed to show repo selector: %v", err)
 		return
 	}
 	pt.SelectorTS = selectorTS
 	w.storePending(selectorTS, pt)
+}
+
+// postRepoSelector posts either the multi-repo button selector (len>1) or the
+// external searchable selector (len==0). The len==1 auto-select case is
+// handled by callers inline — see HandleTrigger and HandleBackToRepo.
+func (w *Workflow) postRepoSelector(pt *pendingTriage, channelCfg config.ChannelConfig) (string, error) {
+	repos := channelCfg.GetRepos()
+	if len(repos) > 1 {
+		pt.Phase = "repo"
+		return w.slack.PostSelector(pt.ChannelID,
+			":point_right: Which repo should this issue go to?",
+			"repo_select", repos, pt.ThreadTS)
+	}
+	pt.Phase = "repo_search"
+	return w.slack.PostExternalSelector(pt.ChannelID,
+		":point_right: Search and select a repo:",
+		"repo_search", "Type to search repos...", pt.ThreadTS)
 }
 
 func (w *Workflow) HandleRepoSuggestion(query string) []string {
@@ -239,6 +256,7 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS str
 		w.slack.UpdateMessage(channelID, selectorMsgTS,
 			fmt.Sprintf(":white_check_mark: Repo: `%s`", value))
 		pt.SelectedRepo = value
+		pt.RepoWasPicked = true
 		w.afterRepoSelected(pt, channelCfg)
 	case "branch":
 		w.slack.UpdateMessage(channelID, selectorMsgTS,
@@ -254,18 +272,18 @@ func (w *Workflow) afterRepoSelected(pt *pendingTriage, channelCfg config.Channe
 		return
 	}
 
-	repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo, w.cfg.Secrets["GH_TOKEN"])
-	if err != nil {
-		w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
-		return
-	}
-
 	var branches []string
 	if len(channelCfg.Branches) > 0 {
 		branches = channelCfg.Branches
 	} else {
-		branches, err = w.repoCache.ListBranches(repoPath)
+		repoPath, err := w.repoCache.EnsureRepo(pt.SelectedRepo, w.cfg.Secrets["GH_TOKEN"])
 		if err != nil {
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to access repo %s: %v", pt.SelectedRepo, err)
+			return
+		}
+		var listErr error
+		branches, listErr = w.repoCache.ListBranches(repoPath)
+		if listErr != nil {
 			w.showDescriptionPrompt(pt)
 			return
 		}
@@ -280,9 +298,14 @@ func (w *Workflow) afterRepoSelected(pt *pendingTriage, channelCfg config.Channe
 	}
 
 	pt.Phase = "branch"
-	selectorTS, err := w.slack.PostSelector(pt.ChannelID,
+	backAction := ""
+	if pt.RepoWasPicked {
+		backAction = "back_to_repo"
+	}
+	selectorTS, err := w.slack.PostSelectorWithBack(pt.ChannelID,
 		fmt.Sprintf(":point_right: Which branch of `%s`?", pt.SelectedRepo),
-		"branch_select", branches, pt.ThreadTS)
+		"branch_select", branches, pt.ThreadTS,
+		backAction, "← 重新選 repo")
 	if err != nil {
 		w.showDescriptionPrompt(pt)
 		return
@@ -293,9 +316,14 @@ func (w *Workflow) afterRepoSelected(pt *pendingTriage, channelCfg config.Channe
 
 func (w *Workflow) showDescriptionPrompt(pt *pendingTriage) {
 	pt.Phase = "description"
-	selectorTS, err := w.slack.PostSelector(pt.ChannelID,
+	backAction := ""
+	if pt.RepoWasPicked {
+		backAction = "back_to_repo"
+	}
+	selectorTS, err := w.slack.PostSelectorWithBack(pt.ChannelID,
 		":memo: 需要補充說明嗎？（補充後可讓分析更精準）",
-		"description_action", []string{"補充說明", "跳過"}, pt.ThreadTS)
+		"description_action", []string{"補充說明", "跳過"}, pt.ThreadTS,
+		backAction, "← 重新選 repo")
 	if err != nil {
 		w.runTriage(pt)
 		return
@@ -504,6 +532,66 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		w.store.Put(job) // update with StatusMsgTS
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.
+}
+
+// HandleBackToRepo handles a "← 重新選 repo" button click. Invoked from
+// cmd/agentdock/app.go when action.ActionID == "back_to_repo".
+func (w *Workflow) HandleBackToRepo(channelID, selectorMsgTS string) {
+	w.mu.Lock()
+	pt, ok := w.pending[selectorMsgTS]
+	if ok {
+		delete(w.pending, selectorMsgTS)
+	}
+	w.mu.Unlock()
+	if !ok {
+		return
+	}
+
+	if pt.Logger != nil {
+		pt.Logger.Info("收到返回 repo 請求",
+			"phase", "接收", "from_selector_ts", selectorMsgTS)
+	}
+
+	channelCfg := w.cfg.ChannelDefaults
+	if cc, ok := w.cfg.Channels[pt.ChannelID]; ok {
+		channelCfg = cc
+	}
+
+	// Clear carried-over fields.
+	pt.SelectedRepo = ""
+	pt.SelectedBranch = ""
+	pt.ExtraDesc = ""
+
+	// Rare case: channel config reloaded and now has exactly one repo — auto-select
+	// and go directly to the branch step (mirrors HandleTrigger's shortcut).
+	repos := channelCfg.GetRepos()
+	if len(repos) == 1 {
+		pt.SelectedRepo = repos[0]
+		w.slack.UpdateMessage(channelID, selectorMsgTS,
+			":leftwards_arrow_with_hook: 已返回 repo 選擇")
+		w.afterRepoSelected(pt, channelCfg)
+		return
+	}
+
+	// Multi-repo or external-search case.
+	newSelectorTS, err := w.postRepoSelector(pt, channelCfg)
+	if err != nil {
+		w.notifyError(pt.Logger, channelID, pt.ThreadTS,
+			"重選 repo 失敗: %v", err)
+		w.clearDedup(pt)
+		return
+	}
+
+	w.slack.UpdateMessage(channelID, selectorMsgTS,
+		":leftwards_arrow_with_hook: 已返回 repo 選擇")
+
+	pt.SelectorTS = newSelectorTS
+	w.storePending(newSelectorTS, pt)
+
+	if pt.Logger != nil {
+		pt.Logger.Info("已重新顯示 repo 選擇",
+			"phase", "處理中", "new_selector_ts", newSelectorTS)
+	}
 }
 
 func cleanCloneURL(repoRef string) string {

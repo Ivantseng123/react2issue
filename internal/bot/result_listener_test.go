@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -14,10 +15,13 @@ import (
 
 var errBoomGitHub = errors.New("github down")
 
+type updateCall struct{ ChannelID, MessageTS, Text string }
+
 type mockSlackPoster struct {
-	mu       sync.Mutex
-	messages []string
-	buttons  []string
+	mu          sync.Mutex
+	messages    []string
+	buttons     []string
+	updateCalls []updateCall // NEW
 }
 
 func (m *mockSlackPoster) PostMessage(channelID, text, threadTS string) {
@@ -29,6 +33,7 @@ func (m *mockSlackPoster) PostMessage(channelID, text, threadTS string) {
 func (m *mockSlackPoster) UpdateMessage(channelID, messageTS, text string) {
 	m.mu.Lock()
 	m.messages = append(m.messages, text)
+	m.updateCalls = append(m.updateCalls, updateCall{channelID, messageTS, text}) // NEW
 	m.mu.Unlock()
 }
 
@@ -443,5 +448,60 @@ func TestResultListener_DedupDropsDuplicateResult(t *testing.T) {
 
 	if len(slackMock.buttons) != 1 {
 		t.Errorf("expected 1 button post (dedup), got %d", len(slackMock.buttons))
+	}
+}
+
+func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
+	slack := &mockSlackPoster{}
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{
+		ID: "jdouble", Repo: "o/r", ChannelID: "C1",
+		ThreadTS: "T1", StatusMsgTS: "S1",
+	})
+	store.UpdateStatus("jdouble", queue.JobCompleted)
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	gh := &mockIssueCreator{url: "https://github.com/o/r/issues/1"}
+	r := NewResultListener(nil, store, bundle.Attachments, slack, gh, nil,
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	result := &queue.JobResult{
+		JobID: "jdouble", Status: "completed",
+		Title: "bug", Body: "desc", Labels: []string{"bug"},
+	}
+	r.handleResult(context.Background(), result)
+
+	slack.mu.Lock()
+	initialCalls := len(slack.updateCalls)
+	slack.mu.Unlock()
+	if initialCalls < 1 {
+		t.Fatalf("expected ≥1 immediate UpdateMessage call, got %d", initialCalls)
+	}
+
+	// Wait just over the 2s defensive delay.
+	time.Sleep(2500 * time.Millisecond)
+
+	slack.mu.Lock()
+	afterDelay := len(slack.updateCalls)
+	calls := append([]updateCall(nil), slack.updateCalls...)
+	slack.mu.Unlock()
+
+	if afterDelay != initialCalls+1 {
+		t.Fatalf("expected exactly one extra UpdateMessage after 2s; initial=%d after=%d",
+			initialCalls, afterDelay)
+	}
+
+	first := calls[initialCalls-1]
+	second := calls[initialCalls]
+	if first.MessageTS != second.MessageTS {
+		t.Errorf("MessageTS mismatch: %q vs %q", first.MessageTS, second.MessageTS)
+	}
+	if first.Text != second.Text {
+		t.Errorf("Text mismatch: %q vs %q", first.Text, second.Text)
+	}
+	if second.MessageTS != "S1" {
+		t.Errorf("double-write target wrong: %q", second.MessageTS)
 	}
 }

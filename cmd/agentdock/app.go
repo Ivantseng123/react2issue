@@ -227,8 +227,10 @@ func runApp(cfg *config.Config) error {
 
 	retryHandler := bot.NewRetryHandler(jobStore, coordinator, &slackPosterAdapter{client: slackClient, logger: slackLogger}, workerLogger)
 
-	statusListener := bot.NewStatusListener(bundle.Status, jobStore, queueLogger)
+	statusListener := bot.NewStatusListener(bundle.Status, jobStore, slackClient, queueLogger)
 	go statusListener.Listen(context.Background())
+
+	resultListener.SetStatusJobClearer(statusListener.ClearJob)
 
 	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
 	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, bundle.Results, queue.WatchdogConfig{
@@ -367,6 +369,9 @@ func runApp(cfg *config.Config) error {
 
 					case strings.HasPrefix(action.ActionID, "description_action"):
 						wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
+
+					case action.ActionID == "back_to_repo":
+						wf.HandleBackToRepo(cb.Channel.ID, selectorTS)
 
 					case action.ActionID == "retry_job":
 						retryHandler.Handle(cb.Channel.ID, action.Value, selectorTS)
