@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.6](https://github.com/Ivantseng123/agentdock/compare/v1.2.5...v1.2.6) (2026-04-17)
+
+
+### Bug Fixes
+
+* **bot:** reject CREATED triage results with empty title ([1072735](https://github.com/Ivantseng123/agentdock/commit/10727358e2cf9c438769e6cafe59b83b3c50cc04))
+* **bot:** reject CREATED triage results with empty title ([bf73615](https://github.com/Ivantseng123/agentdock/commit/bf73615681b53dfc112265703eab024f10bcee7a))
+
 ## [1.2.5](https://github.com/Ivantseng123/agentdock/compare/v1.2.4...v1.2.5) (2026-04-17)
 
 
