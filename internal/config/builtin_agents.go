@@ -18,15 +18,15 @@ var BuiltinAgents = map[string]AgentConfig{
 	},
 	"codex": {
 		Command:  "codex",
-		Args:     []string{"--print", "--output-format", "stream-json", "-p", "{prompt}"},
+		Args:     []string{"exec", "--skip-git-repo-check", "-o", "{output_file}", "{prompt}"},
 		Timeout:  15 * time.Minute,
 		SkillDir: ".codex/skills",
-		Stream:   true,
 	},
 	"opencode": {
-		Command:  "opencode",
-		Args:     []string{"--prompt", "{prompt}"},
-		Timeout:  15 * time.Minute,
-		SkillDir: ".opencode/skills",
+		Command:      "opencode",
+		Args:         []string{"run", "--format", "json", "{prompt}"},
+		Timeout:      15 * time.Minute,
+		SkillDir:     ".opencode/skills",
+		StreamFormat: "opencode",
 	},
 }

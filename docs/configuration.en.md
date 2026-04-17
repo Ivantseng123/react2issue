@@ -21,9 +21,10 @@ agents:
     stream: true                      # enable real-time event tracking
   opencode:
     command: opencode
-    args: ["--prompt", "{prompt}"]
+    args: ["run", "--format", "json", "{prompt}"]
     timeout: 5m
     skill_dir: ".opencode/skills"
+    stream_format: "opencode"         # parse opencode NDJSON; keep text events only
 
 active_agent: claude
 providers: [claude, opencode]

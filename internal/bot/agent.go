@@ -83,27 +83,47 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 
 	const maxArgLen = 32 * 1024 // 32KB safe limit for command args
 
-	// Check if prompt fits in args or needs stdin fallback.
-	hasPlaceholder := false
+	hasPromptPlaceholder := false
+	hasOutputFilePlaceholder := false
 	for _, a := range agent.Args {
 		if strings.Contains(a, "{prompt}") {
-			hasPlaceholder = true
-			break
+			hasPromptPlaceholder = true
+		}
+		if strings.Contains(a, "{output_file}") {
+			hasOutputFilePlaceholder = true
 		}
 	}
 
-	useStdin := !hasPlaceholder || len(prompt) >= maxArgLen
+	// Some CLIs (e.g. `codex exec -o <file>`) write their final message to a
+	// path instead of stdout. Allocate a temp file and let the caller read from
+	// it after the process exits; the {output_file} placeholder opts into this.
+	var outputFile string
+	if hasOutputFilePlaceholder {
+		f, err := os.CreateTemp("", "agentdock-output-*.txt")
+		if err != nil {
+			return "", fmt.Errorf("create output file: %w", err)
+		}
+		outputFile = f.Name()
+		_ = f.Close()
+		defer os.Remove(outputFile)
+	}
+
+	useStdin := !hasPromptPlaceholder || len(prompt) >= maxArgLen
 	var args []string
-	if useStdin && hasPlaceholder {
-		// Prompt too large for args — drop the placeholder arg, use stdin instead.
+	if useStdin && hasPromptPlaceholder {
+		// Prompt too large for args — drop the prompt arg, use stdin instead.
 		for _, a := range agent.Args {
-			if !strings.Contains(a, "{prompt}") {
-				args = append(args, a)
+			if strings.Contains(a, "{prompt}") {
+				continue
 			}
+			args = append(args, strings.ReplaceAll(a, "{output_file}", outputFile))
 		}
 		logger.Info("Prompt 過大，改用 stdin", "phase", "處理中", "prompt_len", len(prompt))
 	} else {
-		args = substitutePrompt(agent.Args, prompt)
+		args = substitutePlaceholders(agent.Args, map[string]string{
+			"{prompt}":      prompt,
+			"{output_file}": outputFile,
+		})
 	}
 
 	cmd := exec.CommandContext(ctx, agent.Command, args...)
@@ -148,12 +168,16 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 	logger.Info("Agent process 已啟動", "phase", "處理中", "command", agent.Command, "pid", cmd.Process.Pid)
 
 	// Read stdout in a goroutine; wait for it before cmd.Wait().
+	format := agent.StreamFormat
+	if format == "" && agent.Stream {
+		format = "claude"
+	}
 	var output string
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		output = readOutput(ctx, stdoutPipe, agent.Stream, opts.OnEvent)
+		output = readOutput(ctx, stdoutPipe, format, opts.OnEvent)
 	}()
 	wg.Wait()
 
@@ -167,12 +191,20 @@ func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent con
 		}
 		return "", err
 	}
+	if outputFile != "" {
+		data, readErr := os.ReadFile(outputFile)
+		if readErr != nil {
+			return "", fmt.Errorf("read output file: %w", readErr)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
 	return strings.TrimSpace(output), nil
 }
 
-// readOutput routes stdout through the appropriate reader based on stream config.
-func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queue.StreamEvent)) string {
-	if !stream {
+// readOutput routes stdout through the appropriate reader based on format.
+// "" => raw text; "claude" => claude stream-json; "opencode" => opencode --format json.
+func readOutput(ctx context.Context, r io.Reader, format string, onEvent func(queue.StreamEvent)) string {
+	if format == "" {
 		return queue.ReadRawOutput(r)
 	}
 
@@ -202,16 +234,24 @@ func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queu
 		}
 	}()
 
-	result = queue.ReadStreamJSON(r, eventCh)
+	switch format {
+	case "opencode":
+		result = queue.ReadOpenCodeJSON(r, eventCh)
+	default:
+		result = queue.ReadStreamJSON(r, eventCh)
+	}
 	close(eventCh)
 	wg.Wait()
 	return result
 }
 
-func substitutePrompt(args []string, prompt string) []string {
+func substitutePlaceholders(args []string, values map[string]string) []string {
 	result := make([]string, 0, len(args))
 	for _, a := range args {
-		result = append(result, strings.ReplaceAll(a, "{prompt}", prompt))
+		for k, v := range values {
+			a = strings.ReplaceAll(a, k, v)
+		}
+		result = append(result, a)
 	}
 	return result
 }
