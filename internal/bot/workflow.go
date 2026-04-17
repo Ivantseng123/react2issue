@@ -444,6 +444,7 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		"thread_messages", len(promptCtx.ThreadMessages),
 		"has_extra_desc", promptCtx.ExtraDescription != "",
 	)
+	pt.Logger.Debug("Prompt context 詳細內容", "phase", "處理中", "prompt_context", promptCtx)
 
 	// 5. Build attachment metadata and payloads for queue.
 	var attachMeta []queue.AttachmentMeta

@@ -119,6 +119,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bo
 	// Build XML prompt from structured context + worker-owned extra rules.
 	prompt := BuildPrompt(*job.PromptContext, deps.extraRules, attachInfos)
 	logger.Info("Prompt 已組裝", "phase", "處理中", "length", len(prompt))
+	logger.Debug("Prompt XML 內容", "phase", "處理中", "prompt", prompt)
 
 	// Mount skills to all agent skill directories.
 	if len(job.Skills) > 0 {
