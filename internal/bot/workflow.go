@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"agentdock/internal/config"
+	"agentdock/internal/crypto"
 	ghclient "agentdock/internal/github"
 	"agentdock/internal/logging"
 	"agentdock/internal/mantis"
@@ -428,12 +430,34 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		UserID:      pt.UserID,
 		Repo:        pt.SelectedRepo,
 		Branch:      pt.SelectedBranch,
-		CloneURL:    w.repoCache.ResolveURL(pt.SelectedRepo),
+		CloneURL:    cleanCloneURL(pt.SelectedRepo),
 		Prompt:      prompt,
 		Skills:      w.loadSkills(ctx),
 		RequestID:   pt.RequestID,
 		Attachments: attachMeta,
 		SubmittedAt: time.Now(),
+	}
+
+	if w.cfg.SecretKey != "" && len(w.cfg.Secrets) > 0 {
+		secretKey, err := config.DecodeSecretKey(w.cfg.SecretKey)
+		if err != nil {
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Invalid secret_key: %v", err)
+			w.clearDedup(pt)
+			return
+		}
+		secretsJSON, err := json.Marshal(w.cfg.Secrets)
+		if err != nil {
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to marshal secrets: %v", err)
+			w.clearDedup(pt)
+			return
+		}
+		encrypted, err := crypto.Encrypt(secretKey, secretsJSON)
+		if err != nil {
+			w.notifyError(pt.Logger, pt.ChannelID, pt.ThreadTS, "Failed to encrypt secrets: %v", err)
+			w.clearDedup(pt)
+			return
+		}
+		job.EncryptedSecrets = encrypted
 	}
 
 	if err := w.queue.Submit(ctx, job); err != nil {
@@ -475,6 +499,13 @@ func (w *Workflow) runTriage(pt *pendingTriage) {
 		w.store.Put(job) // update with StatusMsgTS
 	}
 	// Don't clearDedup here — ResultListener handles cleanup after job completes.
+}
+
+func cleanCloneURL(repoRef string) string {
+	if strings.HasPrefix(repoRef, "http") || strings.HasPrefix(repoRef, "git@") || strings.HasPrefix(repoRef, "file://") {
+		return repoRef
+	}
+	return fmt.Sprintf("https://github.com/%s.git", repoRef)
 }
 
 func (w *Workflow) loadSkills(ctx context.Context) map[string]*queue.SkillPayload {
