@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.3](https://github.com/Ivantseng123/agentdock/compare/v1.2.2...v1.2.3) (2026-04-17)
+
+
+### Bug Fixes
+
+* **bot:** correct opencode/codex CLI flags and extract clean output ([651be0f](https://github.com/Ivantseng123/agentdock/commit/651be0f344507d51c9cb6c5df935a2fdb0f7a17f))
+* **bot:** correct opencode/codex CLI flags and extract clean output ([6bce545](https://github.com/Ivantseng123/agentdock/commit/6bce5457a59b7df8e12b11e3f2faa9f536b94db1))
+* **repo:** validate repo_cache.dir and use detached worktrees ([7cf9418](https://github.com/Ivantseng123/agentdock/commit/7cf94189fc81706af78b688d7f50f50e43a54c60))
+* **repo:** validate repo_cache.dir and use detached worktrees ([ef782ad](https://github.com/Ivantseng123/agentdock/commit/ef782ad6317edbe605ab64cd4b1e38154df60a64))
+
 ## [1.2.2](https://github.com/Ivantseng123/agentdock/compare/v1.2.1...v1.2.2) (2026-04-17)
 
 
