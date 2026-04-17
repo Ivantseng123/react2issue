@@ -22,6 +22,12 @@ type RepoCache struct {
 }
 
 func NewRepoCache(dir string, maxAge time.Duration, githubPAT string, logger *slog.Logger) *RepoCache {
+	// Abs-resolve so relative paths don't leak clones into the worker's cwd.
+	if dir != "" {
+		if abs, err := filepath.Abs(dir); err == nil {
+			dir = abs
+		}
+	}
 	return &RepoCache{
 		dir:       dir,
 		maxAge:    maxAge,
@@ -183,16 +189,19 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 	return nil
 }
 
-// AddWorktree creates an isolated working directory from a bare cache.
-// If branch is empty, checks out the default branch (HEAD).
+// AddWorktree creates a detached-HEAD worktree from a bare cache. --detach
+// avoids locking the branch so concurrent jobs on the same branch coexist and
+// a prior crash's orphan admin record can't block new adds. Prunes first to
+// clear any orphan <bare>/worktrees/NAME records left by past crashes.
 func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
-	var cmd *exec.Cmd
-	if branch == "" {
-		cmd = exec.Command("git", "-C", barePath, "worktree", "add", worktreePath, "HEAD")
-	} else {
-		// Bare repo branches are in refs/heads/, not refs/remotes/origin/.
-		cmd = exec.Command("git", "-C", barePath, "worktree", "add", worktreePath, branch)
+	pruneCmd := exec.Command("git", "-C", barePath, "worktree", "prune")
+	_, _ = pruneCmd.CombinedOutput() // best-effort
+
+	ref := "HEAD"
+	if branch != "" {
+		ref = branch
 	}
+	cmd := exec.Command("git", "-C", barePath, "worktree", "add", "--detach", worktreePath, ref)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree add: %w\n%s", err, out)
 	}

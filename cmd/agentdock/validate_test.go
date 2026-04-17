@@ -33,6 +33,33 @@ func TestValidate_WorkersZero_RedisTransport(t *testing.T) {
 	}
 }
 
+func TestValidate_RepoCacheDirEmpty(t *testing.T) {
+	cfg := goodConfig()
+	cfg.RepoCache.Dir = ""
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "repo_cache.dir must not be empty") {
+		t.Errorf("expected repo_cache.dir empty error, got %v", err)
+	}
+}
+
+func TestValidate_RepoCacheDirRelative(t *testing.T) {
+	cfg := goodConfig()
+	cfg.RepoCache.Dir = "relative/path"
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "must be an absolute path") {
+		t.Errorf("expected repo_cache.dir absolute-path error, got %v", err)
+	}
+}
+
+func TestValidate_RepoCacheMaxAgeZero(t *testing.T) {
+	cfg := goodConfig()
+	cfg.RepoCache.MaxAge = 0
+	err := validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "repo_cache.max_age must be > 0") {
+		t.Errorf("expected repo_cache.max_age error, got %v", err)
+	}
+}
+
 func TestValidate_MultipleErrors_ListedAtOnce(t *testing.T) {
 	cfg := goodConfig()
 	cfg.Workers.Count = 0
@@ -69,5 +96,6 @@ func goodConfig() *config.Config {
 		MaxThreadMessages: 50,
 		SemaphoreTimeout:  30 * time.Second,
 		Logging:           config.LoggingConfig{RetentionDays: 30},
+		RepoCache:         config.RepoCacheConfig{Dir: "/tmp/agentdock-repos", MaxAge: 10 * time.Minute},
 	}
 }

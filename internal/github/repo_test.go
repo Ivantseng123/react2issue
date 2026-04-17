@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -148,6 +149,88 @@ func TestRepoCache_BareCloneAndWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
 		t.Error("worktree dir should be deleted")
+	}
+}
+
+func TestRepoCache_AddWorktree_SameBranchTwice(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	sourceDir := t.TempDir()
+	run(t, sourceDir, "git", "init", "--bare")
+
+	workDir := t.TempDir()
+	run(t, workDir, "git", "clone", sourceDir, ".")
+	os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main"), 0644)
+	run(t, workDir, "git", "add", ".")
+	run(t, workDir, "git", "-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init")
+	run(t, workDir, "git", "push")
+
+	cacheDir := t.TempDir()
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
+
+	barePath, err := cache.EnsureRepo("file://"+sourceDir, "")
+	if err != nil {
+		t.Fatalf("EnsureRepo failed: %v", err)
+	}
+
+	// Discover the branch name the source repo actually used (main vs master).
+	out, err := exec.Command("git", "-C", barePath, "symbolic-ref", "--short", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("read HEAD: %v", err)
+	}
+	branch := strings.TrimSpace(string(out))
+
+	wt1 := filepath.Join(t.TempDir(), "wt1")
+	if err := cache.AddWorktree(barePath, branch, wt1); err != nil {
+		t.Fatalf("first AddWorktree(%q) failed: %v", branch, err)
+	}
+	wt2 := filepath.Join(t.TempDir(), "wt2")
+	if err := cache.AddWorktree(barePath, branch, wt2); err != nil {
+		t.Fatalf("second AddWorktree(%q) failed: %v", branch, err)
+	}
+}
+
+func TestRepoCache_AddWorktree_PrunesStaleAdminRecord(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	sourceDir := t.TempDir()
+	run(t, sourceDir, "git", "init", "--bare")
+
+	workDir := t.TempDir()
+	run(t, workDir, "git", "clone", sourceDir, ".")
+	os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main"), 0644)
+	run(t, workDir, "git", "add", ".")
+	run(t, workDir, "git", "-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init")
+	run(t, workDir, "git", "push")
+
+	cacheDir := t.TempDir()
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
+	barePath, err := cache.EnsureRepo("file://"+sourceDir, "")
+	if err != nil {
+		t.Fatalf("EnsureRepo failed: %v", err)
+	}
+
+	// Simulate a crashed worker: create worktree, then rm working dir but
+	// leave the admin record at <bare>/worktrees/NAME behind.
+	doomed := filepath.Join(t.TempDir(), "doomed")
+	if err := cache.AddWorktree(barePath, "", doomed); err != nil {
+		t.Fatalf("AddWorktree(doomed) failed: %v", err)
+	}
+	if err := os.RemoveAll(doomed); err != nil {
+		t.Fatalf("rm doomed: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(barePath, "worktrees"))
+	if len(entries) == 0 {
+		t.Fatal("expected leftover admin record for test setup")
+	}
+
+	fresh := filepath.Join(t.TempDir(), "fresh")
+	if err := cache.AddWorktree(barePath, "", fresh); err != nil {
+		t.Fatalf("AddWorktree(fresh) after stale admin: %v", err)
 	}
 }
 
