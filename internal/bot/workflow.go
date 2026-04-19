@@ -16,7 +16,7 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/internal/mantis"
 	"github.com/Ivantseng123/agentdock/shared/queue"
-	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
+	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/worker/agent"
 )
 

@@ -18,7 +18,7 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/internal/skill"
-	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
+	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	agentpkg "github.com/Ivantseng123/agentdock/worker/agent"
 	"github.com/Ivantseng123/agentdock/worker/pool"
 
