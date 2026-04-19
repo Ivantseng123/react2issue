@@ -11,6 +11,7 @@ import (
 	"github.com/Ivantseng123/agentdock/internal/config"
 	"github.com/Ivantseng123/agentdock/shared/configloader"
 	"github.com/Ivantseng123/agentdock/shared/connectivity"
+	workerconfig "github.com/Ivantseng123/agentdock/worker/config"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -61,7 +62,7 @@ func runInit(path string, interactive, force bool) error {
 	data, _ := yaml.Marshal(config.DefaultsMap())
 	yaml.Unmarshal(data, &cfg)
 	cfg.Agents = map[string]config.AgentConfig{}
-	for k, v := range config.BuiltinAgents {
+	for k, v := range workerconfig.BuiltinAgents {
 		cfg.Agents[k] = v
 	}
 
