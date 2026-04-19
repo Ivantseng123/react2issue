@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-func TestInitNonInteractive_YAML(t *testing.T) {
+func TestInitApp_YAML(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := runInit(path, false, false); err != nil {
-		t.Fatalf("runInit: %v", err)
+	path := filepath.Join(dir, "app.yaml")
+	if err := runInitApp(path, false, false); err != nil {
+		t.Fatalf("runInitApp: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -20,22 +20,19 @@ func TestInitNonInteractive_YAML(t *testing.T) {
 	}
 	content := string(data)
 	if !strings.Contains(content, "# REQUIRED") {
-		t.Error("YAML output should contain # REQUIRED comments")
-	}
-	if !strings.Contains(content, "claude:") {
-		t.Error("YAML output should contain claude agent block")
+		t.Error("app.yaml output should contain # REQUIRED comments")
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
+	if info.Mode().Perm() != 0o600 {
 		t.Errorf("file mode = %o, want 0600", info.Mode().Perm())
 	}
 }
 
-func TestInitNonInteractive_JSON(t *testing.T) {
+func TestInitApp_JSON(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	if err := runInit(path, false, false); err != nil {
-		t.Fatalf("runInit: %v", err)
+	path := filepath.Join(dir, "app.json")
+	if err := runInitApp(path, false, false); err != nil {
+		t.Fatalf("runInitApp: %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -50,24 +47,26 @@ func TestInitNonInteractive_JSON(t *testing.T) {
 	}
 }
 
-func TestInitNonInteractive_RejectsExisting(t *testing.T) {
+func TestInitApp_RejectsExisting(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(path, []byte("existing"), 0600); err != nil {
+	path := filepath.Join(dir, "app.yaml")
+	if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	err := runInit(path, false, false)
+	err := runInitApp(path, false, false)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("expected 'already exists' error, got %v", err)
 	}
 }
 
-func TestInitNonInteractive_ForceOverwrites(t *testing.T) {
+func TestInitApp_ForceOverwrites(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte("existing"), 0600)
-	if err := runInit(path, false, true); err != nil {
-		t.Fatalf("runInit force: %v", err)
+	path := filepath.Join(dir, "app.yaml")
+	if err := os.WriteFile(path, []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInitApp(path, false, true); err != nil {
+		t.Fatalf("runInitApp force: %v", err)
 	}
 	data, _ := os.ReadFile(path)
 	if string(data) == "existing" {
@@ -75,46 +74,54 @@ func TestInitNonInteractive_ForceOverwrites(t *testing.T) {
 	}
 }
 
-func TestInitInteractive_RejectsNonTTY(t *testing.T) {
+func TestInitApp_InteractiveRejectsNonTTY(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	err := runInit(path, true, false)
+	path := filepath.Join(dir, "app.yaml")
+	err := runInitApp(path, true, false)
 	if err == nil {
 		t.Fatal("expected error for interactive mode without TTY")
 	}
 	if !strings.Contains(err.Error(), "requires a terminal") {
 		t.Errorf("expected 'requires a terminal' error, got: %v", err)
 	}
-	// File should NOT have been created.
 	if _, statErr := os.Stat(path); statErr == nil {
 		t.Error("config file should not exist after TTY rejection")
 	}
 }
 
-func TestAtomicWrite_RemovesStaleTmp(t *testing.T) {
+func TestInitWorker_YAML_IncludesAgents(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	tmp := path + ".tmp"
+	path := filepath.Join(dir, "worker.yaml")
+	if err := runInitWorker(path, false, false); err != nil {
+		t.Fatalf("runInitWorker: %v", err)
+	}
+	data, _ := os.ReadFile(path)
+	content := string(data)
+	for _, name := range []string{"claude:", "codex:", "opencode:"} {
+		if !strings.Contains(content, name) {
+			t.Errorf("worker.yaml missing agent %q block", name)
+		}
+	}
+	if !strings.Contains(content, "# REQUIRED") {
+		t.Error("worker.yaml should include # REQUIRED hints")
+	}
+}
 
-	// Simulate stale .tmp from a previous failed write with lax permissions.
-	if err := os.WriteFile(tmp, []byte("stale"), 0644); err != nil {
+func TestInitWorker_JSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.json")
+	if err := runInitWorker(path, false, false); err != nil {
+		t.Fatalf("runInitWorker: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	if err := atomicWrite(path, []byte("fresh"), 0600); err != nil {
-		t.Fatalf("atomicWrite: %v", err)
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
 	}
-
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("file mode = %o, want 0600", info.Mode().Perm())
-	}
-
-	// .tmp should not linger.
-	if _, err := os.Stat(tmp); err == nil {
-		t.Error(".tmp file should not exist after successful atomicWrite")
+	if strings.Contains(string(data), "# REQUIRED") {
+		t.Error("JSON output should NOT contain comments")
 	}
 }

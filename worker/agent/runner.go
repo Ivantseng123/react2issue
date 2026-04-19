@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/config"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
 // RunOptions provides per-call callbacks for agent execution.
