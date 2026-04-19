@@ -56,7 +56,7 @@ func runApp(cfg *config.Config) error {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	// Re-init logger with configured level.
-	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})
+	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
@@ -64,7 +64,7 @@ func runApp(cfg *config.Config) error {
 	}
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
-	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: parseLogLevel(cfg.Logging.Level)})
+	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
 	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
@@ -181,8 +181,8 @@ func runApp(cfg *config.Config) error {
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
 		localAdapter := pool.NewLocalAdapter(pool.LocalAdapterConfig{
-			Runner:         &agentRunnerAdapter{runner: agentRunner},
-			RepoCache:      &repoCacheAdapter{cache: repoCache},
+			Runner:         &pool.AgentRunnerAdapter{Runner: agentRunner},
+			RepoCache:      &pool.RepoCacheAdapter{Cache: repoCache},
 			SkillDirs:      skillDirs,
 			WorkerCount:    cfg.Worker.Count,
 			StatusInterval: cfg.Queue.StatusInterval,
