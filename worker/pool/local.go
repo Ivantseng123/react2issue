@@ -1,4 +1,4 @@
-package main
+package pool
 
 import (
 	"context"
@@ -6,13 +6,12 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/shared/queue"
-	workerpool "github.com/Ivantseng123/agentdock/worker/pool"
 )
 
 // LocalAdapterConfig holds agent-specific configuration for the local adapter.
 type LocalAdapterConfig struct {
-	Runner         workerpool.Runner
-	RepoCache      workerpool.RepoProvider
+	Runner         Runner
+	RepoCache      RepoProvider
 	SkillDirs      []string
 	WorkerCount    int
 	StatusInterval time.Duration
@@ -22,11 +21,11 @@ type LocalAdapterConfig struct {
 	ExtraRules     []string
 }
 
-// LocalAdapter runs agents locally via workerpool.Pool.
+// LocalAdapter runs agents locally via Pool.
 // It implements queue.Adapter.
 type LocalAdapter struct {
 	cfg  LocalAdapterConfig
-	pool *workerpool.Pool
+	pool *Pool
 }
 
 func NewLocalAdapter(cfg LocalAdapterConfig) *LocalAdapter {
@@ -37,7 +36,7 @@ func (a *LocalAdapter) Name() string           { return "local" }
 func (a *LocalAdapter) Capabilities() []string { return a.cfg.Capabilities }
 
 func (a *LocalAdapter) Start(deps queue.AdapterDeps) error {
-	a.pool = workerpool.NewPool(workerpool.Config{
+	a.pool = NewPool(Config{
 		Queue:          deps.Jobs,
 		Attachments:    deps.Attachments,
 		Results:        deps.Results,

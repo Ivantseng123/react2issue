@@ -19,6 +19,7 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/internal/skill"
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
+	"github.com/Ivantseng123/agentdock/worker/pool"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -178,7 +179,7 @@ func runApp(cfg *config.Config) error {
 	// Create and start LocalAdapter (owns pool.Pool lifecycle).
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
-		localAdapter := NewLocalAdapter(LocalAdapterConfig{
+		localAdapter := pool.NewLocalAdapter(pool.LocalAdapterConfig{
 			Runner:         &agentRunnerAdapter{runner: agentRunner},
 			RepoCache:      &repoCacheAdapter{cache: repoCache},
 			SkillDirs:      skillDirs,
