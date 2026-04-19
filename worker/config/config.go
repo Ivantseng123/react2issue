@@ -1,7 +1,7 @@
 // Package config holds the worker module's yaml-backed configuration. Schema
 // is FLAT: the legacy `worker:` nest is dropped (worker.yaml is already at
-// worker scope, so the nest was redundant). Types live in this package
-// instead of internal/config so the worker module owns its schema end-to-end.
+// worker scope, so the nest was redundant). Types live in this package so the
+// worker module owns its schema end-to-end.
 package config
 
 import "time"
