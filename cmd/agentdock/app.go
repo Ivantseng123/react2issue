@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/app/bot"
 	"github.com/Ivantseng123/agentdock/internal/config"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
@@ -84,8 +84,6 @@ func runApp(cfg *config.Config) error {
 			}
 		}()
 	}
-
-	agentRunner := agentpkg.NewRunnerFromConfig(cfg)
 
 	// Load skills via SkillLoader.
 	bakedInDir := "agents/skills"
@@ -180,6 +178,7 @@ func runApp(cfg *config.Config) error {
 	// Create and start LocalAdapter (owns pool.Pool lifecycle).
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
+		agentRunner := agentpkg.NewRunnerFromConfig(cfg)
 		localAdapter := pool.NewLocalAdapter(pool.LocalAdapterConfig{
 			Runner:         &pool.AgentRunnerAdapter{Runner: agentRunner},
 			RepoCache:      &pool.RepoCacheAdapter{Cache: repoCache},
@@ -202,7 +201,7 @@ func runApp(cfg *config.Config) error {
 		}
 	}
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, agentRunner, mantisClient, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader)
+	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, mantisClient, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		MaxConcurrent:   cfg.MaxConcurrent,
