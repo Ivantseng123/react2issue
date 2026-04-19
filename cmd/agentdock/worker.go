@@ -8,12 +8,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"agentdock/internal/bot"
-	"agentdock/internal/config"
-	ghclient "agentdock/internal/github"
-	"agentdock/internal/logging"
-	"agentdock/internal/queue"
-	"agentdock/internal/worker"
+	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/internal/config"
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
+	"github.com/Ivantseng123/agentdock/shared/logging"
+	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/internal/worker"
 
 	"github.com/spf13/cobra"
 )

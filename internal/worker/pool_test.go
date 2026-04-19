@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/bot"
-	"agentdock/internal/crypto"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/shared/crypto"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 type mockRunner struct {
@@ -466,7 +466,7 @@ func TestPool_KillDuringPrepProducesCancelledResult(t *testing.T) {
 }
 
 // Scenario 7 — Watchdog-level cancel fallback (JobCancelled + CancelledAt past timeout + no worker publish)
-// is covered by TestWatchdog_CancelFallbackAfterTimeout in internal/queue/watchdog_test.go.
+// is covered by TestWatchdog_CancelFallbackAfterTimeout in shared/queue/watchdog_test.go.
 // No pool-level duplication needed.
 
 func TestHandleJob_PublishesPrepStatusReport(t *testing.T) {

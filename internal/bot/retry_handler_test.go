@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 type mockJobQueue struct {

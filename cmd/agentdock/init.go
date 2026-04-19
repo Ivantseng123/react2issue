@@ -8,7 +8,9 @@ import (
 	"strings"
 	"syscall"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/shared/configloader"
+	"github.com/Ivantseng123/agentdock/shared/connectivity"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -89,6 +91,12 @@ func runInit(path string, interactive, force bool) error {
 	return atomicWrite(path, out, 0600)
 }
 
+// atomicWrite is retained as a thin wrapper so existing tests keep their
+// short name. Pure logic lives in shared/configloader.AtomicWrite.
+func atomicWrite(path string, data []byte, mode os.FileMode) error {
+	return configloader.AtomicWrite(path, data, mode)
+}
+
 // marshalYAMLWithComments serializes cfg to YAML and inserts # REQUIRED markers
 // for slack/github/redis blocks if their key fields are empty.
 func marshalYAMLWithComments(cfg *config.Config) ([]byte, error) {
@@ -117,15 +125,6 @@ func marshalYAMLWithComments(cfg *config.Config) ([]byte, error) {
 	return []byte(text), nil
 }
 
-func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	os.Remove(tmp) // Ensure WriteFile creates a new file so mode takes effect.
-	if err := os.WriteFile(tmp, data, mode); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
 // initPromptAll runs the 5 prompts (Slack bot, Slack app, GitHub, Redis, Providers).
 func initPromptAll(cfg *config.Config, prompted map[string]any) error {
 	fmt.Fprintln(stderr)
@@ -141,7 +140,7 @@ func initPromptAll(cfg *config.Config, prompted map[string]any) error {
 			}
 			continue
 		}
-		userID, err := checkSlackToken(token)
+		userID, err := connectivity.CheckSlackToken(token)
 		if err != nil {
 			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
 			if attempt == maxRetries {
@@ -186,7 +185,7 @@ func initPromptAll(cfg *config.Config, prompted map[string]any) error {
 			}
 			continue
 		}
-		username, err := checkGitHubToken(token)
+		username, err := connectivity.CheckGitHubToken(token)
 		if err != nil {
 			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
 			if attempt == maxRetries {
@@ -211,7 +210,7 @@ func initPromptAll(cfg *config.Config, prompted map[string]any) error {
 			}
 			continue
 		}
-		if err := checkRedis(addr); err != nil {
+		if err := connectivity.CheckRedis(addr, "", 0, false); err != nil {
 			printFail("Redis connect failed: %v (attempt %d/%d)", err, attempt, maxRetries)
 			if attempt == maxRetries {
 				return fmt.Errorf("max retries exceeded for Redis")

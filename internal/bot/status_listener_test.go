@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 func TestShortWorker(t *testing.T) {

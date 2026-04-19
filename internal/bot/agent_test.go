@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 )
 
 func TestAgentRunner_Success(t *testing.T) {

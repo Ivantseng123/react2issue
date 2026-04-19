@@ -7,9 +7,9 @@ import (
 	"sync"
 	"testing"
 
-	"agentdock/internal/config"
-	"agentdock/internal/queue"
-	slackclient "agentdock/internal/slack"
+	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/shared/queue"
+	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
 )
 
 // stubSlack implements the slackAPI interface for workflow tests.

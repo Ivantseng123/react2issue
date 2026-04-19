@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // AttachmentInfo describes a downloaded attachment available to the agent.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 )
 
 func TestFlagToKey_ValuesMapToConfigYAMLPaths(t *testing.T) {

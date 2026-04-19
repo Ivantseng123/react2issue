@@ -3,7 +3,7 @@ package bot
 import (
 	"context"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // SkillProvider loads skills for a job.

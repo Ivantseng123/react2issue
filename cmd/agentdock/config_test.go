@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 
 	"github.com/spf13/cobra"
 )

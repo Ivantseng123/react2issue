@@ -1,4 +1,4 @@
-package queue_test
+package integration_test
 
 import (
 	"context"
@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/bot"
-	"agentdock/internal/queue"
-	"agentdock/internal/worker"
+	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/internal/worker"
 )
 
 type fakeRunner struct{}

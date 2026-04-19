@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"agentdock/internal/config"
-	"agentdock/internal/crypto"
-	ghclient "agentdock/internal/github"
-	"agentdock/internal/logging"
-	"agentdock/internal/mantis"
-	"agentdock/internal/queue"
-	slackclient "agentdock/internal/slack"
+	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/shared/crypto"
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
+	"github.com/Ivantseng123/agentdock/shared/logging"
+	"github.com/Ivantseng123/agentdock/internal/mantis"
+	"github.com/Ivantseng123/agentdock/shared/queue"
+	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
 )
 
 const pendingTimeout = 1 * time.Minute

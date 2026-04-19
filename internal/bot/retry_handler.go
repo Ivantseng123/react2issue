@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"time"
 
-	"agentdock/internal/logging"
-	"agentdock/internal/metrics"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/logging"
+	"github.com/Ivantseng123/agentdock/shared/metrics"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // JobSubmitter abstracts queue submission for testing.
