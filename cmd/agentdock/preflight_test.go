@@ -4,31 +4,32 @@ import (
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/shared/connectivity"
 )
 
 func TestCheckRedis_InvalidAddr(t *testing.T) {
-	err := checkRedis("localhost:99999")
+	err := connectivity.CheckRedis("localhost:99999")
 	if err == nil {
 		t.Fatal("expected error for invalid redis address")
 	}
 }
 
 func TestCheckRedis_EmptyAddr(t *testing.T) {
-	err := checkRedis("")
+	err := connectivity.CheckRedis("")
 	if err == nil {
 		t.Fatal("expected error for empty address")
 	}
 }
 
 func TestCheckGitHubToken_EmptyToken(t *testing.T) {
-	_, err := checkGitHubToken("")
+	_, err := connectivity.CheckGitHubToken("")
 	if err == nil {
 		t.Fatal("expected error for empty token")
 	}
 }
 
 func TestCheckGitHubToken_InvalidToken(t *testing.T) {
-	_, err := checkGitHubToken("ghp_invalid_token_value")
+	_, err := connectivity.CheckGitHubToken("ghp_invalid_token_value")
 	if err == nil {
 		t.Fatal("expected error for invalid token")
 	}

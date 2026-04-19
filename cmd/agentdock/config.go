@@ -1,19 +1,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"reflect"
-	"strings"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/shared/configloader"
 
-	"github.com/knadh/koanf/parsers/json"
-	"github.com/knadh/koanf/parsers/yaml"
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/file"
 	"github.com/knadh/koanf/v2"
@@ -23,10 +19,10 @@ import (
 // DeltaInfo records whether the config file existed and whether the user
 // passed any flag overrides. Phase 6 uses it to decide whether to trigger
 // save-back.
-type DeltaInfo struct {
-	FileExisted     bool
-	HadFlagOverride bool
-}
+//
+// Type-alias to shared/configloader.DeltaInfo so existing call sites keep
+// using DeltaInfo without repackaging.
+type DeltaInfo = configloader.DeltaInfo
 
 // buildKoanf builds two koanf instances:
 //
@@ -51,7 +47,7 @@ func buildKoanf(cmd *cobra.Command, configPath string) (*config.Config, *koanf.K
 	if configPath != "" {
 		if _, err := os.Stat(configPath); err == nil {
 			fileExisted = true
-			parser, err := pickParser(configPath)
+			parser, err := configloader.PickParser(configPath)
 			if err != nil {
 				return nil, nil, nil, DeltaInfo{}, err
 			}
@@ -96,19 +92,6 @@ func buildKoanf(cmd *cobra.Command, configPath string) (*config.Config, *koanf.K
 		FileExisted:     fileExisted,
 		HadFlagOverride: len(flagMap) > 0,
 	}, nil
-}
-
-// pickParser chooses a koanf parser based on file extension. Only .yaml, .yml,
-// and .json are supported (D2).
-func pickParser(path string) (koanf.Parser, error) {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".yaml", ".yml":
-		return yaml.Parser(), nil
-	case ".json":
-		return json.Parser(), nil
-	default:
-		return nil, fmt.Errorf("unsupported config format: %s; only .yaml/.yml/.json supported", filepath.Ext(path))
-	}
 }
 
 // mergeBuiltinAgents fills in any built-in agent entries the user didn't
@@ -187,63 +170,22 @@ func loadAndStash(cmd *cobra.Command, configPath string, scope PreflightScope) e
 	return nil
 }
 
-// saveConfig writes kSave to path if any delta condition is met (D13):
-//
-//	A. preflight prompted any value (prompted non-empty), or
-//	B. flag override happened (delta.HadFlagOverride), or
-//	C. config file didn't exist (!delta.FileExisted).
-//
-// Skips the write when the marshaled output is byte-identical to the
-// existing file. Returns (written, error). Save failures are non-fatal; the
-// caller should warn-log and continue.
+// saveConfig delegates to shared/configloader.SaveConfig. Wrapper retained so
+// existing call sites and tests keep the short package-local name while the
+// pure delta-write logic lives in shared (Phase 4 reuse).
 func saveConfig(kSave *koanf.Koanf, path string, prompted map[string]any, delta DeltaInfo) (bool, error) {
-	shouldWrite := len(prompted) > 0 || delta.HadFlagOverride || !delta.FileExisted
-	if !shouldWrite {
-		return false, nil
-	}
-
-	for k, v := range prompted {
-		if err := kSave.Set(k, v); err != nil {
-			return false, fmt.Errorf("kSave.Set(%s): %w", k, err)
-		}
-	}
-
-	parser, err := pickParser(path)
-	if err != nil {
-		return false, err
-	}
-	data, err := kSave.Marshal(parser)
-	if err != nil {
-		return false, fmt.Errorf("marshal: %w", err)
-	}
-
-	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
-		return false, nil
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return false, fmt.Errorf("mkdir: %w", err)
-	}
-	if err := atomicWrite(path, data, 0600); err != nil {
-		return false, fmt.Errorf("write: %w", err)
-	}
-	return true, nil
+	return configloader.SaveConfig(kSave, path, prompted, delta)
 }
 
 // resolveConfigPath expands ~/ and returns an absolute path. Empty input
 // falls back to the literal default ~/.config/agentdock/config.yaml (D2).
+// The tilde/absolute expansion itself lives in shared/configloader; this
+// wrapper owns the agentdock-specific default.
 func resolveConfigPath(in string) (string, error) {
 	if in == "" {
 		in = "~/.config/agentdock/config.yaml"
 	}
-	if strings.HasPrefix(in, "~/") || in == "~" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve ~: %w", err)
-		}
-		in = filepath.Join(home, strings.TrimPrefix(in, "~/"))
-	}
-	return filepath.Abs(in)
+	return configloader.ResolveConfigPath(in)
 }
 
 // validKoanfKeys returns the set of valid dotted koanf paths and the set of
@@ -251,44 +193,8 @@ func resolveConfigPath(in string) (string, error) {
 func validKoanfKeys() (valid map[string]bool, mapKeys map[string]bool) {
 	valid = map[string]bool{}
 	mapKeys = map[string]bool{}
-	walkYAMLPathsKeyOnly(reflect.TypeOf(config.Config{}), "", valid, mapKeys)
+	configloader.WalkYAMLPathsKeyOnly(reflect.TypeOf(config.Config{}), "", valid, mapKeys)
 	return
-}
-
-func walkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool, mapKeys map[string]bool) {
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return
-	}
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
-		tag := strings.Split(f.Tag.Get("yaml"), ",")[0]
-		if tag == "" || tag == "-" {
-			continue
-		}
-		path := tag
-		if prefix != "" {
-			path = prefix + "." + tag
-		}
-		out[path] = true
-		ft := f.Type
-		if ft.Kind() == reflect.Pointer {
-			ft = ft.Elem()
-		}
-		if ft.Kind() == reflect.Map {
-			// Map-typed fields have dynamic sub-keys (e.g. agents, channels).
-			// Record and skip — sub-keys are user-defined, not schema-validated.
-			// NOTE: only top-level maps are handled. If a nested struct ever
-			// contains a map field, extend warnUnknownKeys to check prefixes.
-			mapKeys[path] = true
-			continue
-		}
-		if ft.Kind() == reflect.Struct {
-			walkYAMLPathsKeyOnly(ft, path, out, mapKeys)
-		}
-	}
 }
 
 // warnUnknownKeys logs warnings for any koanf key not in the valid Config
@@ -296,15 +202,7 @@ func walkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool, ma
 // arbitrary sub-keys and are skipped entirely.
 func warnUnknownKeys(k *koanf.Koanf) {
 	valid, mapKeys := validKoanfKeys()
-	for _, key := range k.Keys() {
-		topLevel := strings.SplitN(key, ".", 2)[0]
-		if mapKeys[topLevel] {
-			continue
-		}
-		if !valid[key] {
-			slog.Warn("未知設定鍵", "phase", "失敗", "key", key)
-		}
-	}
+	configloader.WarnUnknownKeys(k, valid, mapKeys)
 }
 
 // warnLegacyMigrationKeys emits WARN logs for specific YAML keys that were

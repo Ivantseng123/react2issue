@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -12,7 +11,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
-	"github.com/Ivantseng123/agentdock/shared/crypto"
+	"github.com/Ivantseng123/agentdock/shared/connectivity"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
@@ -93,7 +92,7 @@ func preflightRedis(cfg *config.Config, interactive bool, prompted map[string]an
 				}
 				return fmt.Errorf("max retries exceeded for Redis address")
 			}
-			if err := checkRedis(addr); err != nil {
+			if err := connectivity.CheckRedis(addr); err != nil {
 				printFail("Redis connect failed: %v (attempt %d/%d)", err, attempt, maxRetries)
 				if attempt == maxRetries {
 					return fmt.Errorf("max retries exceeded for Redis")
@@ -107,7 +106,7 @@ func preflightRedis(cfg *config.Config, interactive bool, prompted map[string]an
 		}
 		return nil
 	}
-	if err := checkRedis(cfg.Redis.Addr); err != nil {
+	if err := connectivity.CheckRedis(cfg.Redis.Addr); err != nil {
 		printFail("Redis connect failed: %v", err)
 		return err
 	}
@@ -133,7 +132,7 @@ func preflightGitHub(cfg *config.Config, interactive bool, prompted map[string]a
 				}
 				return fmt.Errorf("max retries exceeded for GitHub token")
 			}
-			username, err := checkGitHubToken(token)
+			username, err := connectivity.CheckGitHubToken(token)
 			if err != nil {
 				printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
 				if attempt == maxRetries {
@@ -148,7 +147,7 @@ func preflightGitHub(cfg *config.Config, interactive bool, prompted map[string]a
 		}
 		return nil
 	}
-	username, err := checkGitHubToken(cfg.GitHub.Token)
+	username, err := connectivity.CheckGitHubToken(cfg.GitHub.Token)
 	if err != nil {
 		printFail("GitHub token invalid: %v", err)
 		return err
@@ -188,7 +187,7 @@ func preflightProviders(cfg *config.Config, interactive bool, prompted map[strin
 
 func preflightSlackBot(cfg *config.Config, interactive bool, prompted map[string]any) error {
 	if cfg.Slack.BotToken != "" {
-		userID, err := checkSlackToken(cfg.Slack.BotToken)
+		userID, err := connectivity.CheckSlackToken(cfg.Slack.BotToken)
 		if err != nil {
 			printFail("Slack bot token invalid: %v", err)
 			return err
@@ -210,7 +209,7 @@ func preflightSlackBot(cfg *config.Config, interactive bool, prompted map[string
 			}
 			continue
 		}
-		userID, err := checkSlackToken(token)
+		userID, err := connectivity.CheckSlackToken(token)
 		if err != nil {
 			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
 			if attempt == maxRetries {
@@ -327,7 +326,9 @@ func preflightSecretKey(cfg *config.Config, interactive bool, prompted map[strin
 }
 
 // verifyBeaconFromConfig connects to Redis and verifies the secret key
-// matches the app's beacon. Uses cfg.Redis for connection details.
+// matches the app's beacon. Uses cfg.Redis for connection details. The
+// actual decrypt-and-compare step lives in shared/connectivity so Phase 4
+// worker/config can reuse it.
 func verifyBeaconFromConfig(cfg *config.Config, secretKey []byte) error {
 	rdb, err := queue.NewRedisClient(queue.RedisConfig{
 		Addr:     cfg.Redis.Addr,
@@ -339,7 +340,7 @@ func verifyBeaconFromConfig(cfg *config.Config, secretKey []byte) error {
 		return fmt.Errorf("connect to Redis for beacon check: %w", err)
 	}
 	defer rdb.Close()
-	return crypto.VerifyBeacon(context.Background(), rdb, secretKey)
+	return connectivity.VerifySecretBeacon(rdb, secretKey)
 }
 
 func preflightAgentCLIs(cfg *config.Config, interactive bool) error {
