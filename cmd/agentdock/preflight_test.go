@@ -8,14 +8,14 @@ import (
 )
 
 func TestCheckRedis_InvalidAddr(t *testing.T) {
-	err := connectivity.CheckRedis("localhost:99999")
+	err := connectivity.CheckRedis("localhost:99999", "", 0, false)
 	if err == nil {
 		t.Fatal("expected error for invalid redis address")
 	}
 }
 
 func TestCheckRedis_EmptyAddr(t *testing.T) {
-	err := connectivity.CheckRedis("")
+	err := connectivity.CheckRedis("", "", 0, false)
 	if err == nil {
 		t.Fatal("expected error for empty address")
 	}

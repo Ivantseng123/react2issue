@@ -2,23 +2,29 @@ package connectivity
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// CheckRedis connects to a Redis server at addr and issues PING.
-// Uses a 5 second timeout. Empty addr returns an error.
-func CheckRedis(addr string) error {
+// CheckRedis connects to Redis at addr (with optional auth + TLS) and runs
+// a PING to verify reachability. Returns nil on success, an error otherwise.
+func CheckRedis(addr, password string, db int, useTLS bool) error {
 	if addr == "" {
 		return errors.New("address is empty")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr})
-	defer client.Close()
-
+	opts := &redis.Options{Addr: addr, Password: password, DB: db}
+	if useTLS {
+		opts.TLSConfig = &tls.Config{}
+	}
+	c := redis.NewClient(opts)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	return client.Ping(ctx).Err()
+	if err := c.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis ping: %w", err)
+	}
+	return c.Close()
 }

@@ -3,7 +3,6 @@ package configloader
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -19,8 +18,5 @@ func TestResolveConfigPath_ExpandsTilde(t *testing.T) {
 	want := filepath.Join(home, "foo.yaml")
 	if got != want {
 		t.Errorf("got %q want %q", got, want)
-	}
-	if !strings.HasPrefix(got, home) {
-		t.Errorf("should start with home: %q", got)
 	}
 }

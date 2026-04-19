@@ -92,7 +92,7 @@ func preflightRedis(cfg *config.Config, interactive bool, prompted map[string]an
 				}
 				return fmt.Errorf("max retries exceeded for Redis address")
 			}
-			if err := connectivity.CheckRedis(addr); err != nil {
+			if err := connectivity.CheckRedis(addr, "", 0, false); err != nil {
 				printFail("Redis connect failed: %v (attempt %d/%d)", err, attempt, maxRetries)
 				if attempt == maxRetries {
 					return fmt.Errorf("max retries exceeded for Redis")
@@ -106,7 +106,7 @@ func preflightRedis(cfg *config.Config, interactive bool, prompted map[string]an
 		}
 		return nil
 	}
-	if err := connectivity.CheckRedis(cfg.Redis.Addr); err != nil {
+	if err := connectivity.CheckRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.Redis.TLS); err != nil {
 		printFail("Redis connect failed: %v", err)
 		return err
 	}

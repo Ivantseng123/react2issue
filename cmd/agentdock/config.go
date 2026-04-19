@@ -202,7 +202,9 @@ func validKoanfKeys() (valid map[string]bool, mapKeys map[string]bool) {
 // arbitrary sub-keys and are skipped entirely.
 func warnUnknownKeys(k *koanf.Koanf) {
 	valid, mapKeys := validKoanfKeys()
-	configloader.WarnUnknownKeys(k, valid, mapKeys)
+	for _, key := range configloader.UnknownKeys(k, valid, mapKeys) {
+		slog.Warn("未知設定鍵", "phase", "失敗", "key", key)
+	}
 }
 
 // warnLegacyMigrationKeys emits WARN logs for specific YAML keys that were

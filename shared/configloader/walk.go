@@ -1,7 +1,6 @@
 package configloader
 
 import (
-	"log/slog"
 	"reflect"
 	"strings"
 
@@ -42,16 +41,19 @@ func WalkYAMLPathsKeyOnly(t reflect.Type, prefix string, out map[string]bool, ma
 	}
 }
 
-// WarnUnknownKeys logs slog.Warn for any koanf key not in valid.
-// mapKeys contains top-level keys whose sub-keys are dynamic (e.g. "agents").
-func WarnUnknownKeys(k *koanf.Koanf, valid, mapKeys map[string]bool) {
+// UnknownKeys returns all koanf keys that are not in valid.
+// mapKeys contains top-level keys whose sub-keys are dynamic (e.g. "agents")
+// and are therefore skipped from the check.
+func UnknownKeys(k *koanf.Koanf, valid, mapKeys map[string]bool) []string {
+	var unknown []string
 	for _, key := range k.Keys() {
 		topLevel := strings.SplitN(key, ".", 2)[0]
 		if mapKeys[topLevel] {
 			continue
 		}
 		if !valid[key] {
-			slog.Warn("未知設定鍵", "phase", "失敗", "key", key)
+			unknown = append(unknown, key)
 		}
 	}
+	return unknown
 }
