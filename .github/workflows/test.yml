@@ -24,3 +24,7 @@ jobs:
         run: (cd shared && go test ./... -race)
       - name: Go vet (shared module)
         run: (cd shared && go vet ./...)
+      - name: Go test (worker module)
+        run: (cd worker && go test ./... -race)
+      - name: Go vet (worker module)
+        run: (cd worker && go vet ./...)
