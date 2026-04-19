@@ -16,6 +16,12 @@
 
 ## Phase 1 — Shared Module + CI + Spike
 
+> **Execution note (2026-04-19):** Phase 1 inserted **Task 8a — move `internal/metrics` →
+> `shared/metrics`** between Tasks 8 and 9. Rationale: `shared/github` instruments itself
+> with metrics counters, so metrics cannot live in `app/` (that would invert the
+> `shared ← app` dependency direction). As a consequence, Phase 3's Task 22 is now a
+> no-op; see the note at Task 22 below.
+
 ### Task 1: Goreleaser+Replace Feasibility Spike
 
 **Goal:** Before any production code touches happen, verify that `goreleaser release --snapshot` can build a single binary from a root module using `replace` directives to pull in local sibling modules.
@@ -1928,22 +1934,20 @@ git commit -m "refactor(app): move internal/mantis → app/mantis"
 
 ---
 
-### Task 22: Move `internal/metrics` → `app/metrics`
+### Task 22: ~~Move `internal/metrics` → `app/metrics`~~ — SUPERSEDED (2026-04-19)
 
-- [ ] **Step 1: Move + rewrite + tidy + test + commit**
+**Status:** No-op. Metrics lives in `shared/metrics` as of Phase 1 (inserted Task 8a).
 
-```bash
-mkdir -p app/metrics
-git mv internal/metrics/*.go app/metrics/
-grep -rl '"github.com/Ivantseng123/agentdock/internal/metrics"' --include="*.go" . | \
-  xargs perl -pi -e 's|"github.com/Ivantseng123/agentdock/internal/metrics"|"github.com/Ivantseng123/agentdock/app/metrics"|g'
-go mod tidy
-cd app && go mod tidy && cd ..
-go build ./... && go test ./... -short
-cd app && go test ./... -short && cd ..
-git add -A
-git commit -m "refactor(app): move internal/metrics → app/metrics"
-```
+**Why it changed:** `shared/github/{issue,discovery}.go` instrument external calls via
+`metrics.ExternalDuration` / `metrics.ExternalErrorsTotal`. Moving metrics to `app/` would
+force `shared → app`, inverting the architectural rule (`app → shared`, `worker → shared`,
+never the reverse). Resolved by landing metrics in `shared/metrics` during Phase 1.
+
+Both app and worker emit metrics (workers always did, via shared/github); the stale
+package comment claiming "Workers have zero prometheus dependency" was corrected in
+the 8a commit.
+
+Skip this task in Phase 3.
 
 ---
 
