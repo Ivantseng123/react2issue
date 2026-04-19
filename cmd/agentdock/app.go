@@ -19,6 +19,8 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/internal/skill"
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
+	agentpkg "github.com/Ivantseng123/agentdock/worker/agent"
+	"github.com/Ivantseng123/agentdock/worker/pool"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -54,7 +56,7 @@ func runApp(cfg *config.Config) error {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	// Re-init logger with configured level.
-	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: parseLogLevel(cfg.LogLevel)})
+	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
@@ -62,7 +64,7 @@ func runApp(cfg *config.Config) error {
 	}
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
-	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: parseLogLevel(cfg.Logging.Level)})
+	fileHandler := slog.NewJSONHandler(rotator, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.Logging.Level)})
 	slog.SetDefault(slog.New(logging.NewMultiHandler(stderrHandler, fileHandler)))
 
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
@@ -83,7 +85,7 @@ func runApp(cfg *config.Config) error {
 		}()
 	}
 
-	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
+	agentRunner := agentpkg.NewRunnerFromConfig(cfg)
 
 	// Load skills via SkillLoader.
 	bakedInDir := "agents/skills"
@@ -175,12 +177,12 @@ func runApp(cfg *config.Config) error {
 	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
 	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
 
-	// Create and start LocalAdapter (owns worker.Pool lifecycle).
+	// Create and start LocalAdapter (owns pool.Pool lifecycle).
 	// In redis mode, workers are separate pods — skip local agent execution.
 	if cfg.Queue.Transport != "redis" {
-		localAdapter := NewLocalAdapter(LocalAdapterConfig{
-			Runner:         &agentRunnerAdapter{runner: agentRunner},
-			RepoCache:      &repoCacheAdapter{cache: repoCache},
+		localAdapter := pool.NewLocalAdapter(pool.LocalAdapterConfig{
+			Runner:         &pool.AgentRunnerAdapter{Runner: agentRunner},
+			RepoCache:      &pool.RepoCacheAdapter{Cache: repoCache},
 			SkillDirs:      skillDirs,
 			WorkerCount:    cfg.Worker.Count,
 			StatusInterval: cfg.Queue.StatusInterval,

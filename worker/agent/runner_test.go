@@ -1,4 +1,4 @@
-package bot
+package agent
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"github.com/Ivantseng123/agentdock/internal/config"
 )
 
-func TestAgentRunner_Success(t *testing.T) {
+func TestRunner_Success(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "mock-agent")
 	os.WriteFile(script, []byte(`#!/bin/sh
@@ -24,7 +24,7 @@ echo "===TRIAGE_METADATA==="
 echo '{"issue_type":"bug","confidence":"high","files":[],"open_questions":[],"suggested_title":"test"}'
 `), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 10 * time.Second},
 	})
 
@@ -40,12 +40,12 @@ echo '{"issue_type":"bug","confidence":"high","files":[],"open_questions":[],"su
 	}
 }
 
-func TestAgentRunner_ProviderChain(t *testing.T) {
+func TestRunner_ProviderChain(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "good-agent")
 	os.WriteFile(script, []byte("#!/bin/sh\necho 'fallback output with enough characters to pass the minimum length check of fifty chars'\n"), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: "/nonexistent/agent", Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
@@ -59,8 +59,8 @@ func TestAgentRunner_ProviderChain(t *testing.T) {
 	}
 }
 
-func TestAgentRunner_AllFail(t *testing.T) {
-	runner := NewAgentRunner([]config.AgentConfig{
+func TestRunner_AllFail(t *testing.T) {
+	runner := NewRunner([]config.AgentConfig{
 		{Command: "/nonexistent/agent1", Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 		{Command: "/nonexistent/agent2", Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
@@ -71,12 +71,12 @@ func TestAgentRunner_AllFail(t *testing.T) {
 	}
 }
 
-func TestAgentRunner_Timeout(t *testing.T) {
+func TestRunner_Timeout(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "slow-agent")
 	os.WriteFile(script, []byte("#!/bin/sh\nsleep 10\n"), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 100 * time.Millisecond},
 	})
 
@@ -86,7 +86,7 @@ func TestAgentRunner_Timeout(t *testing.T) {
 	}
 }
 
-func TestAgentRunner_PromptSubstitution(t *testing.T) {
+func TestRunner_PromptSubstitution(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "echo-agent")
 	os.WriteFile(script, []byte(`#!/bin/sh
@@ -94,7 +94,7 @@ echo "$1"
 echo "padding padding padding padding padding padding padding"
 `), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
 
@@ -107,7 +107,7 @@ echo "padding padding padding padding padding padding padding"
 	}
 }
 
-func TestAgentRunner_SecretsInjected(t *testing.T) {
+func TestRunner_SecretsInjected(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "env-agent")
 	os.WriteFile(script, []byte(`#!/bin/sh
@@ -115,7 +115,7 @@ env | grep TOKEN | sort
 echo "padding padding padding padding padding padding padding"
 `), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
 
@@ -135,7 +135,7 @@ echo "padding padding padding padding padding padding padding"
 	}
 }
 
-func TestAgentRunner_GithubTokenFallback(t *testing.T) {
+func TestRunner_GithubTokenFallback(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "env-agent")
 	os.WriteFile(script, []byte(`#!/bin/sh
@@ -143,7 +143,7 @@ env | grep GH_TOKEN
 echo "padding padding padding padding padding padding padding"
 `), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
 	})
 	runner.githubToken = "ghp_fallback"
@@ -157,7 +157,7 @@ echo "padding padding padding padding padding padding padding"
 	}
 }
 
-func TestAgentRunner_OutputFilePlaceholder(t *testing.T) {
+func TestRunner_OutputFilePlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "outfile-agent")
 	// Script writes clean text to $2 (the -o path) and prints noise to stdout.
@@ -168,7 +168,7 @@ printf '%s' "clean answer from file" > "$2"
 echo "noisy stdout footer"
 `), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: script, Args: []string{"-o", "{output_file}", "{prompt}"}, Timeout: 5 * time.Second},
 	})
 
@@ -184,7 +184,7 @@ echo "noisy stdout footer"
 	}
 }
 
-func TestAgentRunner_OutputFileCleanedUp(t *testing.T) {
+func TestRunner_OutputFileCleanedUp(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "outfile-agent")
 	os.WriteFile(script, []byte(`#!/bin/sh
@@ -192,7 +192,7 @@ printf 'x' > "$2"
 echo "$2" > `+filepath.Join(dir, "captured-path.txt")+`
 `), 0755)
 
-	runner := NewAgentRunner([]config.AgentConfig{
+	runner := NewRunner([]config.AgentConfig{
 		{Command: script, Args: []string{"-o", "{output_file}", "{prompt}"}, Timeout: 5 * time.Second},
 	})
 
@@ -210,8 +210,8 @@ echo "$2" > `+filepath.Join(dir, "captured-path.txt")+`
 	}
 }
 
-func TestAgentRunner_CancelShortCircuitsProviderChain(t *testing.T) {
-	runner := &AgentRunner{
+func TestRunner_CancelShortCircuitsProviderChain(t *testing.T) {
+	runner := &Runner{
 		agents: []config.AgentConfig{
 			{Command: "nonexistent-agent-one", Args: []string{"{prompt}"}, Timeout: time.Second},
 			{Command: "nonexistent-agent-two", Args: []string{"{prompt}"}, Timeout: time.Second},

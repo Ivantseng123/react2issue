@@ -9,6 +9,7 @@ import (
 
 	"github.com/Ivantseng123/agentdock/internal/config"
 	"github.com/Ivantseng123/agentdock/shared/configloader"
+	workerconfig "github.com/Ivantseng123/agentdock/worker/config"
 
 	"github.com/knadh/koanf/providers/confmap"
 	"github.com/knadh/koanf/providers/file"
@@ -101,7 +102,7 @@ func mergeBuiltinAgents(cfg *config.Config) {
 	if cfg.Agents == nil {
 		cfg.Agents = map[string]config.AgentConfig{}
 	}
-	for name, agent := range config.BuiltinAgents {
+	for name, agent := range workerconfig.BuiltinAgents {
 		if _, exists := cfg.Agents[name]; !exists {
 			cfg.Agents[name] = agent
 		}

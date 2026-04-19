@@ -1,4 +1,4 @@
-package bot
+package agent
 
 import (
 	"context"
@@ -23,16 +23,16 @@ type RunOptions struct {
 	Secrets   map[string]string
 }
 
-type AgentRunner struct {
+type Runner struct {
 	agents      []config.AgentConfig
 	githubToken string
 }
 
-func NewAgentRunner(agents []config.AgentConfig) *AgentRunner {
-	return &AgentRunner{agents: agents}
+func NewRunner(agents []config.AgentConfig) *Runner {
+	return &Runner{agents: agents}
 }
 
-func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
+func NewRunnerFromConfig(cfg *config.Config) *Runner {
 	var chain []config.AgentConfig
 	if len(cfg.Providers) > 0 {
 		for _, name := range cfg.Providers {
@@ -47,12 +47,12 @@ func NewAgentRunnerFromConfig(cfg *config.Config) *AgentRunner {
 			chain = append(chain, agent)
 		}
 	}
-	runner := NewAgentRunner(chain)
+	runner := NewRunner(chain)
 	runner.githubToken = cfg.GitHub.Token
 	return runner
 }
 
-func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string, opts RunOptions) (string, error) {
+func (r *Runner) Run(ctx context.Context, logger *slog.Logger, workDir, prompt string, opts RunOptions) (string, error) {
 	var errs []string
 	for i, agent := range r.agents {
 		logger.Info("嘗試 agent", "phase", "處理中", "command", agent.Command, "index", i, "total", len(r.agents), "timeout", agent.Timeout)
@@ -73,7 +73,7 @@ func (r *AgentRunner) Run(ctx context.Context, logger *slog.Logger, workDir, pro
 	return "", fmt.Errorf("all agents failed: %s", strings.Join(errs, "; "))
 }
 
-func (r *AgentRunner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (string, error) {
+func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.AgentConfig, workDir, prompt string, opts RunOptions) (string, error) {
 	timeout := agent.Timeout
 	if timeout <= 0 {
 		timeout = 5 * time.Minute

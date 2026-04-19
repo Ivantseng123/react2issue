@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/shared/queue"
-	"github.com/Ivantseng123/agentdock/internal/worker"
+	"github.com/Ivantseng123/agentdock/worker/agent"
+	"github.com/Ivantseng123/agentdock/worker/pool"
 )
 
 type fakeRunner struct{}
 
-func (f *fakeRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (f *fakeRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	result := map[string]any{
 		"status":         "CREATED",
 		"title":          "Test issue",
@@ -46,7 +46,7 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 	bundle := queue.NewInMemBundle(10, 3, store)
 	defer bundle.Close()
 
-	pool := worker.NewPool(worker.Config{
+	p := pool.NewPool(pool.Config{
 		Queue:       bundle.Queue,
 		Attachments: bundle.Attachments,
 		Results:     bundle.Results,
@@ -60,7 +60,7 @@ func TestFullFlow_SubmitToResult(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	pool.Start(ctx)
+	p.Start(ctx)
 
 	// Pre-signal attachments ready.
 	bundle.Attachments.Prepare(ctx, "j1", nil)
@@ -117,7 +117,7 @@ func TestFullFlow_PriorityOrdering(t *testing.T) {
 	var order []string
 	runner := &orderRunner{mu: &mu, order: &order}
 
-	pool := worker.NewPool(worker.Config{
+	p := pool.NewPool(pool.Config{
 		Queue:       bundle.Queue,
 		Attachments: bundle.Attachments,
 		Results:     bundle.Results,
@@ -130,7 +130,7 @@ func TestFullFlow_PriorityOrdering(t *testing.T) {
 
 	ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	pool.Start(ctx2)
+	p.Start(ctx2)
 
 	// Collect 3 results.
 	ch, _ := bundle.Results.Subscribe(ctx2)
@@ -158,7 +158,7 @@ type orderRunner struct {
 	order *[]string
 }
 
-func (r *orderRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (r *orderRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	r.mu.Lock()
 	*r.order = append(*r.order, prompt)
 	r.mu.Unlock()
