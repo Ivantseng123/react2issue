@@ -1,6 +1,6 @@
 module github.com/Ivantseng123/agentdock/shared
 
-go 1.25
+go 1.25.0
 
 require (
 	github.com/google/go-github/v60 v60.0.0
@@ -28,6 +28,7 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.3 // indirect
-	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/term v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )
