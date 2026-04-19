@@ -10,7 +10,7 @@ import (
 	"reflect"
 	"strings"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 
 	"github.com/knadh/koanf/parsers/json"
 	"github.com/knadh/koanf/parsers/yaml"

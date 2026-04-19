@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 func TestValidateSkillFiles_Valid(t *testing.T) {

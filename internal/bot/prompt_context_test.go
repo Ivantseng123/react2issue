@@ -3,8 +3,8 @@ package bot
 import (
 	"testing"
 
-	"agentdock/internal/config"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 func TestAssemblePromptContext_PassesConfigThrough(t *testing.T) {

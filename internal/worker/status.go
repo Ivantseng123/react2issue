@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 type statusAccumulator struct {

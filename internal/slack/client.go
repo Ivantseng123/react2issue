@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"agentdock/internal/metrics"
+	"github.com/Ivantseng123/agentdock/internal/metrics"
 
 	"github.com/slack-go/slack"
 )

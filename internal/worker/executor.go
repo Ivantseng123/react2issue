@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"agentdock/internal/bot"
-	"agentdock/internal/crypto"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/internal/crypto"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 // Runner abstracts agent execution (for testing).

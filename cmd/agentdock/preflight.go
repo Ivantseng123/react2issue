@@ -11,9 +11,9 @@ import (
 
 	"golang.org/x/term"
 
-	"agentdock/internal/config"
-	"agentdock/internal/crypto"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/crypto"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 const maxRetries = 3

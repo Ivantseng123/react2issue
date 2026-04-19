@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 type mockFetcher struct {

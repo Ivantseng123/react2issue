@@ -5,7 +5,7 @@ package metrics
 import (
 	"context"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 
 	"github.com/prometheus/client_golang/prometheus"
 )

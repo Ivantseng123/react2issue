@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 )
 
 func TestValidate_OK(t *testing.T) {

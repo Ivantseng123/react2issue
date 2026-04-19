@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 const statusUpdateDebounce = 15 * time.Second

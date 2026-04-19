@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"agentdock/internal/queue"
-	"agentdock/internal/worker"
+	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/worker"
 )
 
 // LocalAdapterConfig holds agent-specific configuration for the local adapter.

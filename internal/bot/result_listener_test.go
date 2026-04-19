@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 var errBoomGitHub = errors.New("github down")

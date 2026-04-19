@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"agentdock/internal/bot"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 type Config struct {

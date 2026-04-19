@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"agentdock/internal/bot"
-	ghclient "agentdock/internal/github"
-	slackclient "agentdock/internal/slack"
+	"github.com/Ivantseng123/agentdock/internal/bot"
+	ghclient "github.com/Ivantseng123/agentdock/internal/github"
+	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
 )
 
 // agentRunnerAdapter wraps AgentRunner to satisfy worker.Runner interface.

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"agentdock/internal/metrics"
+	"github.com/Ivantseng123/agentdock/internal/metrics"
 )
 
 // TriggerEvent represents an @bot mention or /triage command.

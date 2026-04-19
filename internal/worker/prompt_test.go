@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 func TestBuildPrompt_Basic(t *testing.T) {

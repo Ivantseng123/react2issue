@@ -8,7 +8,7 @@ import (
 	"strings"
 	"syscall"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"

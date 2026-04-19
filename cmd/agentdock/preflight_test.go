@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 )
 
 func TestCheckRedis_InvalidAddr(t *testing.T) {

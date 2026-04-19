@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"agentdock/internal/bot"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/bot"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 func TestClassifyResult_UserCancel(t *testing.T) {

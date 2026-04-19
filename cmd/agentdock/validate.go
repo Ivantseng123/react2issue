@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/internal/config"
 )
 
 // validate runs all cross-field range checks on the merged Config and returns

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"agentdock/internal/metrics"
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/metrics"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 // SlackPoster abstracts Slack message posting for testing.

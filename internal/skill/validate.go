@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/internal/queue"
 )
 
 const (
