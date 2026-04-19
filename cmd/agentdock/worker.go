@@ -11,7 +11,7 @@ import (
 	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/internal/config"
 	ghclient "github.com/Ivantseng123/agentdock/internal/github"
-	"github.com/Ivantseng123/agentdock/internal/logging"
+	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/internal/worker"
 

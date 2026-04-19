@@ -18,6 +18,6 @@ This is a **structuring tool, not a diagnosis tool.** The core value is turning 
 
 ## Routing
 
-- Logging conventions (component/phase taxonomy, attribute names, Chinese message format): `internal/logging/GUIDE.md`
+- Logging conventions (component/phase taxonomy, attribute names, Chinese message format): `shared/logging/GUIDE.md`
 - v1 migration (binary rename, subcommands, config path): `docs/MIGRATION-v1.md`
 - Historical specs and plans: `docs/superpowers/`
