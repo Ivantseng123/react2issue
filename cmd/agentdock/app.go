@@ -19,6 +19,7 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/internal/skill"
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
+	agentpkg "github.com/Ivantseng123/agentdock/worker/agent"
 	"github.com/Ivantseng123/agentdock/worker/pool"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -84,7 +85,7 @@ func runApp(cfg *config.Config) error {
 		}()
 	}
 
-	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
+	agentRunner := agentpkg.NewRunnerFromConfig(cfg)
 
 	// Load skills via SkillLoader.
 	bakedInDir := "agents/skills"

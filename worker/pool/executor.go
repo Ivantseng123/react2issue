@@ -14,11 +14,12 @@ import (
 	"github.com/Ivantseng123/agentdock/internal/worker"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/worker/agent"
 )
 
 // Runner abstracts agent execution (for testing).
 type Runner interface {
-	Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error)
+	Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error)
 }
 
 // RepoProvider abstracts repo clone/checkout (for testing).
@@ -40,7 +41,7 @@ type executionDeps struct {
 	extraRules    []string
 }
 
-func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts bot.RunOptions, logger *slog.Logger) *queue.JobResult {
+func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts agent.RunOptions, logger *slog.Logger) *queue.JobResult {
 	startedAt := time.Now()
 	logger = logger.With("job_id", job.ID, "repo", job.Repo)
 

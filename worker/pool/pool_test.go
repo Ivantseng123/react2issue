@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/worker/agent"
 )
 
 type mockRunner struct {
@@ -20,7 +20,7 @@ type mockRunner struct {
 	err    error
 }
 
-func (m *mockRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (m *mockRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	return m.output, m.err
 }
 
@@ -205,10 +205,10 @@ func TestPool_AgentFailurePublishesFailedResult(t *testing.T) {
 }
 
 type secretCapturingRunner struct {
-	onRun func(opts bot.RunOptions)
+	onRun func(opts agent.RunOptions)
 }
 
-func (r *secretCapturingRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (r *secretCapturingRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	if r.onRun != nil {
 		r.onRun(opts)
 	}
@@ -242,7 +242,7 @@ func TestExecuteJob_DecryptsAndMergesSecrets(t *testing.T) {
 
 	var capturedSecrets map[string]string
 	runner := &secretCapturingRunner{
-		onRun: func(opts bot.RunOptions) {
+		onRun: func(opts agent.RunOptions) {
 			capturedSecrets = opts.Secrets
 		},
 	}
@@ -268,7 +268,7 @@ func TestExecuteJob_DecryptsAndMergesSecrets(t *testing.T) {
 		workerSecrets: workerSecrets,
 	}
 
-	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
 	if result.Status == "failed" {
 		t.Fatalf("job failed: %s", result.Error)
 	}
@@ -298,7 +298,7 @@ func TestExecuteJob_NoSecretKey_EncryptedSecrets_Fails(t *testing.T) {
 		secretKey:   nil,
 	}
 
-	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
 	if result.Status != "failed" {
 		t.Error("expected job to fail when EncryptedSecrets present but no secretKey")
 	}
@@ -390,7 +390,7 @@ type blockingRunner struct {
 	started chan struct{}
 }
 
-func (b *blockingRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (b *blockingRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	if opts.OnStarted != nil {
 		opts.OnStarted(1234, "fake")
 	}
@@ -405,7 +405,7 @@ type prepBlockingRunner struct {
 	started chan struct{}
 }
 
-func (b *prepBlockingRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (b *prepBlockingRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	close(b.started)
 	<-ctx.Done()
 	return "", ctx.Err()

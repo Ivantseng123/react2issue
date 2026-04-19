@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/worker/agent"
 )
 
 func TestClassifyResult_UserCancel(t *testing.T) {
@@ -129,7 +129,7 @@ func TestExecuteJob_AgentRejectedRoutesToLowConfidence(t *testing.T) {
 		store:       store,
 	}
 
-	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
 
 	if result.Status != "completed" {
 		t.Errorf("status = %q, want completed", result.Status)
@@ -170,7 +170,7 @@ func TestExecuteJob_AgentErrorRoutesToFailed(t *testing.T) {
 		store:       store,
 	}
 
-	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
 
 	if result.Status != "failed" {
 		t.Errorf("status = %q, want failed", result.Status)
@@ -195,7 +195,7 @@ func TestExecuteJob_NilPromptContextFailsMalformed(t *testing.T) {
 		store:       store,
 	}
 
-	result := executeJob(context.Background(), job, deps, bot.RunOptions{}, slog.Default())
+	result := executeJob(context.Background(), job, deps, agent.RunOptions{}, slog.Default())
 
 	if result.Status != "failed" {
 		t.Errorf("status = %q, want failed", result.Status)
@@ -227,7 +227,7 @@ func TestExecuteJob_PrePrepareGuardSkipsClone(t *testing.T) {
 		store:  store,
 	}
 
-	result := executeJob(ctx, job, deps, bot.RunOptions{}, slog.Default())
+	result := executeJob(ctx, job, deps, agent.RunOptions{}, slog.Default())
 
 	if prepareCalled {
 		t.Error("Prepare must not be invoked when ctx is cancelled before prep")

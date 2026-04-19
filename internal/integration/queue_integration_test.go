@@ -10,14 +10,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/worker/agent"
 	"github.com/Ivantseng123/agentdock/worker/pool"
 )
 
 type fakeRunner struct{}
 
-func (f *fakeRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (f *fakeRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	result := map[string]any{
 		"status":         "CREATED",
 		"title":          "Test issue",
@@ -158,7 +158,7 @@ type orderRunner struct {
 	order *[]string
 }
 
-func (r *orderRunner) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (r *orderRunner) Run(ctx context.Context, workDir, prompt string, opts agent.RunOptions) (string, error) {
 	r.mu.Lock()
 	*r.order = append(*r.order, prompt)
 	r.mu.Unlock()

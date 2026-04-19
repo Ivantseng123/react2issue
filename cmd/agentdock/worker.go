@@ -8,11 +8,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/internal/config"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	agentpkg "github.com/Ivantseng123/agentdock/worker/agent"
 	workerpool "github.com/Ivantseng123/agentdock/worker/pool"
 
 	"github.com/spf13/cobra"
@@ -66,7 +66,7 @@ func runWorker(cfg *config.Config) error {
 
 	bundle := queue.NewRedisBundle(rdb, jobStore, "triage")
 
-	agentRunner := bot.NewAgentRunnerFromConfig(cfg)
+	agentRunner := agentpkg.NewRunnerFromConfig(cfg)
 
 	// secret_key is validated and beacon-verified during preflight.
 	secretKey, err := config.DecodeSecretKey(cfg.SecretKey)

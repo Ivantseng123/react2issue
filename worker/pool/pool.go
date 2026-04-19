@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/shared/queue"
+	"github.com/Ivantseng123/agentdock/worker/agent"
 )
 
 type Config struct {
@@ -149,7 +149,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	// Status reporting — starts AFTER agent process launches (OnStarted).
 	var stopReporter chan struct{}
 
-	opts := bot.RunOptions{
+	opts := agent.RunOptions{
 		OnStarted: func(pid int, command string) {
 			status.setPID(pid, command)
 			p.registry.SetStarted(job.ID, pid, command)

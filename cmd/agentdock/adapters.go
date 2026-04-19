@@ -7,17 +7,17 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Ivantseng123/agentdock/internal/bot"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
+	agentpkg "github.com/Ivantseng123/agentdock/worker/agent"
 )
 
-// agentRunnerAdapter wraps AgentRunner to satisfy pool.Runner interface.
+// agentRunnerAdapter wraps agent.Runner to satisfy pool.Runner interface.
 type agentRunnerAdapter struct {
-	runner *bot.AgentRunner
+	runner *agentpkg.Runner
 }
 
-func (a *agentRunnerAdapter) Run(ctx context.Context, workDir, prompt string, opts bot.RunOptions) (string, error) {
+func (a *agentRunnerAdapter) Run(ctx context.Context, workDir, prompt string, opts agentpkg.RunOptions) (string, error) {
 	return a.runner.Run(ctx, slog.Default(), workDir, prompt, opts)
 }
 
