@@ -1,7 +1,7 @@
 // Package app is the module entry point for the agentdock app process (Slack
-// orchestrator). cmd/agentdock/app.go wraps this package with cobra setup;
-// Phase 4 Task 34 will pull the inmem-mode LocalAdapter assembly out of Run
-// into the cmd layer to respect the app ✗ worker import direction.
+// orchestrator). cmd/agentdock/app.go wraps Run with cobra setup, and in
+// inmem mode assembles the worker pool against app.Handle.Buses() so app.Run
+// itself does not import worker/.
 package app
 
 import (
@@ -14,17 +14,15 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/bot"
+	"github.com/Ivantseng123/agentdock/app/config"
 	"github.com/Ivantseng123/agentdock/app/mantis"
 	"github.com/Ivantseng123/agentdock/app/skill"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
-	"github.com/Ivantseng123/agentdock/internal/config"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
-	agentpkg "github.com/Ivantseng123/agentdock/worker/agent"
-	"github.com/Ivantseng123/agentdock/worker/pool"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -42,18 +40,59 @@ var (
 	Date    = "unknown"
 )
 
-// Run starts the app process. Returns on fatal error or when the socket-mode
-// loop exits.
-func Run(cfg *config.Config) error {
-	// Use INFO until config is loaded.
+// Handle is returned by Run and gives the caller access to the app's buses
+// (needed by cmd/agentdock in inmem mode to start a worker pool against the
+// same bundle) and a Wait method that blocks on shutdown.
+type Handle struct {
+	bundle  *queue.Bundle
+	store   queue.JobStore
+	done    <-chan error
+	loggers struct {
+		worker *slog.Logger
+		github *slog.Logger
+	}
+}
+
+// Buses returns the queue bundle so an in-process worker pool can wire up
+// against the same JobQueue/ResultBus/StatusBus/CommandBus/AttachmentStore.
+// Only valid while Run's returned Handle has not observed shutdown.
+func (h *Handle) Buses() queue.AdapterDeps {
+	return queue.AdapterDeps{
+		Jobs:        h.bundle.Queue,
+		Results:     h.bundle.Results,
+		Status:      h.bundle.Status,
+		Commands:    h.bundle.Commands,
+		Attachments: h.bundle.Attachments,
+	}
+}
+
+// Store returns the in-memory JobStore app uses for lifecycle tracking.
+// Inmem mode passes this to the local worker pool so both sides share it.
+func (h *Handle) Store() queue.JobStore { return h.store }
+
+// Loggers returns the loggers app configured for worker + github components
+// so the cmd layer's inmem assembly reuses the same file handlers.
+func (h *Handle) Loggers() (workerLogger, githubLogger *slog.Logger) {
+	return h.loggers.worker, h.loggers.github
+}
+
+// Wait blocks until the socket-mode loop exits.
+func (h *Handle) Wait() error {
+	return <-h.done
+}
+
+// Run initializes the app runtime (logging, Slack, buses, listeners, HTTP
+// endpoints, socket-mode loop) and returns a Handle immediately. The caller
+// must call Wait to block until shutdown. In inmem mode the caller should
+// also wire a worker pool against Handle.Buses() before calling Wait.
+func Run(cfg *config.Config) (*Handle, error) {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
-	// Re-init logger with configured level.
 	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
 	if err != nil {
-		return fmt.Errorf("failed to init log rotator: %w", err)
+		return nil, fmt.Errorf("failed to init log rotator: %w", err)
 	}
 	rotator.StartCleanup(cfg.Logging.RetentionDays)
 
@@ -63,6 +102,9 @@ func Run(cfg *config.Config) error {
 	appLogger := logging.ComponentLogger(slog.Default(), logging.CompApp)
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
 	slackLogger := logging.ComponentLogger(slog.Default(), logging.CompSlack)
+	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
+	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
+	agentLogger := logging.ComponentLogger(slog.Default(), logging.CompAgent)
 
 	slackClient := slackclient.NewClient(cfg.Slack.BotToken, slackLogger)
 
@@ -71,14 +113,12 @@ func Run(cfg *config.Config) error {
 
 	if cfg.AutoBind {
 		go func() {
-			_, err := repoDiscovery.ListRepos(context.Background())
-			if err != nil {
+			if _, err := repoDiscovery.ListRepos(context.Background()); err != nil {
 				appLogger.Warn("Repo 快取預熱失敗", "phase", "失敗", "error", err)
 			}
 		}()
 	}
 
-	// Load skills via SkillLoader.
 	bakedInDir := "agents/skills"
 	if _, err := os.Stat("/opt/agents/skills"); err == nil {
 		bakedInDir = "/opt/agents/skills"
@@ -86,15 +126,12 @@ func Run(cfg *config.Config) error {
 	skillLogger := logging.ComponentLogger(slog.Default(), logging.CompSkill)
 	skillLoader, err := skill.NewLoader(cfg.SkillsConfig, bakedInDir, skillLogger)
 	if err != nil {
-		return fmt.Errorf("failed to create skill loader: %w", err)
+		return nil, fmt.Errorf("failed to create skill loader: %w", err)
 	}
 	skillLoader.Warmup(context.Background())
 	if cfg.SkillsConfig != "" {
-		stopWatcher, err := skillLoader.StartWatcher(cfg.SkillsConfig)
-		if err != nil {
+		if _, err := skillLoader.StartWatcher(cfg.SkillsConfig); err != nil {
 			appLogger.Warn("Skill 設定監視器啟動失敗", "phase", "失敗", "error", err)
-		} else {
-			defer stopWatcher()
 		}
 	}
 
@@ -121,43 +158,26 @@ func Run(cfg *config.Config) error {
 			TLS:      cfg.Redis.TLS,
 		})
 		if err != nil {
-			return fmt.Errorf("failed to connect to Redis: %w", err)
+			return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 		}
 		bundle = queue.NewRedisBundle(rdb, jobStore, "triage")
 		appLogger.Info("使用 Redis transport", "phase", "處理中", "addr", cfg.Redis.Addr)
 
-		// Write secret key beacon so workers can verify key match at startup.
 		if cfg.SecretKey != "" {
-			sk, err := config.DecodeSecretKey(cfg.SecretKey)
+			sk, err := crypto.DecodeSecretKey(cfg.SecretKey)
 			if err != nil {
-				return fmt.Errorf("invalid secret_key: %w", err)
+				return nil, fmt.Errorf("invalid secret_key: %w", err)
 			}
 			if err := crypto.WriteBeacon(context.Background(), rdb, sk); err != nil {
-				return fmt.Errorf("failed to write secret beacon: %w", err)
+				return nil, fmt.Errorf("failed to write secret beacon: %w", err)
 			}
 			appLogger.Info("Secret beacon 已寫入 Redis", "phase", "完成")
 		}
 	default:
-		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, cfg.Worker.Count, jobStore)
+		bundle = queue.NewInMemBundle(cfg.Queue.Capacity, 0, jobStore)
 		appLogger.Info("使用 in-memory transport", "phase", "處理中")
 	}
 
-	// Collect skill dirs from all agents in provider chain.
-	seen := make(map[string]bool)
-	var skillDirs []string
-	for _, name := range cfg.Providers {
-		if agent, ok := cfg.Agents[name]; ok && agent.SkillDir != "" && !seen[agent.SkillDir] {
-			skillDirs = append(skillDirs, agent.SkillDir)
-			seen[agent.SkillDir] = true
-		}
-	}
-	if len(skillDirs) == 0 && cfg.ActiveAgent != "" {
-		if agent, ok := cfg.Agents[cfg.ActiveAgent]; ok && agent.SkillDir != "" {
-			skillDirs = append(skillDirs, agent.SkillDir)
-		}
-	}
-
-	// Create Coordinator (JobQueue decorator for TaskType routing).
 	coordinator := queue.NewCoordinator(bundle.Queue,
 		queue.WithCoordinatorSubmitHook(func(priority string) {
 			metrics.QueueSubmittedTotal.WithLabelValues(priority).Inc()
@@ -165,39 +185,9 @@ func Run(cfg *config.Config) error {
 	)
 	coordinator.RegisterQueue("triage", bundle.Queue)
 
-	workerLogger := logging.ComponentLogger(slog.Default(), logging.CompWorker)
-	queueLogger := logging.ComponentLogger(slog.Default(), logging.CompQueue)
-
-	// Create and start LocalAdapter (owns pool.Pool lifecycle).
-	// In redis mode, workers are separate pods — skip local agent execution.
-	if cfg.Queue.Transport != "redis" {
-		agentRunner := agentpkg.NewRunnerFromConfig(cfg)
-		localAdapter := pool.NewLocalAdapter(pool.LocalAdapterConfig{
-			Runner:         &pool.AgentRunnerAdapter{Runner: agentRunner},
-			RepoCache:      &pool.RepoCacheAdapter{Cache: repoCache},
-			SkillDirs:      skillDirs,
-			WorkerCount:    cfg.Worker.Count,
-			StatusInterval: cfg.Queue.StatusInterval,
-			Capabilities:   []string{"triage"},
-			Store:          jobStore,
-			Logger:         workerLogger,
-			ExtraRules:     cfg.Worker.Prompt.ExtraRules,
-		})
-		if err := localAdapter.Start(queue.AdapterDeps{
-			Jobs:        bundle.Queue,
-			Results:     bundle.Results,
-			Status:      bundle.Status,
-			Commands:    bundle.Commands,
-			Attachments: bundle.Attachments,
-		}); err != nil {
-			return fmt.Errorf("failed to start local adapter: %w", err)
-		}
-	}
-
 	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, mantisClient, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
-		MaxConcurrent:   cfg.MaxConcurrent,
 		DedupTTL:        5 * time.Minute,
 		PerUserLimit:    cfg.RateLimit.PerUser,
 		PerChannelLimit: cfg.RateLimit.PerChannel,
@@ -209,8 +199,6 @@ func Run(cfg *config.Config) error {
 		},
 	})
 	wf.SetHandler(handler)
-
-	agentLogger := logging.ComponentLogger(slog.Default(), logging.CompAgent)
 
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
@@ -227,7 +215,6 @@ func Run(cfg *config.Config) error {
 
 	resultListener.SetStatusJobClearer(statusListener.ClearJob)
 
-	// Job watchdog — detect stuck jobs and publish failures to ResultBus.
 	watchdog := queue.NewWatchdog(jobStore, bundle.Commands, bundle.Results, queue.WatchdogConfig{
 		JobTimeout:     cfg.Queue.JobTimeout,
 		IdleTimeout:    cfg.Queue.AgentIdleTimeout,
@@ -238,7 +225,7 @@ func Run(cfg *config.Config) error {
 			metrics.WatchdogKillsTotal.WithLabelValues(reason).Inc()
 		}),
 	)
-	go watchdog.Start(make(chan struct{})) // runs until process exits
+	go watchdog.Start(make(chan struct{}))
 
 	metrics.Register(prometheus.DefaultRegisterer, coordinator, jobStore)
 
@@ -257,12 +244,9 @@ func Run(cfg *config.Config) error {
 		}()
 	}
 
-	api := slack.New(cfg.Slack.BotToken,
-		slack.OptionAppLevelToken(cfg.Slack.AppToken),
-	)
+	api := slack.New(cfg.Slack.BotToken, slack.OptionAppLevelToken(cfg.Slack.AppToken))
 	sm := socketmode.New(api)
 
-	// Resolve bot's own user ID for auto-bind filtering.
 	botUserID := ""
 	if authResp, err := api.AuthTest(); err == nil {
 		botUserID = authResp.UserID
@@ -275,138 +259,158 @@ func Run(cfg *config.Config) error {
 
 	go func() {
 		for evt := range sm.Events {
-			switch evt.Type {
-			case socketmode.EventTypeEventsAPI:
-				sm.Ack(*evt.Request)
-				ea, ok := evt.Data.(slackevents.EventsAPIEvent)
-				if !ok {
-					continue
-				}
-				switch inner := ea.InnerEvent.Data.(type) {
-				case *slackevents.AppMentionEvent:
-					handler.HandleTrigger(slackclient.TriggerEvent{
-						ChannelID: inner.Channel,
-						ThreadTS:  inner.ThreadTimeStamp,
-						TriggerTS: inner.TimeStamp,
-						UserID:    inner.User,
-						Text:      inner.Text,
-					})
-				case *slackevents.MemberJoinedChannelEvent:
-					if cfg.AutoBind && inner.User == botUserID {
-						wf.RegisterChannel(inner.Channel)
-					}
-				case *slackevents.MemberLeftChannelEvent:
-					if cfg.AutoBind && inner.User == botUserID {
-						wf.UnregisterChannel(inner.Channel)
-					}
-				}
-
-			case socketmode.EventTypeSlashCommand:
-				sm.Ack(*evt.Request)
-				cmd, ok := evt.Data.(slack.SlashCommand)
-				if !ok || cmd.Command != "/triage" {
-					continue
-				}
-				// Slash commands don't reliably carry thread_ts.
-				// If no thread context, tell user to use @mention instead.
-				if cmd.ChannelID == "" {
-					continue
-				}
-				// Use @bot mention for thread-based triage.
-				// /triage without thread context posts a help message.
-				slackClient.PostMessage(cmd.ChannelID,
-					":point_right: 請在對話串中使用 `@bot` 來觸發 triage，或直接在 thread 中 mention bot。\n`/triage` 指令目前不支援 thread 偵測。", "")
-
-			case socketmode.EventTypeInteractive:
-				cb, ok := evt.Data.(slack.InteractionCallback)
-				if !ok {
-					sm.Ack(*evt.Request)
-					continue
-				}
-
-				// BlockSuggestion must ack WITH options — don't ack early.
-				if cb.Type == slack.InteractionTypeBlockSuggestion {
-					appLogger.Info("收到搜尋建議", "phase", "接收", "action_id", cb.ActionID, "value", cb.Value)
-					if cb.ActionID == "repo_search" {
-						options := wf.HandleRepoSuggestion(cb.Value)
-						appLogger.Info("Repo 搜尋結果", "phase", "處理中", "query", cb.Value, "count", len(options))
-						var opts []*slack.OptionBlockObject
-						for _, r := range options {
-							opts = append(opts, slack.NewOptionBlockObject(r, slack.NewTextBlockObject("plain_text", r, false, false), nil))
-						}
-						sm.Ack(*evt.Request, slack.OptionsResponse{Options: opts})
-					} else {
-						sm.Ack(*evt.Request)
-					}
-					continue
-				}
-
-				sm.Ack(*evt.Request)
-
-				switch cb.Type {
-				case slack.InteractionTypeBlockActions:
-					if len(cb.ActionCallback.BlockActions) == 0 {
-						continue
-					}
-					action := cb.ActionCallback.BlockActions[0]
-					selectorTS := cb.Message.Timestamp
-					appLogger.Info("收到按鈕互動", "phase", "接收", "action_id", action.ActionID, "value", action.Value, "selector_ts", selectorTS)
-
-					switch {
-					case action.ActionID == "repo_search" && action.SelectedOption.Value != "":
-						wf.HandleSelection(cb.Channel.ID, action.ActionID, action.SelectedOption.Value, selectorTS)
-
-					case strings.HasPrefix(action.ActionID, "repo_select"):
-						wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
-
-					case strings.HasPrefix(action.ActionID, "branch_select"):
-						wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
-
-					case strings.HasPrefix(action.ActionID, "description_action"):
-						wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
-
-					case action.ActionID == "back_to_repo":
-						wf.HandleBackToRepo(cb.Channel.ID, selectorTS)
-
-					case action.ActionID == "retry_job":
-						retryHandler.Handle(cb.Channel.ID, action.Value, selectorTS)
-
-					case strings.HasPrefix(action.ActionID, "cancel_job"):
-						jobID := action.Value
-						state, err := jobStore.Get(jobID)
-						if err == nil &&
-							state.Status != queue.JobFailed &&
-							state.Status != queue.JobCompleted &&
-							state.Status != queue.JobCancelled {
-							// Order matters: UpdateStatus BEFORE Send so the worker's classifyResult
-							// observes JobCancelled when ctx cancellation propagates.
-							jobStore.UpdateStatus(jobID, queue.JobCancelled)
-							bundle.Commands.Send(context.Background(), queue.Command{JobID: jobID, Action: "kill"})
-							slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":stop_sign: 正在取消...")
-							handler.ClearThreadDedup(cb.Channel.ID, state.Job.ThreadTS)
-						} else {
-							slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":information_source: 此任務已結束")
-						}
-					}
-
-				case slack.InteractionTypeViewSubmission:
-					meta := cb.View.PrivateMetadata
-					desc := ""
-					if v, ok := cb.View.State.Values["description_block"]["description_input"]; ok {
-						desc = v.Value
-					}
-					wf.HandleDescriptionSubmit(meta, desc)
-
-				case slack.InteractionTypeViewClosed:
-					meta := cb.View.PrivateMetadata
-					wf.HandleDescriptionSubmit(meta, "")
-				}
-			}
+			handleSocketEvent(evt, sm, handler, wf, slackClient, jobStore, bundle, retryHandler, cfg, botUserID, appLogger)
 		}
 	}()
 
-	if err := sm.Run(); err != nil {
-		return fmt.Errorf("socket mode error: %w", err)
+	done := make(chan error, 1)
+	go func() {
+		if err := sm.Run(); err != nil {
+			done <- fmt.Errorf("socket mode error: %w", err)
+			return
+		}
+		done <- nil
+	}()
+
+	h := &Handle{bundle: bundle, store: jobStore, done: done}
+	h.loggers.worker = workerLogger
+	h.loggers.github = githubLogger
+	return h, nil
+}
+
+// handleSocketEvent dispatches a single socketmode event. Extracted to keep
+// Run shorter; behaviour is unchanged from the previous inline switch.
+func handleSocketEvent(
+	evt socketmode.Event,
+	sm *socketmode.Client,
+	handler *slackclient.Handler,
+	wf *bot.Workflow,
+	slackClient *slackclient.Client,
+	jobStore queue.JobStore,
+	bundle *queue.Bundle,
+	retryHandler *bot.RetryHandler,
+	cfg *config.Config,
+	botUserID string,
+	appLogger *slog.Logger,
+) {
+	switch evt.Type {
+	case socketmode.EventTypeEventsAPI:
+		sm.Ack(*evt.Request)
+		ea, ok := evt.Data.(slackevents.EventsAPIEvent)
+		if !ok {
+			return
+		}
+		switch inner := ea.InnerEvent.Data.(type) {
+		case *slackevents.AppMentionEvent:
+			handler.HandleTrigger(slackclient.TriggerEvent{
+				ChannelID: inner.Channel,
+				ThreadTS:  inner.ThreadTimeStamp,
+				TriggerTS: inner.TimeStamp,
+				UserID:    inner.User,
+				Text:      inner.Text,
+			})
+		case *slackevents.MemberJoinedChannelEvent:
+			if cfg.AutoBind && inner.User == botUserID {
+				wf.RegisterChannel(inner.Channel)
+			}
+		case *slackevents.MemberLeftChannelEvent:
+			if cfg.AutoBind && inner.User == botUserID {
+				wf.UnregisterChannel(inner.Channel)
+			}
+		}
+	case socketmode.EventTypeSlashCommand:
+		sm.Ack(*evt.Request)
+		cmd, ok := evt.Data.(slack.SlashCommand)
+		if !ok || cmd.Command != "/triage" {
+			return
+		}
+		if cmd.ChannelID == "" {
+			return
+		}
+		slackClient.PostMessage(cmd.ChannelID,
+			":point_right: 請在對話串中使用 `@bot` 來觸發 triage，或直接在 thread 中 mention bot。\n`/triage` 指令目前不支援 thread 偵測。", "")
+	case socketmode.EventTypeInteractive:
+		cb, ok := evt.Data.(slack.InteractionCallback)
+		if !ok {
+			sm.Ack(*evt.Request)
+			return
+		}
+		if cb.Type == slack.InteractionTypeBlockSuggestion {
+			appLogger.Info("收到搜尋建議", "phase", "接收", "action_id", cb.ActionID, "value", cb.Value)
+			if cb.ActionID == "repo_search" {
+				options := wf.HandleRepoSuggestion(cb.Value)
+				appLogger.Info("Repo 搜尋結果", "phase", "處理中", "query", cb.Value, "count", len(options))
+				var opts []*slack.OptionBlockObject
+				for _, r := range options {
+					opts = append(opts, slack.NewOptionBlockObject(r, slack.NewTextBlockObject("plain_text", r, false, false), nil))
+				}
+				sm.Ack(*evt.Request, slack.OptionsResponse{Options: opts})
+			} else {
+				sm.Ack(*evt.Request)
+			}
+			return
+		}
+		sm.Ack(*evt.Request)
+		handleInteraction(cb, wf, slackClient, handler, jobStore, bundle, retryHandler, appLogger)
 	}
-	return nil
+}
+
+func handleInteraction(
+	cb slack.InteractionCallback,
+	wf *bot.Workflow,
+	slackClient *slackclient.Client,
+	handler *slackclient.Handler,
+	jobStore queue.JobStore,
+	bundle *queue.Bundle,
+	retryHandler *bot.RetryHandler,
+	appLogger *slog.Logger,
+) {
+	switch cb.Type {
+	case slack.InteractionTypeBlockActions:
+		if len(cb.ActionCallback.BlockActions) == 0 {
+			return
+		}
+		action := cb.ActionCallback.BlockActions[0]
+		selectorTS := cb.Message.Timestamp
+		appLogger.Info("收到按鈕互動", "phase", "接收", "action_id", action.ActionID, "value", action.Value, "selector_ts", selectorTS)
+
+		switch {
+		case action.ActionID == "repo_search" && action.SelectedOption.Value != "":
+			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.SelectedOption.Value, selectorTS)
+		case strings.HasPrefix(action.ActionID, "repo_select"):
+			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
+		case strings.HasPrefix(action.ActionID, "branch_select"):
+			wf.HandleSelection(cb.Channel.ID, action.ActionID, action.Value, selectorTS)
+		case strings.HasPrefix(action.ActionID, "description_action"):
+			wf.HandleDescriptionAction(cb.Channel.ID, action.Value, selectorTS, cb.TriggerID)
+		case action.ActionID == "back_to_repo":
+			wf.HandleBackToRepo(cb.Channel.ID, selectorTS)
+		case action.ActionID == "retry_job":
+			retryHandler.Handle(cb.Channel.ID, action.Value, selectorTS)
+		case strings.HasPrefix(action.ActionID, "cancel_job"):
+			jobID := action.Value
+			state, err := jobStore.Get(jobID)
+			if err == nil &&
+				state.Status != queue.JobFailed &&
+				state.Status != queue.JobCompleted &&
+				state.Status != queue.JobCancelled {
+				jobStore.UpdateStatus(jobID, queue.JobCancelled)
+				bundle.Commands.Send(context.Background(), queue.Command{JobID: jobID, Action: "kill"})
+				slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":stop_sign: 正在取消...")
+				handler.ClearThreadDedup(cb.Channel.ID, state.Job.ThreadTS)
+			} else {
+				slackClient.UpdateMessage(cb.Channel.ID, selectorTS, ":information_source: 此任務已結束")
+			}
+		}
+	case slack.InteractionTypeViewSubmission:
+		meta := cb.View.PrivateMetadata
+		desc := ""
+		if v, ok := cb.View.State.Values["description_block"]["description_input"]; ok {
+			desc = v.Value
+		}
+		wf.HandleDescriptionSubmit(meta, desc)
+	case slack.InteractionTypeViewClosed:
+		meta := cb.View.PrivateMetadata
+		wf.HandleDescriptionSubmit(meta, "")
+	}
 }

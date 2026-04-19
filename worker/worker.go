@@ -10,19 +10,18 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/worker/agent"
+	"github.com/Ivantseng123/agentdock/worker/config"
 	"github.com/Ivantseng123/agentdock/worker/pool"
 )
 
 // Run starts the worker process: initializes logging, connects Redis, builds
 // the pool, and waits for SIGTERM/SIGINT. Returns on clean shutdown or error.
 func Run(cfg *config.Config) error {
-	// Preflight runs in PersistentPreRunE. slog initialized AFTER preflight
-	// to keep interactive output clean.
 	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
 
 	rotator, err := logging.NewRotator(cfg.Logging.Dir)
@@ -46,14 +45,12 @@ func Run(cfg *config.Config) error {
 	}
 	appLogger.Info("已連線至 Redis", "phase", "處理中", "addr", cfg.Redis.Addr)
 
-	jobStore := queue.NewMemJobStore() // local ephemeral store for in-flight jobs
-
+	jobStore := queue.NewMemJobStore()
 	bundle := queue.NewRedisBundle(rdb, jobStore, "triage")
 
 	agentRunner := agent.NewRunnerFromConfig(cfg)
 
-	// secret_key is validated and beacon-verified during preflight.
-	secretKey, err := config.DecodeSecretKey(cfg.SecretKey)
+	secretKey, err := crypto.DecodeSecretKey(cfg.SecretKey)
 	if err != nil {
 		return fmt.Errorf("invalid secret_key: %w", err)
 	}
@@ -61,13 +58,11 @@ func Run(cfg *config.Config) error {
 	githubLogger := logging.ComponentLogger(slog.Default(), logging.CompGitHub)
 	repoCache := ghclient.NewRepoCache(cfg.RepoCache.Dir, cfg.RepoCache.MaxAge, cfg.GitHub.Token, githubLogger)
 
-	// Purge stale repos from previous unclean shutdown.
 	repoAdapter := &pool.RepoCacheAdapter{Cache: repoCache}
 	if err := repoAdapter.PurgeStale(); err != nil {
 		appLogger.Warn("啟動時清理舊 repo 快取失敗", "phase", "處理中", "error", err)
 	}
 
-	// Collect skill dirs.
 	var skillDirs []string
 	seen := make(map[string]bool)
 	for _, name := range cfg.Providers {
@@ -90,7 +85,7 @@ func Run(cfg *config.Config) error {
 		Store:          jobStore,
 		Runner:         &pool.AgentRunnerAdapter{Runner: agentRunner},
 		RepoCache:      repoAdapter,
-		WorkerCount:    cfg.Worker.Count,
+		WorkerCount:    cfg.Count,
 		Hostname:       hostname,
 		SkillDirs:      skillDirs,
 		Commands:       bundle.Commands,
@@ -99,14 +94,13 @@ func Run(cfg *config.Config) error {
 		Logger:         workerLogger,
 		SecretKey:      secretKey,
 		WorkerSecrets:  cfg.Secrets,
-		ExtraRules:     cfg.Worker.Prompt.ExtraRules,
+		ExtraRules:     cfg.Prompt.ExtraRules,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	workerPool.Start(ctx)
-	appLogger.Info("Worker 已啟動", "phase", "完成", "workers", cfg.Worker.Count)
+	appLogger.Info("Worker 已啟動", "phase", "完成", "workers", cfg.Count)
 
-	// Wait for SIGTERM/SIGINT.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	sig := <-sigCh

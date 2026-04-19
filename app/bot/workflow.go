@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/app/config"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
@@ -93,7 +93,7 @@ func NewWorkflow(
 	var sk []byte
 	if cfg.SecretKey != "" {
 		var err error
-		sk, err = config.DecodeSecretKey(cfg.SecretKey)
+		sk, err = crypto.DecodeSecretKey(cfg.SecretKey)
 		if err != nil {
 			slog.Error("secret_key 無效，secret 加密功能停用", "phase", "失敗", "error", err)
 		}

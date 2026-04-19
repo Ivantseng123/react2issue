@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,9 +10,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Ivantseng123/agentdock/internal/config"
+	appconfig "github.com/Ivantseng123/agentdock/app/config"
 	"github.com/Ivantseng123/agentdock/shared/configloader"
 	"github.com/Ivantseng123/agentdock/shared/connectivity"
+	"github.com/Ivantseng123/agentdock/shared/prompt"
 	workerconfig "github.com/Ivantseng123/agentdock/worker/config"
 
 	"github.com/spf13/cobra"
@@ -27,92 +30,118 @@ var (
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Generate a starter config file",
-	Long:  "Writes a starter config to the path specified by --config (default ~/.config/agentdock/config.yaml).",
+	Long: `Initialize agentdock configuration. Use 'init app' for the app config
+or 'init worker' for the worker config. Running 'agentdock init' on its own
+prints this help.`,
+}
+
+var initAppCmd = &cobra.Command{
+	Use:   "app",
+	Short: "Generate a starter app config file",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path, err := resolveConfigPath(initConfigPath)
+		path, err := resolveAppConfigPath(initConfigPath)
 		if err != nil {
 			return err
 		}
-		return runInit(path, initInteractive, initForce)
+		return runInitApp(path, initInteractive, initForce)
+	},
+}
+
+var initWorkerCmd = &cobra.Command{
+	Use:   "worker",
+	Short: "Generate a starter worker config file",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		path, err := resolveWorkerConfigPath(initConfigPath)
+		if err != nil {
+			return err
+		}
+		return runInitWorker(path, initInteractive, initForce)
 	},
 }
 
 func init() {
-	initCmd.Flags().StringVarP(&initConfigPath, "config", "c", "", "path for new config file (default ~/.config/agentdock/config.yaml)")
-	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite if file exists")
-	initCmd.Flags().BoolVarP(&initInteractive, "interactive", "i", false, "prompt for required values")
+	for _, c := range []*cobra.Command{initAppCmd, initWorkerCmd} {
+		c.Flags().StringVarP(&initConfigPath, "config", "c", "", "path for the new config file")
+		c.Flags().BoolVar(&initForce, "force", false, "overwrite if file exists")
+		c.Flags().BoolVarP(&initInteractive, "interactive", "i", false, "prompt for required values")
+	}
+	initCmd.AddCommand(initAppCmd, initWorkerCmd)
 	rootCmd.AddCommand(initCmd)
 }
 
-// runInit creates the starter config file at path. Format chosen by extension
-// (.yaml/.yml → YAML w/ comments; .json → JSON; otherwise → YAML).
-// If interactive, runs prompts for required secrets first.
-func runInit(path string, interactive, force bool) error {
+// runInitApp writes a starter app.yaml. When interactive, prompts for Slack /
+// GitHub / Redis / secret_key values and validates each via shared/connectivity.
+func runInitApp(path string, interactive, force bool) error {
 	if interactive && !term.IsTerminal(int(syscall.Stdin)) {
 		return fmt.Errorf("--interactive requires a terminal (stdin is not a TTY)")
 	}
 	if _, err := os.Stat(path); err == nil && !force {
 		return fmt.Errorf("config already exists at %s; pass --force to overwrite", path)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	var cfg config.Config
-	data, _ := yaml.Marshal(config.DefaultsMap())
-	yaml.Unmarshal(data, &cfg)
-	cfg.Agents = map[string]config.AgentConfig{}
-	for k, v := range workerconfig.BuiltinAgents {
-		cfg.Agents[k] = v
-	}
+	var cfg appconfig.Config
+	data, _ := yaml.Marshal(appconfig.DefaultsMap())
+	_ = yaml.Unmarshal(data, &cfg)
 
-	prompted := map[string]any{}
 	if interactive {
-		if err := initPromptAll(&cfg, prompted); err != nil {
+		if err := promptAppInit(&cfg); err != nil {
 			return err
 		}
 	}
 
-	var out []byte
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".json":
-		b, err := json.MarshalIndent(&cfg, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshal json: %w", err)
-		}
-		out = b
-	default:
-		b, err := marshalYAMLWithComments(&cfg)
-		if err != nil {
-			return fmt.Errorf("marshal yaml: %w", err)
-		}
-		out = b
+	out, err := marshalAppYAML(&cfg, path)
+	if err != nil {
+		return err
+	}
+	return configloader.AtomicWrite(path, out, 0o600)
+}
+
+// runInitWorker writes a starter worker.yaml with built-in agents pre-populated.
+func runInitWorker(path string, interactive, force bool) error {
+	if interactive && !term.IsTerminal(int(syscall.Stdin)) {
+		return fmt.Errorf("--interactive requires a terminal (stdin is not a TTY)")
+	}
+	if _, err := os.Stat(path); err == nil && !force {
+		return fmt.Errorf("config already exists at %s; pass --force to overwrite", path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	return atomicWrite(path, out, 0600)
+	var cfg workerconfig.Config
+	data, _ := yaml.Marshal(workerconfig.DefaultsMap())
+	_ = yaml.Unmarshal(data, &cfg)
+	cfg.Agents = map[string]workerconfig.AgentConfig{}
+	for k, v := range workerconfig.BuiltinAgents {
+		cfg.Agents[k] = v
+	}
+
+	if interactive {
+		if err := promptWorkerInit(&cfg); err != nil {
+			return err
+		}
+	}
+
+	out, err := marshalWorkerYAML(&cfg, path)
+	if err != nil {
+		return err
+	}
+	return configloader.AtomicWrite(path, out, 0o600)
 }
 
-// atomicWrite is retained as a thin wrapper so existing tests keep their
-// short name. Pure logic lives in shared/configloader.AtomicWrite.
-func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	return configloader.AtomicWrite(path, data, mode)
-}
-
-// marshalYAMLWithComments serializes cfg to YAML and inserts # REQUIRED markers
-// for slack/github/redis blocks if their key fields are empty.
-func marshalYAMLWithComments(cfg *config.Config) ([]byte, error) {
+func marshalAppYAML(cfg *appconfig.Config, path string) ([]byte, error) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json":
+		return json.MarshalIndent(cfg, "", "  ")
+	}
 	raw, err := yaml.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
 	text := string(raw)
-
-	insertBefore := func(s, anchor, comment string) string {
-		if strings.Contains(s, anchor) {
-			return strings.Replace(s, anchor, comment+"\n"+anchor, 1)
-		}
-		return s
-	}
 	if cfg.Slack.BotToken == "" {
 		text = insertBefore(text, "slack:", "# REQUIRED for `agentdock app`: Slack bot+app tokens")
 	}
@@ -120,131 +149,203 @@ func marshalYAMLWithComments(cfg *config.Config) ([]byte, error) {
 		text = insertBefore(text, "github:", "# REQUIRED for both subcommands: GitHub token")
 	}
 	if cfg.Redis.Addr == "" {
-		text = insertBefore(text, "redis:", "# REQUIRED for both subcommands: Redis address")
+		text = insertBefore(text, "redis:", "# REQUIRED when queue.transport=redis: Redis address")
 	}
-	text = "# Generated by `agentdock init`. See agentdock --help for flag overrides.\n" + text
+	text = "# Generated by `agentdock init app`. See agentdock app --help for flag overrides.\n" + text
 	return []byte(text), nil
 }
 
-// initPromptAll runs the 5 prompts (Slack bot, Slack app, GitHub, Redis, Providers).
-func initPromptAll(cfg *config.Config, prompted map[string]any) error {
-	fmt.Fprintln(stderr)
+func marshalWorkerYAML(cfg *workerconfig.Config, path string) ([]byte, error) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json":
+		return json.MarshalIndent(cfg, "", "  ")
+	}
+	raw, err := yaml.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	text := string(raw)
+	if cfg.GitHub.Token == "" {
+		text = insertBefore(text, "github:", "# REQUIRED: GitHub token")
+	}
+	if cfg.Redis.Addr == "" {
+		text = insertBefore(text, "redis:", "# REQUIRED when queue.transport=redis: Redis address")
+	}
+	if cfg.SecretKey == "" {
+		text = insertBefore(text, "secret_key:", "# REQUIRED: copy the secret_key value from the app config")
+	}
+	if len(cfg.Providers) == 0 {
+		text = insertBefore(text, "providers:", "# REQUIRED: list of agent names to try, in order")
+	}
+	text = "# Generated by `agentdock init worker`. See agentdock worker --help for flag overrides.\n" + text
+	return []byte(text), nil
+}
 
-	// Slack bot token
-	fmt.Fprintln(stderr, "  Slack bot token (xoxb-...):")
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		token := promptHidden("Token: ")
-		if token == "" {
-			printFail("Slack bot token is required")
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for Slack bot token")
-			}
+func insertBefore(s, anchor, comment string) string {
+	if strings.Contains(s, anchor) {
+		return strings.Replace(s, anchor, comment+"\n"+anchor, 1)
+	}
+	return s
+}
+
+func promptAppInit(cfg *appconfig.Config) error {
+	fmt.Fprintln(prompt.Stderr)
+
+	fmt.Fprintln(prompt.Stderr, "  Slack bot token (xoxb-...):")
+	for attempt := 1; attempt <= 3; attempt++ {
+		tok := prompt.Hidden("Token: ")
+		if tok == "" {
+			prompt.Fail("Slack bot token is required")
 			continue
 		}
-		userID, err := connectivity.CheckSlackToken(token)
+		userID, err := connectivity.CheckSlackToken(tok)
 		if err != nil {
-			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for Slack bot token")
-			}
+			prompt.Fail("%v (attempt %d/3)", err, attempt)
 			continue
 		}
-		cfg.Slack.BotToken = token
-		prompted["slack.bot_token"] = token
-		printOK("Slack bot token valid (user_id: %s)", userID)
+		cfg.Slack.BotToken = tok
+		prompt.OK("Slack bot token valid (user_id: %s)", userID)
 		break
 	}
 
-	// Slack app token
-	fmt.Fprintln(stderr)
-	fmt.Fprintln(stderr, "  Slack app-level token (xapp-...):")
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		token := promptHidden("Token: ")
-		if token == "" || !strings.HasPrefix(token, "xapp-") {
-			printFail("must start with xapp- (attempt %d/%d)", attempt, maxRetries)
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for Slack app token")
-			}
+	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  Slack app-level token (xapp-...):")
+	for attempt := 1; attempt <= 3; attempt++ {
+		tok := prompt.Hidden("Token: ")
+		if !strings.HasPrefix(tok, "xapp-") {
+			prompt.Fail("must start with xapp- (attempt %d/3)", attempt)
 			continue
 		}
-		cfg.Slack.AppToken = token
-		prompted["slack.app_token"] = token
-		printOK("Slack app token format OK")
+		cfg.Slack.AppToken = tok
+		prompt.OK("Slack app token format OK")
 		break
 	}
 
-	// GitHub token
-	fmt.Fprintln(stderr)
-	fmt.Fprintln(stderr, "  GitHub token (ghp_... or github_pat_...):")
-	fmt.Fprintln(stderr, "  Generate at: https://github.com/settings/tokens")
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		token := promptHidden("Token: ")
-		if token == "" {
-			printFail("GitHub token is required")
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for GitHub token")
-			}
+	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  GitHub token (ghp_... or github_pat_...):")
+	for attempt := 1; attempt <= 3; attempt++ {
+		tok := prompt.Hidden("Token: ")
+		if tok == "" {
+			prompt.Fail("GitHub token is required")
 			continue
 		}
-		username, err := connectivity.CheckGitHubToken(token)
+		username, err := connectivity.CheckGitHubToken(tok)
 		if err != nil {
-			printFail("%v (attempt %d/%d)", err, attempt, maxRetries)
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for GitHub token")
-			}
+			prompt.Fail("%v (attempt %d/3)", err, attempt)
 			continue
 		}
-		cfg.GitHub.Token = token
-		prompted["github.token"] = token
-		printOK("GitHub token valid (user: %s)", username)
+		cfg.GitHub.Token = tok
+		prompt.OK("Token valid (user: %s)", username)
 		break
 	}
 
-	// Redis address
-	fmt.Fprintln(stderr)
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		addr := promptLine("Redis address: ")
+	fmt.Fprintln(prompt.Stderr)
+	for attempt := 1; attempt <= 3; attempt++ {
+		addr := prompt.Line("Redis address (leave blank for inmem): ")
 		if addr == "" {
-			printFail("Redis address is required")
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for Redis address")
-			}
-			continue
+			prompt.OK("Skipping Redis (inmem mode)")
+			break
 		}
 		if err := connectivity.CheckRedis(addr, "", 0, false); err != nil {
-			printFail("Redis connect failed: %v (attempt %d/%d)", err, attempt, maxRetries)
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for Redis")
-			}
+			prompt.Fail("Redis connect failed: %v (attempt %d/3)", err, attempt)
 			continue
 		}
 		cfg.Redis.Addr = addr
-		prompted["redis.addr"] = addr
-		printOK("Redis connected")
+		cfg.Queue.Transport = "redis"
+		prompt.OK("Redis connected")
 		break
 	}
 
-	// Providers
-	fmt.Fprintln(stderr)
-	agents := sortedAgentNames(cfg)
-	fmt.Fprintln(stderr, "  Available providers:")
-	for i, name := range agents {
-		fmt.Fprintf(stderr, "    %d) %s\n", i+1, name)
-	}
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		input := promptLine("Select (comma-separated, e.g. 1,2): ")
-		selected := parseSelection(input, agents)
-		if len(selected) == 0 {
-			printFail("At least one provider is required (attempt %d/%d)", attempt, maxRetries)
-			if attempt == maxRetries {
-				return fmt.Errorf("max retries exceeded for providers")
+	if cfg.Queue.Transport == "redis" {
+		fmt.Fprintln(prompt.Stderr)
+		fmt.Fprintln(prompt.Stderr, "  Secret key (AES-256, 64 hex chars):")
+		if prompt.YesNo("  Auto-generate a key?") {
+			key := make([]byte, 32)
+			if _, err := rand.Read(key); err != nil {
+				return fmt.Errorf("generate key: %w", err)
 			}
+			cfg.SecretKey = hex.EncodeToString(key)
+			prompt.OK("Secret key generated — copy this into worker.yaml:\n  %s", cfg.SecretKey)
+		}
+	}
+	return nil
+}
+
+func promptWorkerInit(cfg *workerconfig.Config) error {
+	fmt.Fprintln(prompt.Stderr)
+
+	fmt.Fprintln(prompt.Stderr, "  GitHub token (ghp_... or github_pat_...):")
+	for attempt := 1; attempt <= 3; attempt++ {
+		tok := prompt.Hidden("Token: ")
+		if tok == "" {
+			prompt.Fail("GitHub token is required")
+			continue
+		}
+		username, err := connectivity.CheckGitHubToken(tok)
+		if err != nil {
+			prompt.Fail("%v (attempt %d/3)", err, attempt)
+			continue
+		}
+		cfg.GitHub.Token = tok
+		prompt.OK("Token valid (user: %s)", username)
+		break
+	}
+
+	fmt.Fprintln(prompt.Stderr)
+	for attempt := 1; attempt <= 3; attempt++ {
+		addr := prompt.Line("Redis address: ")
+		if addr == "" {
+			prompt.Fail("Redis address is required")
+			continue
+		}
+		if err := connectivity.CheckRedis(addr, "", 0, false); err != nil {
+			prompt.Fail("Redis connect failed: %v (attempt %d/3)", err, attempt)
+			continue
+		}
+		cfg.Redis.Addr = addr
+		cfg.Queue.Transport = "redis"
+		prompt.OK("Redis connected")
+		break
+	}
+
+	fmt.Fprintln(prompt.Stderr)
+	fmt.Fprintln(prompt.Stderr, "  Secret key (paste from app config — must match):")
+	for attempt := 1; attempt <= 3; attempt++ {
+		key := prompt.Hidden("Secret key: ")
+		if _, err := hex.DecodeString(key); err != nil || len(key) != 64 {
+			prompt.Fail("must be 64 hex chars (attempt %d/3)", attempt)
+			continue
+		}
+		cfg.SecretKey = key
+		prompt.OK("Secret key accepted")
+		break
+	}
+
+	fmt.Fprintln(prompt.Stderr)
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	fmt.Fprintln(prompt.Stderr, "  Available providers:")
+	for i, name := range names {
+		fmt.Fprintf(prompt.Stderr, "    %d) %s\n", i+1, name)
+	}
+	for attempt := 1; attempt <= 3; attempt++ {
+		input := prompt.Line("Select (comma-separated, e.g. 1,2): ")
+		var selected []string
+		for _, part := range strings.Split(input, ",") {
+			part = strings.TrimSpace(part)
+			idx := 0
+			if _, err := fmt.Sscanf(part, "%d", &idx); err == nil && idx >= 1 && idx <= len(names) {
+				selected = append(selected, names[idx-1])
+			}
+		}
+		if len(selected) == 0 {
+			prompt.Fail("At least one provider is required (attempt %d/3)", attempt)
 			continue
 		}
 		cfg.Providers = selected
-		prompted["providers"] = selected
 		break
 	}
-
 	return nil
 }

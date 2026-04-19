@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/config"
+	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
 func TestRunner_Success(t *testing.T) {

@@ -2,18 +2,14 @@ module github.com/Ivantseng123/agentdock/app
 
 go 1.25.0
 
-// worker replace is temporary — Phase 4 Task 34 moves inmem LocalAdapter
-// assembly into cmd/agentdock so app no longer imports worker/.
 replace (
 	github.com/Ivantseng123/agentdock => ../
 	github.com/Ivantseng123/agentdock/shared => ../shared
-	github.com/Ivantseng123/agentdock/worker => ../worker
 )
 
 require (
-	github.com/Ivantseng123/agentdock v0.0.0
+	github.com/Ivantseng123/agentdock v0.0.0-00010101000000-000000000000
 	github.com/Ivantseng123/agentdock/shared v0.0.0
-	github.com/Ivantseng123/agentdock/worker v0.0.0-00010101000000-000000000000
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/knadh/koanf/providers/confmap v1.0.0
 	github.com/knadh/koanf/providers/file v1.2.1

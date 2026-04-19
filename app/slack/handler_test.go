@@ -86,8 +86,7 @@ func TestHandler_DedupBlocksDuplicate(t *testing.T) {
 	var count int
 	var mu sync.Mutex
 	h := NewHandler(HandlerConfig{
-		MaxConcurrent: 5,
-		DedupTTL:      time.Minute,
+		DedupTTL: time.Minute,
 		OnEvent: func(e TriggerEvent) {
 			mu.Lock()
 			count++
@@ -111,12 +110,11 @@ func TestHandler_DedupBlocksDuplicate(t *testing.T) {
 func TestHandler_RateLimitBlocksExcess(t *testing.T) {
 	rejected := false
 	h := NewHandler(HandlerConfig{
-		MaxConcurrent: 5,
-		DedupTTL:      time.Minute,
-		PerUserLimit:  1,
-		RateWindow:    time.Minute,
-		OnEvent:       func(e TriggerEvent) {},
-		OnRejected:    func(e TriggerEvent, reason string) { rejected = true },
+		DedupTTL:     time.Minute,
+		PerUserLimit: 1,
+		RateWindow:   time.Minute,
+		OnEvent:      func(e TriggerEvent) {},
+		OnRejected:   func(e TriggerEvent, reason string) { rejected = true },
 	})
 
 	h.HandleTrigger(TriggerEvent{ChannelID: "C1", ThreadTS: "T1", UserID: "U1", TriggerTS: "T1.1"})

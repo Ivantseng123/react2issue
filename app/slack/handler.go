@@ -18,7 +18,6 @@ type TriggerEvent struct {
 }
 
 type HandlerConfig struct {
-	MaxConcurrent   int
 	DedupTTL        time.Duration
 	PerUserLimit    int
 	PerChannelLimit int
