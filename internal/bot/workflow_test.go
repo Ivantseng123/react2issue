@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
 )
 

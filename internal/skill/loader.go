@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 	"golang.org/x/sync/singleflight"
 )
 

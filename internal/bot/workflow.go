@@ -15,7 +15,7 @@ import (
 	ghclient "github.com/Ivantseng123/agentdock/internal/github"
 	"github.com/Ivantseng123/agentdock/internal/logging"
 	"github.com/Ivantseng123/agentdock/internal/mantis"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 	slackclient "github.com/Ivantseng123/agentdock/internal/slack"
 )
 

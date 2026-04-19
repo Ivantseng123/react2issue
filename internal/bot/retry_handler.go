@@ -7,7 +7,7 @@ import (
 
 	"github.com/Ivantseng123/agentdock/internal/logging"
 	"github.com/Ivantseng123/agentdock/internal/metrics"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // JobSubmitter abstracts queue submission for testing.

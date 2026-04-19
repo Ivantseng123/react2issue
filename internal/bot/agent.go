@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // RunOptions provides per-call callbacks for agent execution.

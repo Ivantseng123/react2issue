@@ -12,7 +12,7 @@ import (
 
 	"github.com/Ivantseng123/agentdock/internal/bot"
 	"github.com/Ivantseng123/agentdock/internal/crypto"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // Runner abstracts agent execution (for testing).

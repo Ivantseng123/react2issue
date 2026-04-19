@@ -1,4 +1,4 @@
-package queue_test
+package integration_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/internal/worker"
 	"github.com/redis/go-redis/v9"
 )

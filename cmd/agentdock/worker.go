@@ -12,7 +12,7 @@ import (
 	"github.com/Ivantseng123/agentdock/internal/config"
 	ghclient "github.com/Ivantseng123/agentdock/internal/github"
 	"github.com/Ivantseng123/agentdock/internal/logging"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/internal/worker"
 
 	"github.com/spf13/cobra"

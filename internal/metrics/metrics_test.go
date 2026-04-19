@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 
 	"github.com/prometheus/client_golang/prometheus"
 )

@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/Ivantseng123/agentdock/internal/config"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 func TestAssemblePromptContext_PassesConfigThrough(t *testing.T) {

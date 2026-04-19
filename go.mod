@@ -3,7 +3,7 @@ module github.com/Ivantseng123/agentdock
 go 1.25.0
 
 require (
-	github.com/Ivantseng123/agentdock/shared v0.0.0
+	github.com/Ivantseng123/agentdock/shared v0.0.0-00010101000000-000000000000
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/go-github/v60 v60.0.0
 	github.com/knadh/koanf/parsers/json v1.0.0

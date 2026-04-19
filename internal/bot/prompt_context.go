@@ -2,7 +2,7 @@ package bot
 
 import (
 	"github.com/Ivantseng123/agentdock/internal/config"
-	"github.com/Ivantseng123/agentdock/internal/queue"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // AssemblePromptContext packages Slack-thread inputs and app-side config
