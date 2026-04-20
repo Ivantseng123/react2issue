@@ -18,6 +18,7 @@ type Config struct {
 	Runner         Runner
 	RepoCache      RepoProvider
 	WorkerCount    int
+	Nicknames      []string
 	Hostname       string
 	SkillDirs      []string
 	Commands       queue.CommandBus
@@ -143,6 +144,7 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 	status := &statusAccumulator{
 		jobID:    job.ID,
 		workerID: wID,
+		nickname: p.nicknameForIndex(workerIndex),
 		alive:    true,
 	}
 
@@ -240,6 +242,7 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 		info := queue.WorkerInfo{
 			WorkerID:    fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i),
 			Name:        p.cfg.Hostname,
+			Nickname:    p.nicknameForIndex(i),
 			ConnectedAt: now,
 		}
 		if err := p.cfg.Queue.Register(ctx, info); err != nil {
@@ -257,6 +260,7 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 				info := queue.WorkerInfo{
 					WorkerID:    fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i),
 					Name:        p.cfg.Hostname,
+					Nickname:    p.nicknameForIndex(i),
 					ConnectedAt: now,
 				}
 				p.cfg.Queue.Register(ctx, info)
@@ -308,4 +312,13 @@ func (p *Pool) publishStatus(ctx context.Context, jobID string, status *statusAc
 		}
 	}
 	p.cfg.Status.Report(ctx, report)
+}
+
+// nicknameForIndex returns p.cfg.Nicknames[i] if it's in range, or "" otherwise.
+// Tolerant of nil / short slices so tests that don't pre-fill nicknames still work.
+func (p *Pool) nicknameForIndex(i int) string {
+	if i < 0 || i >= len(p.cfg.Nicknames) {
+		return ""
+	}
+	return p.cfg.Nicknames[i]
 }
