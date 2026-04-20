@@ -398,3 +398,24 @@ func TestApplyJobStatus_SkipsWhenStateMissing(t *testing.T) {
 		t.Error("no entry should have been created")
 	}
 }
+
+func TestSlackEscape(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"plain", "小明", "小明"},
+		{"lt only", "<heart>", "&lt;heart&gt;"},
+		{"amp only", "A & B", "A &amp; B"},
+		{"user mention neutralised", "<@U12345>", "&lt;@U12345&gt;"},
+		{"channel broadcast neutralised", "<!channel>", "&lt;!channel&gt;"},
+		{"amp before lt — no double-escape", "&<", "&amp;&lt;"},
+		{"already-encoded stays idempotent-ish",
+			"&amp;", "&amp;amp;"}, // we DO double-escape existing entities — that's correct for user input
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		if got := slackEscape(c.in); got != c.want {
+			t.Errorf("%s: slackEscape(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}

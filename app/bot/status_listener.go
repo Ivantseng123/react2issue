@@ -189,6 +189,18 @@ func isTerminal(s queue.JobStatus) bool {
 	return s == queue.JobCompleted || s == queue.JobFailed || s == queue.JobCancelled
 }
 
+// slackEscape escapes the three characters Slack mrkdwn treats as legacy XML
+// entities (<@U...>, <https://...>, etc.). Order matters: '&' runs first so
+// the later '<' and '>' replacements don't get their ampersands double-escaped.
+// Not using html.EscapeString because it also escapes ' and " into numeric
+// entities that Slack mrkdwn does not reliably decode.
+func slackEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
+}
+
 func renderStatusMessage(state *queue.JobState, r queue.StatusReport, phase string) string {
 	worker := shortWorker(r.WorkerID)
 	switch phase {
