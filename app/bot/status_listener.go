@@ -212,23 +212,26 @@ func slackEscape(s string) string {
 }
 
 func renderStatusMessage(state *queue.JobState, r queue.StatusReport, phase string) string {
-	worker := shortWorker(r.WorkerID)
+	label := slackEscape(formatWorkerLabel(r.WorkerID, r.WorkerNickname))
+
+	agent := r.AgentCmd
+	if agent == "" {
+		agent = "agent"
+	}
+	agent = slackEscape(agent)
+
 	switch phase {
 	case "preparing":
-		return fmt.Sprintf(":gear: 準備中 · %s", worker)
+		return fmt.Sprintf(":toolbox: %s 正在暖機...", label)
 	case "running":
 		var suffix string
 		if !state.StartedAt.IsZero() {
-			suffix = fmt.Sprintf(" · 已執行 %s", formatElapsed(time.Since(state.StartedAt)))
+			suffix = fmt.Sprintf(" · 奮鬥 %s", formatElapsed(time.Since(state.StartedAt)))
 		}
-		agent := r.AgentCmd
-		if agent == "" {
-			agent = "agent"
-		}
-		base := fmt.Sprintf(":hourglass_flowing_sand: 處理中 · %s (%s)%s",
-			worker, agent, suffix)
+		base := fmt.Sprintf(":fire: %s 開工啦！(%s)%s", label, agent, suffix)
 		if r.ToolCalls > 0 || r.FilesRead > 0 {
-			base += fmt.Sprintf("\n工具呼叫 %d 次 · 讀檔 %d 份", r.ToolCalls, r.FilesRead)
+			base += fmt.Sprintf("\n%s 已經敲了 %d 次工具、翻了 %d 份檔",
+				label, r.ToolCalls, r.FilesRead)
 		}
 		return base
 	}
