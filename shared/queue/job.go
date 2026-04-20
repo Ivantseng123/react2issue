@@ -116,6 +116,7 @@ type JobState struct {
 type WorkerInfo struct {
 	WorkerID    string   `json:"worker_id"`
 	Name        string   `json:"name"`
+	Nickname    string   `json:"nickname,omitempty"`
 	Agents      []string `json:"agents"`
 	Tags        []string `json:"tags"`
 	ConnectedAt time.Time

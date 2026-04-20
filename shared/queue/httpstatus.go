@@ -40,6 +40,7 @@ type jobStatusEntry struct {
 type workerEntry struct {
 	WorkerID    string   `json:"worker_id"`
 	Name        string   `json:"name"`
+	Nickname    string   `json:"nickname,omitempty"`
 	Agents      []string `json:"agents,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	ConnectedAt string   `json:"connected_at"`
@@ -126,6 +127,7 @@ func StatusHandler(store JobStore, queue JobQueue) http.HandlerFunc {
 				we := workerEntry{
 					WorkerID:    wi.WorkerID,
 					Name:        wi.Name,
+					Nickname:    wi.Nickname,
 					Agents:      wi.Agents,
 					Tags:        wi.Tags,
 					ConnectedAt: wi.ConnectedAt.Format(time.RFC3339),

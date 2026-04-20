@@ -66,7 +66,17 @@ func TestRenderStatusMessage_Preparing(t *testing.T) {
 	state := &queue.JobState{Status: queue.JobPreparing}
 	r := queue.StatusReport{WorkerID: "host/worker-0", PID: 0}
 	got := renderStatusMessage(state, r, "preparing")
-	want := ":gear: 準備中 · worker-0"
+	want := ":toolbox: worker-0 正在暖機..."
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestRenderStatusMessage_PreparingWithNickname(t *testing.T) {
+	state := &queue.JobState{Status: queue.JobPreparing}
+	r := queue.StatusReport{WorkerID: "host/worker-0", WorkerNickname: "小明", PID: 0}
+	got := renderStatusMessage(state, r, "preparing")
+	want := ":toolbox: 小明 正在暖機..."
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -82,9 +92,10 @@ func TestRenderStatusMessage_RunningNoStats(t *testing.T) {
 	}
 	got := renderStatusMessage(state, r, "running")
 	// Allow ±1s drift on elapsed since test clock races.
-	if !(got == ":hourglass_flowing_sand: 處理中 · worker-0 (codex) · 已執行 2m15s" ||
-		got == ":hourglass_flowing_sand: 處理中 · worker-0 (codex) · 已執行 2m14s" ||
-		got == ":hourglass_flowing_sand: 處理中 · worker-0 (codex) · 已執行 2m16s") {
+	want14 := ":fire: worker-0 開工啦！(codex) · 奮鬥 2m14s"
+	want15 := ":fire: worker-0 開工啦！(codex) · 奮鬥 2m15s"
+	want16 := ":fire: worker-0 開工啦！(codex) · 奮鬥 2m16s"
+	if got != want14 && got != want15 && got != want16 {
 		t.Errorf("unexpected output: %q", got)
 	}
 }
@@ -92,14 +103,15 @@ func TestRenderStatusMessage_RunningNoStats(t *testing.T) {
 func TestRenderStatusMessage_RunningWithStats(t *testing.T) {
 	state := &queue.JobState{Status: queue.JobRunning, StartedAt: time.Now()}
 	r := queue.StatusReport{
-		WorkerID:  "host/worker-0",
-		PID:       1234,
-		AgentCmd:  "claude",
-		ToolCalls: 15,
-		FilesRead: 8,
+		WorkerID:       "host/worker-0",
+		WorkerNickname: "小明",
+		PID:            1234,
+		AgentCmd:       "claude",
+		ToolCalls:      15,
+		FilesRead:      8,
 	}
 	got := renderStatusMessage(state, r, "running")
-	if !containsBoth(got, "處理中 · worker-0 (claude)", "工具呼叫 15 次 · 讀檔 8 份") {
+	if !containsBoth(got, ":fire: 小明 開工啦！(claude)", "小明 已經敲了 15 次工具、翻了 8 份檔") {
 		t.Errorf("missing expected substrings: %q", got)
 	}
 }
@@ -108,7 +120,7 @@ func TestRenderStatusMessage_RunningElapsedZeroWhenStartedAtUnset(t *testing.T) 
 	state := &queue.JobState{Status: queue.JobRunning} // StartedAt zero
 	r := queue.StatusReport{WorkerID: "host/worker-0", PID: 1234, AgentCmd: "claude"}
 	got := renderStatusMessage(state, r, "running")
-	if got != ":hourglass_flowing_sand: 處理中 · worker-0 (claude)" {
+	if got != ":fire: worker-0 開工啦！(claude)" {
 		t.Errorf("should omit elapsed when StartedAt is zero: %q", got)
 	}
 }
@@ -117,8 +129,29 @@ func TestRenderStatusMessage_RunningEmptyAgentCmd(t *testing.T) {
 	state := &queue.JobState{Status: queue.JobRunning, StartedAt: time.Now()}
 	r := queue.StatusReport{WorkerID: "host/worker-0", PID: 1234, AgentCmd: ""}
 	got := renderStatusMessage(state, r, "running")
-	if !contains(got, "處理中 · worker-0 (agent)") {
+	if !contains(got, ":fire: worker-0 開工啦！(agent)") {
 		t.Errorf("should fall back to 'agent' placeholder: %q", got)
+	}
+}
+
+func TestRenderStatusMessage_EscapesNickname(t *testing.T) {
+	state := &queue.JobState{Status: queue.JobPreparing}
+	r := queue.StatusReport{WorkerID: "host/worker-0", WorkerNickname: "<@U123>"}
+	got := renderStatusMessage(state, r, "preparing")
+	if !contains(got, "&lt;@U123&gt;") {
+		t.Errorf("nickname should be escaped: %q", got)
+	}
+	if contains(got, "<@U123>") {
+		t.Errorf("raw mention syntax leaked: %q", got)
+	}
+}
+
+func TestRenderStatusMessage_EscapesAgentCmd(t *testing.T) {
+	state := &queue.JobState{Status: queue.JobRunning, StartedAt: time.Now()}
+	r := queue.StatusReport{WorkerID: "host/worker-0", PID: 1234, AgentCmd: "foo&bar"}
+	got := renderStatusMessage(state, r, "running")
+	if !contains(got, "(foo&amp;bar)") {
+		t.Errorf("agent_cmd should be escaped: %q", got)
 	}
 }
 
@@ -188,7 +221,7 @@ func TestMaybeUpdateSlack_PreparingPhase(t *testing.T) {
 	if c.ActionID != "cancel_job" || c.ButtonText != "取消" || c.Value != "j1" {
 		t.Errorf("wrong button: %+v", c)
 	}
-	if !contains(c.Text, "準備中") || !contains(c.Text, "worker-0") {
+	if !contains(c.Text, "正在暖機") || !contains(c.Text, "worker-0") {
 		t.Errorf("text missing expected markers: %q", c.Text)
 	}
 }
@@ -209,7 +242,7 @@ func TestMaybeUpdateSlack_RunningWithToolCalls(t *testing.T) {
 	if len(slack.calls) != 1 {
 		t.Fatalf("expected 1 Slack call")
 	}
-	if !containsBoth(slack.calls[0].Text, "處理中 · worker-0 (claude)", "工具呼叫 15 次") {
+	if !containsBoth(slack.calls[0].Text, ":fire: worker-0 開工啦！(claude)", "已經敲了 15 次工具") {
 		t.Errorf("missing expected substrings: %q", slack.calls[0].Text)
 	}
 }
@@ -229,7 +262,7 @@ func TestMaybeUpdateSlack_RunningNoToolCalls(t *testing.T) {
 	if len(slack.calls) != 1 {
 		t.Fatalf("expected 1 Slack call")
 	}
-	if contains(slack.calls[0].Text, "工具呼叫") {
+	if contains(slack.calls[0].Text, "已經敲了") {
 		t.Errorf("should NOT include tool-call line for codex: %q", slack.calls[0].Text)
 	}
 }
@@ -396,5 +429,42 @@ func TestApplyJobStatus_SkipsWhenStateMissing(t *testing.T) {
 
 	if _, err := store.Get("missing"); err == nil {
 		t.Error("no entry should have been created")
+	}
+}
+
+func TestSlackEscape(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"plain", "小明", "小明"},
+		{"lt only", "<heart>", "&lt;heart&gt;"},
+		{"amp only", "A & B", "A &amp; B"},
+		{"user mention neutralised", "<@U12345>", "&lt;@U12345&gt;"},
+		{"channel broadcast neutralised", "<!channel>", "&lt;!channel&gt;"},
+		{"amp before lt — no double-escape", "&<", "&amp;&lt;"},
+		{"already-encoded stays idempotent-ish",
+			"&amp;", "&amp;amp;"}, // we DO double-escape existing entities — that's correct for user input
+		{"empty", "", ""},
+	}
+	for _, c := range cases {
+		if got := slackEscape(c.in); got != c.want {
+			t.Errorf("%s: slackEscape(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+func TestFormatWorkerLabel(t *testing.T) {
+	cases := []struct {
+		name, workerID, nickname, want string
+	}{
+		{"nickname wins", "host/worker-0", "小明", "小明"},
+		{"empty nickname falls back to shortWorker", "host/worker-2", "", "worker-2"},
+		{"empty nickname empty workerID falls back to empty", "", "", ""},
+		{"nickname beats even multi-slash workerID", "k8s/pod/worker-5", "Alice", "Alice"},
+	}
+	for _, c := range cases {
+		if got := formatWorkerLabel(c.workerID, c.nickname); got != c.want {
+			t.Errorf("%s: formatWorkerLabel(%q, %q) = %q, want %q", c.name, c.workerID, c.nickname, got, c.want)
+		}
 	}
 }

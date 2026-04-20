@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // Validate runs cross-field range checks on the merged Config and returns a
@@ -39,6 +40,19 @@ func Validate(cfg *Config) error {
 	}
 	if cfg.RepoCache.MaxAge <= 0 {
 		errs = append(errs, "repo_cache.max_age must be > 0")
+	}
+
+	// NicknamePool: trim-normalise in place, then check length.
+	for i, raw := range cfg.NicknamePool {
+		trimmed := strings.TrimSpace(raw)
+		cfg.NicknamePool[i] = trimmed
+		if trimmed == "" {
+			errs = append(errs, fmt.Sprintf("nickname_pool[%d] is empty or whitespace", i))
+			continue
+		}
+		if n := utf8.RuneCountInString(trimmed); n > 32 {
+			errs = append(errs, fmt.Sprintf("nickname_pool[%d] length %d exceeds 32 runes", i, n))
+		}
 	}
 
 	if len(errs) > 0 {
