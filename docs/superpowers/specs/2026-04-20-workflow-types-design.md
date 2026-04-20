@@ -52,11 +52,16 @@ app/workflow/
   issue.go            # IssueWorkflow (relocated from app/bot/workflow.go + parser.go)
   ask.go              # AskWorkflow
   pr_review.go        # PRReviewWorkflow
-  ports.go            # SlackPort / GitHubPort interfaces (so workflow tests can mock)
+  ports.go            # SlackPort / GitHubPort / IssueCreator interfaces (so workflow tests can mock)
   *_test.go
 ```
 
 `app/bot/result_listener.go` becomes a thin dispatcher that looks up the workflow by `state.Job.TaskType` and delegates `HandleResult`. Cancellation, metrics, dedup-clear, and attachment cleanup remain at the listener level (cross-cutting concerns).
+
+#### Component placement notes
+
+- **`IssueCreator` interface** (currently in `app/bot/result_listener.go`) moves to `app/workflow/ports.go` because `IssueWorkflow.HandleResult` is the only consumer after the refactor. `app/bot/` no longer references GitHub.
+- **`RetryHandler`** (currently in `app/bot/retry_handler.go`, invoked by the `retry_job` action handler in `cmd/agentdock/app.go`) **stays in `app/bot/`** as shared infrastructure. The retry button itself, its action wiring, and the dedup re-arming are cross-cutting. `IssueWorkflow.HandleResult` decides *whether* to attach the retry button (first failure: yes, retry exhausted: no); the click handler still routes through `RetryHandler`, which re-submits via the dispatcher just like a fresh trigger. `AskWorkflow` and `PRReviewWorkflow` simply never attach the button.
 
 ### `Workflow` interface
 
@@ -312,6 +317,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
   :point_right: 你想做什麼？
   [ 📝 建 Issue ]  [ ❓ 問問題 ]  [ 🔍 Review PR ]
   ```
+  Subject to the existing 1-minute `pendingTimeout` (`app/bot/workflow.go:22`); after expiry the user is asked to re-mention the bot.
 - **Issue**: identical to today.
 - **Ask**: 1 confirmation button (attach repo? yes/no) → optional repo selector → submit. Result is the bot's answer, posted by editing the status message.
 - **PR Review**: URL via mention or auto-detection from thread; modal fallback. Validation → submit. Result line includes verdict, comment count, PR URL, and a summary excerpt.
@@ -347,7 +353,7 @@ Eight PRs, each independently reviewable. The end state is the polymorphic desig
 ## Open questions / future work
 
 - **Per-channel default workflow.** If usage shows that a channel almost always wants Q&A, channel config could default `task_type: ask` so users can skip the verb. Not in v1.
-- **Per-workflow skill manifest.** Currently every job ships every skill. If the skill set grows large, add a `Workflow.Skills() []string` filter so each job only ships what it needs.
+- **Per-workflow skill manifest.** Currently every job ships every skill. Ask jobs in particular pay the full skill-payload wire cost despite often not needing any of them. Acceptable for v1 (skills are small text files); if the skill set grows large or Ask volume dominates, add a `Workflow.Skills() []string` filter so each job only ships what it needs.
 - **PR Review without skill.** The `github-pr-review` skill is a separate deliverable. Until it exists, the workflow can ship but its agent prompt will need a stub instructing the agent to post a single review comment via `gh pr comment`.
 - **Smaller / cheaper LLM for Ask.** Q&A latency would benefit from a faster model; out of scope for v1, revisit after adoption.
 - **Result UI for very long answers.** Ask answers may exceed Slack message limits. v1 truncates; v2 could thread-split or attach as a snippet.
