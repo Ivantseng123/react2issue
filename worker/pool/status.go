@@ -11,6 +11,7 @@ type statusAccumulator struct {
 	mu           sync.Mutex
 	jobID        string
 	workerID     string
+	nickname     string
 	pid          int
 	agentCmd     string
 	alive        bool
@@ -65,16 +66,17 @@ func (s *statusAccumulator) toReport() queue.StatusReport {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return queue.StatusReport{
-		JobID:        s.jobID,
-		WorkerID:     s.workerID,
-		PID:          s.pid,
-		AgentCmd:     s.agentCmd,
-		Alive:        s.alive,
-		LastEvent:    s.lastEvent,
-		LastEventAt:  s.lastEventAt,
-		ToolCalls:    s.toolCalls,
-		FilesRead:    s.filesRead,
-		OutputBytes:  s.outputBytes,
+		JobID:          s.jobID,
+		WorkerID:       s.workerID,
+		WorkerNickname: s.nickname,
+		PID:            s.pid,
+		AgentCmd:       s.agentCmd,
+		Alive:          s.alive,
+		LastEvent:      s.lastEvent,
+		LastEventAt:    s.lastEventAt,
+		ToolCalls:      s.toolCalls,
+		FilesRead:      s.filesRead,
+		OutputBytes:    s.outputBytes,
 		CostUSD:        s.costUSD,
 		InputTokens:    s.inputTokens,
 		OutputTokens:   s.outputTokens,
