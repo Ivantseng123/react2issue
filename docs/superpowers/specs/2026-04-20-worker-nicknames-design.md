@@ -15,7 +15,7 @@
 - `worker/config/config.go` 新增 `NicknamePool []string`，使用者於 `worker.yaml` 填 `nickname_pool: ["小明","Gary",...]`。
 - Worker process 啟動時用 Fisher–Yates 從池抽 `count` 個（池夠大時不重複抽；不夠則用掉整池，剩下 slot 保持空字串）。
 - Nickname 寫入 `shared/queue.WorkerInfo.Nickname`（Redis 註冊欄位）與 `shared/queue.StatusReport.WorkerNickname`（跨 pod 傳遞用）。
-- `app/bot/status_listener.go` 的 `renderStatusMessage` 有 nickname 則顯示 nickname，沒有則維持 `worker-N`。
+- `app/bot/status_listener.go` 的 `renderStatusMessage` 有 nickname 則顯示 nickname，沒有則維持 `worker-N`；**同時把既有文案重寫成擬人化活潑風格**（暱稱當主詞、動詞戲劇化），無暱稱時 `worker-N` 也照樣套用新模板（robot-worker 人設）。
 - `agentdock init worker` 產出的 template 預設包含 `nickname_pool: []`，使用者可直接填。
 
 ## 3. 非目標
@@ -38,6 +38,7 @@
 | Q4 | **Nickname 透過 `StatusReport` piggyback 傳到 app** | vs. app 端查 `ListWorkers` — piggyback 耦合低、不用多一個 Redis round trip。 |
 | Q5 | **Slack 只顯示 nickname，沒設就 fallback `worker-N`**（不顯示雙 label） | `worker-0 (小明)` 對 reporter 是 noise；reporter 不 care 技術 ID，運維要對照去 Redis/logs。 |
 | Q6 | **omitempty 兩個新欄位（`WorkerInfo.Nickname`、`StatusReport.WorkerNickname`）** | 向後相容：舊 worker/舊 Redis 資料沒這欄，app 端收到空字串 = 無暱稱 = 現有行為。 |
+| Q7 | **文案同步擬人化改寫**（「準備中」→「正在暖機」、「處理中」→「開工啦！」等） | 暱稱貼在冷冰冰的名詞旁不協調；改寫成「{label} 動作化」結構後，有無暱稱都是一致人設（暱稱 = 人、`worker-0` = 機器人工人）。 |
 
 ## 5. Architecture
 
@@ -106,7 +107,43 @@ func formatWorkerLabel(workerID, nickname string) string {
 }
 ```
 
-`renderStatusMessage` 三處 `worker := shortWorker(r.WorkerID)` 改為 `worker := formatWorkerLabel(r.WorkerID, r.WorkerNickname)`。
+**`renderStatusMessage` 文案全面擬人化改寫**（`app/bot/status_listener.go:192-214`）：
+
+```go
+func renderStatusMessage(state *queue.JobState, r queue.StatusReport, phase string) string {
+    label := formatWorkerLabel(r.WorkerID, r.WorkerNickname)
+    switch phase {
+    case "preparing":
+        return fmt.Sprintf(":toolbox: %s 正在暖機...", label)
+    case "running":
+        var suffix string
+        if !state.StartedAt.IsZero() {
+            suffix = fmt.Sprintf(" · 奮鬥 %s", formatElapsed(time.Since(state.StartedAt)))
+        }
+        agent := r.AgentCmd
+        if agent == "" {
+            agent = "agent"
+        }
+        base := fmt.Sprintf(":fire: %s 開工啦！(%s)%s", label, agent, suffix)
+        if r.ToolCalls > 0 || r.FilesRead > 0 {
+            base += fmt.Sprintf("\n%s 已經敲了 %d 次工具、翻了 %d 份檔",
+                label, r.ToolCalls, r.FilesRead)
+        }
+        return base
+    }
+    return ""
+}
+```
+
+### 渲染對照表
+
+| 狀態 | 舊 | 新（有暱稱） | 新（無暱稱） |
+|---|---|---|---|
+| preparing | `:gear: 準備中 · worker-0` | `:toolbox: 小明 正在暖機...` | `:toolbox: worker-0 正在暖機...` |
+| running base | `:hourglass_flowing_sand: 處理中 · worker-0 (claude-cli) · 已執行 1m23s` | `:fire: 小明 開工啦！(claude-cli) · 奮鬥 1m23s` | `:fire: worker-0 開工啦！(claude-cli) · 奮鬥 1m23s` |
+| running stats | `工具呼叫 12 次 · 讀檔 3 份` | `小明 已經敲了 12 次工具、翻了 3 份檔` | `worker-0 已經敲了 12 次工具、翻了 3 份檔` |
+
+Emoji 從 `:gear:` → `:toolbox:`、`:hourglass_flowing_sand:` → `:fire:`，凸顯「在幹活」而不是「在等」。
 
 ### 驗證規則
 
@@ -188,8 +225,10 @@ nickname_pool: ["小明", "小華"]
 ### 整合
 
 - `app/bot/status_listener_test.go`：
-  - 有 `WorkerNickname` → 渲染 `:gear: 準備中 · 小明`。
-  - 無 `WorkerNickname` → 渲染 `:gear: 準備中 · worker-0`（既有 snapshot 不變）。
+  - preparing + 有 `WorkerNickname` → `:toolbox: 小明 正在暖機...`。
+  - preparing + 無 `WorkerNickname` → `:toolbox: worker-0 正在暖機...`。
+  - running + 有暱稱 + stats → `:fire: 小明 開工啦！(claude-cli) · 奮鬥 1m23s\n小明 已經敲了 12 次工具、翻了 3 份檔`。
+  - 既有的 status_listener 測試 snapshot 要一起更新（文案改了）。
 - `worker/integration/queue_redis_integration_test.go`：
   - `Register` 帶 `Nickname` → `ListWorkers` 讀回同值。
 
