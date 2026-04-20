@@ -41,9 +41,10 @@ type CommandBus interface {
 }
 
 type StatusReport struct {
-	JobID        string    `json:"job_id"`
-	WorkerID     string    `json:"worker_id"`
-	PID          int       `json:"pid"`
+	JobID          string    `json:"job_id"`
+	WorkerID       string    `json:"worker_id"`
+	WorkerNickname string    `json:"worker_nickname,omitempty"`
+	PID            int       `json:"pid"`
 	AgentCmd     string    `json:"agent_cmd"`
 	Alive        bool      `json:"alive"`
 	LastEvent    string    `json:"last_event,omitempty"`
