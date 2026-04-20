@@ -194,6 +194,7 @@ func TestRedisJobQueue_WorkerRegistration(t *testing.T) {
 	worker := WorkerInfo{
 		WorkerID:    "worker-test-001",
 		Name:        "test-worker",
+		Nickname:    "Alice",
 		Agents:      []string{"claude", "codex"},
 		Tags:        []string{"gpu", "fast"},
 		ConnectedAt: time.Now(),
@@ -215,6 +216,9 @@ func TestRedisJobQueue_WorkerRegistration(t *testing.T) {
 	}
 	if workers[0].Name != worker.Name {
 		t.Errorf("Name = %q, want %q", workers[0].Name, worker.Name)
+	}
+	if workers[0].Nickname != worker.Nickname {
+		t.Errorf("Nickname = %q, want %q", workers[0].Nickname, worker.Nickname)
 	}
 	if len(workers[0].Agents) != 2 {
 		t.Errorf("Agents len = %d, want 2", len(workers[0].Agents))
