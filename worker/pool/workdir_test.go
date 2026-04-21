@@ -62,14 +62,48 @@ func TestSelectProvider_ChoosesByCloneURL(t *testing.T) {
 }
 
 type fakeRepoProvider struct {
-	prepared string
-	cleaned  string
+	prepared struct {
+		cloneURL string
+		branch   string
+		token    string
+	}
+	cleaned string
 }
 
 func (f *fakeRepoProvider) Prepare(cloneURL, branch, token string) (string, error) {
-	f.prepared = cloneURL
+	f.prepared.cloneURL = cloneURL
+	f.prepared.branch = branch
+	f.prepared.token = token
 	return "/tmp/fake-repo", nil
 }
 func (f *fakeRepoProvider) RemoveWorktree(p string) error { f.cleaned = p; return nil }
 func (f *fakeRepoProvider) CleanAll() error               { return nil }
 func (f *fakeRepoProvider) PurgeStale() error             { return nil }
+
+func TestRepoCloneProvider_ForwardsArgs(t *testing.T) {
+	fake := &fakeRepoProvider{}
+	provider := &RepoCloneProvider{Repo: fake, Token: "tkn"}
+	job := &queue.Job{CloneURL: "https://github.com/foo/bar.git", Branch: "main"}
+
+	got, err := provider.Prepare(job)
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if got != "/tmp/fake-repo" {
+		t.Errorf("path = %q, want /tmp/fake-repo", got)
+	}
+	if fake.prepared.cloneURL != "https://github.com/foo/bar.git" {
+		t.Errorf("cloneURL = %q", fake.prepared.cloneURL)
+	}
+	if fake.prepared.branch != "main" {
+		t.Errorf("branch = %q", fake.prepared.branch)
+	}
+	if fake.prepared.token != "tkn" {
+		t.Errorf("token = %q", fake.prepared.token)
+	}
+
+	provider.Cleanup(got)
+	if fake.cleaned != "/tmp/fake-repo" {
+		t.Errorf("cleaned = %q, want /tmp/fake-repo", fake.cleaned)
+	}
+}

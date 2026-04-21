@@ -33,9 +33,7 @@ func (p *RepoCloneProvider) Cleanup(path string) {
 	if path == "" {
 		return
 	}
-	if err := p.Repo.RemoveWorktree(path); err != nil {
-		// best-effort
-	}
+	_ = p.Repo.RemoveWorktree(path)
 }
 
 // EmptyDirProvider mkdirs a fresh temp directory per job. Used by Ask when
