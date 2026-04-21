@@ -167,8 +167,10 @@ func Run(cfg *config.Config) (*Handle, error) {
 	// Build workflow registry + dispatcher.
 	slackPort := &slackAdapterPort{client: slackClient, logger: slackLogger}
 	issueWorkflow := workflow.NewIssueWorkflow(cfg, slackPort, issueClient, repoCache, repoDiscovery, agentLogger)
+	askWorkflow := workflow.NewAskWorkflow(cfg, slackPort, repoCache, agentLogger)
 	reg := workflow.NewRegistry()
 	reg.Register(issueWorkflow)
+	reg.Register(askWorkflow)
 	dispatcher := workflow.NewDispatcher(reg, slackPort, appLogger)
 
 	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger)
