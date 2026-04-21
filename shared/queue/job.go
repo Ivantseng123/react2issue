@@ -35,6 +35,7 @@ type Job struct {
 	Attachments      []AttachmentMeta         `json:"attachments"`
 	StatusMsgTS      string                   `json:"status_msg_ts,omitempty"`
 	TaskType         string                   `json:"task_type,omitempty"`
+	WorkflowArgs     map[string]string        `json:"workflow_args,omitempty"`
 	RetryCount       int                      `json:"retry_count,omitempty"`
 	RetryOfJobID     string                   `json:"retry_of_job_id,omitempty"`
 	PromptContext    *PromptContext           `json:"prompt_context,omitempty"`

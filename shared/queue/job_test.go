@@ -119,3 +119,33 @@ func TestJob_PromptContextField_JSONRoundTrip(t *testing.T) {
 		t.Errorf("Goal = %q, want triage", got.PromptContext.Goal)
 	}
 }
+
+func TestJob_WorkflowArgsRoundTrips(t *testing.T) {
+	j := &Job{
+		ID:       "j1",
+		TaskType: "pr_review",
+		WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7", "pr_number": "7"},
+	}
+	buf, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Job
+	if err := json.Unmarshal(buf, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkflowArgs["pr_url"] != "https://github.com/foo/bar/pull/7" {
+		t.Errorf("WorkflowArgs[pr_url] = %q", got.WorkflowArgs["pr_url"])
+	}
+	if got.WorkflowArgs["pr_number"] != "7" {
+		t.Errorf("WorkflowArgs[pr_number] = %q", got.WorkflowArgs["pr_number"])
+	}
+}
+
+func TestJob_WorkflowArgsOmitEmpty(t *testing.T) {
+	j := &Job{ID: "j1", TaskType: "issue"}
+	buf, _ := json.Marshal(j)
+	if strings.Contains(string(buf), "workflow_args") {
+		t.Errorf("empty WorkflowArgs should be omitted: %s", buf)
+	}
+}
