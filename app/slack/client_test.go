@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/slack-go/slack"
@@ -88,5 +89,78 @@ func TestExtractKeywords(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExtractMessageText_PrefersText(t *testing.T) {
+	msg := slack.Message{Msg: slack.Msg{
+		Text:        "primary",
+		Attachments: []slack.Attachment{{Fallback: "fallback"}},
+	}}
+	got := extractMessageText(msg)
+	if got != "primary" {
+		t.Errorf("got %q, want primary", got)
+	}
+}
+
+func TestExtractMessageText_BlocksFallback(t *testing.T) {
+	blocks := slack.Blocks{BlockSet: []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "hello world", false, false),
+			nil, nil,
+		),
+	}}
+	msg := slack.Message{Msg: slack.Msg{Text: "", Blocks: blocks}}
+	got := extractMessageText(msg)
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("got %q, want containing 'hello world'", got)
+	}
+}
+
+func TestExtractMessageText_AttachmentsFallback(t *testing.T) {
+	msg := slack.Message{Msg: slack.Msg{
+		Text: "",
+		Attachments: []slack.Attachment{{
+			Pretext: "pre",
+			Title:   "title",
+			Text:    "body",
+			Fields: []slack.AttachmentField{
+				{Title: "Env", Value: "prod"},
+			},
+		}},
+	}}
+	got := extractMessageText(msg)
+	for _, want := range []string{"pre", "title", "body", "Env", "prod"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("got %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestExtractMessageText_BlocksWinOverAttachments(t *testing.T) {
+	blocks := slack.Blocks{BlockSet: []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "from-blocks", false, false),
+			nil, nil,
+		),
+	}}
+	msg := slack.Message{Msg: slack.Msg{
+		Text:        "",
+		Blocks:      blocks,
+		Attachments: []slack.Attachment{{Fallback: "from-attach"}},
+	}}
+	got := extractMessageText(msg)
+	if !strings.Contains(got, "from-blocks") {
+		t.Errorf("got %q, want blocks content preferred", got)
+	}
+	if strings.Contains(got, "from-attach") {
+		t.Errorf("got %q, should not include attachment when blocks present", got)
+	}
+}
+
+func TestExtractMessageText_AllEmpty(t *testing.T) {
+	msg := slack.Message{Msg: slack.Msg{}}
+	if got := extractMessageText(msg); got != "" {
+		t.Errorf("got %q, want empty", got)
 	}
 }

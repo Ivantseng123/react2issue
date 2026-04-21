@@ -549,6 +549,92 @@ func classifyAttachment(filetype, mimetype string) string {
 	return "document"
 }
 
+// extractMessageText returns m.Text if non-empty, otherwise reconstructs
+// text from blocks (modern integrations) or attachments (legacy). Returns
+// "" only when no renderable text is present.
+func extractMessageText(m slack.Message) string {
+	if strings.TrimSpace(m.Text) != "" {
+		return m.Text
+	}
+	if s := extractFromBlocks(m.Blocks.BlockSet); s != "" {
+		return s
+	}
+	if s := extractFromAttachments(m.Attachments); s != "" {
+		return s
+	}
+	return ""
+}
+
+// extractFromBlocks walks block kit content pulling text from
+// text-bearing block types. Interactive / image blocks are ignored.
+func extractFromBlocks(blocks []slack.Block) string {
+	var parts []string
+	for _, b := range blocks {
+		switch bb := b.(type) {
+		case *slack.SectionBlock:
+			if bb.Text != nil && bb.Text.Text != "" {
+				parts = append(parts, bb.Text.Text)
+			}
+			for _, f := range bb.Fields {
+				if f != nil && f.Text != "" {
+					parts = append(parts, f.Text)
+				}
+			}
+		case *slack.HeaderBlock:
+			if bb.Text != nil && bb.Text.Text != "" {
+				parts = append(parts, bb.Text.Text)
+			}
+		case *slack.ContextBlock:
+			for _, e := range bb.ContextElements.Elements {
+				if tb, ok := e.(*slack.TextBlockObject); ok && tb.Text != "" {
+					parts = append(parts, tb.Text)
+				}
+			}
+		case *slack.RichTextBlock:
+			for _, el := range bb.Elements {
+				if s, ok := el.(*slack.RichTextSection); ok {
+					for _, inner := range s.Elements {
+						if te, ok := inner.(*slack.RichTextSectionTextElement); ok && te.Text != "" {
+							parts = append(parts, te.Text)
+						}
+					}
+				}
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// extractFromAttachments renders legacy-API attachment content as plain
+// text. Each attachment contributes its Pretext / Title / Text / Fallback
+// plus any Fields; multiple attachments are joined with a blank line.
+func extractFromAttachments(atts []slack.Attachment) string {
+	var segments []string
+	for _, a := range atts {
+		var parts []string
+		if a.Pretext != "" {
+			parts = append(parts, a.Pretext)
+		}
+		if a.Title != "" {
+			parts = append(parts, a.Title)
+		}
+		if a.Text != "" {
+			parts = append(parts, a.Text)
+		} else if a.Fallback != "" {
+			parts = append(parts, a.Fallback)
+		}
+		for _, f := range a.Fields {
+			if f.Title != "" || f.Value != "" {
+				parts = append(parts, fmt.Sprintf("*%s*: %s", f.Title, f.Value))
+			}
+		}
+		if len(parts) > 0 {
+			segments = append(segments, strings.Join(parts, "\n"))
+		}
+	}
+	return strings.Join(segments, "\n\n")
+}
+
 func ExtractKeywords(message string) []string {
 	stopWords := map[string]bool{
 		"the": true, "a": true, "an": true, "is": true, "are": true,
