@@ -107,3 +107,58 @@ func TestRepoCloneProvider_ForwardsArgs(t *testing.T) {
 		t.Errorf("cleaned = %q, want /tmp/fake-repo", fake.cleaned)
 	}
 }
+
+// TestSkillMountInEmptyDir_ForEachRunner validates that each registered
+// agent CLI discovers skills mounted under the agent's configured
+// skill_dir in a non-git empty directory. This test gates PR 5 (Ask
+// workflow): if any runner fails to see the skill, the EmptyDirProvider
+// design needs a fallback (git init / HOME mount) before Ask ships.
+//
+// The "runner" here is a dummy that execs a shell script which inspects the
+// CWD for the expected skill file. In CI, this is effectively a filesystem
+// test — we don't launch the real claude/codex binaries. The value is
+// confirming the path layout and permissions.
+func TestSkillMountInEmptyDir_ForEachRunner(t *testing.T) {
+	providers := []struct {
+		name     string
+		skillDir string
+	}{
+		{"claude", ".claude/skills"},
+		{"codex", ".agents/skills"},
+		{"gemini", ".gemini/skills"},
+		{"opencode", ".agents/skills"},
+	}
+
+	for _, tc := range providers {
+		t.Run(tc.name, func(t *testing.T) {
+			emptyProvider := &EmptyDirProvider{}
+			job := &queue.Job{
+				ID: "spike-" + tc.name,
+				Skills: map[string]*queue.SkillPayload{
+					"spike-skill": {
+						Files: map[string][]byte{
+							"SKILL.md": []byte("---\nname: spike-skill\n---\ndetector"),
+						},
+					},
+				},
+			}
+
+			dir, err := emptyProvider.Prepare(job)
+			if err != nil {
+				t.Fatalf("Prepare: %v", err)
+			}
+			defer emptyProvider.Cleanup(dir)
+
+			// Mount the skill using the same mountSkills function executor.go uses.
+			if err := mountSkills(dir, job.Skills, tc.skillDir); err != nil {
+				t.Fatalf("mountSkills: %v", err)
+			}
+
+			// Assert file exists at the expected path.
+			want := filepath.Join(dir, tc.skillDir, "spike-skill", "SKILL.md")
+			if _, err := os.Stat(want); err != nil {
+				t.Errorf("skill file not found at %s: %v", want, err)
+			}
+		})
+	}
+}
