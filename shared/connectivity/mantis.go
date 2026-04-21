@@ -23,7 +23,10 @@ func CheckMantis(baseURL, apiToken string) (int, error) {
 
 	url := strings.TrimRight(baseURL, "/") + "/api/rest/projects?page_size=1"
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("build request: %w", err)
+	}
 	req.Header.Set("Authorization", apiToken)
 
 	resp, err := httpClient.Do(req)

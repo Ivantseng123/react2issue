@@ -76,3 +76,13 @@ func TestCheckMantis_EmptyToken(t *testing.T) {
 		t.Errorf("error = %v", err)
 	}
 }
+
+func TestCheckMantis_MalformedURL(t *testing.T) {
+	_, err := CheckMantis("://missing-scheme", "tok")
+	if err == nil {
+		t.Fatal("expected error for malformed URL, got nil")
+	}
+	if !strings.Contains(err.Error(), "build request") {
+		t.Errorf("error = %q, want containing 'build request'", err.Error())
+	}
+}
