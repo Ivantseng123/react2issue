@@ -19,7 +19,7 @@ func (f *fakeWorkflow) Selection(ctx context.Context, p *Pending, value string) 
 func (f *fakeWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, string, error) {
 	return &queue.Job{TaskType: f.typ}, "status", nil
 }
-func (f *fakeWorkflow) HandleResult(ctx context.Context, job *queue.Job, r *queue.JobResult) error {
+func (f *fakeWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r *queue.JobResult) error {
 	return nil
 }
 

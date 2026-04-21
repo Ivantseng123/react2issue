@@ -55,11 +55,12 @@ type fakeWorkflow struct {
 	handleResultErr error
 	// onHandleResult is called synchronously inside HandleResult if non-nil.
 	// Use it to mutate result.Status (e.g. simulate ERROR → "failed").
-	onHandleResult func(job *queue.Job, result *queue.JobResult)
+	onHandleResult func(state *queue.JobState, result *queue.JobResult)
 
 	mu           sync.Mutex
 	handleCalls  int
 	lastJob      *queue.Job
+	lastState    *queue.JobState
 	lastResult   *queue.JobResult
 }
 
@@ -75,14 +76,17 @@ func (f *fakeWorkflow) Selection(ctx context.Context, p *workflow.Pending, value
 func (f *fakeWorkflow) BuildJob(ctx context.Context, p *workflow.Pending) (*queue.Job, string, error) {
 	return &queue.Job{TaskType: "issue"}, "status", nil
 }
-func (f *fakeWorkflow) HandleResult(ctx context.Context, job *queue.Job, result *queue.JobResult) error {
+func (f *fakeWorkflow) HandleResult(ctx context.Context, state *queue.JobState, result *queue.JobResult) error {
 	f.mu.Lock()
 	f.handleCalls++
-	f.lastJob = job
+	f.lastState = state
+	if state != nil {
+		f.lastJob = state.Job
+	}
 	f.lastResult = result
 	f.mu.Unlock()
 	if f.onHandleResult != nil {
-		f.onHandleResult(job, result)
+		f.onHandleResult(state, result)
 	}
 	return f.handleResultErr
 }
@@ -478,7 +482,7 @@ func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 	dedupCleared := false
 
 	fw := newFakeWorkflow()
-	fw.onHandleResult = func(job *queue.Job, result *queue.JobResult) {
+	fw.onHandleResult = func(state *queue.JobState, result *queue.JobResult) {
 		result.Status = "failed"
 	}
 	reg := workflow.NewRegistry()

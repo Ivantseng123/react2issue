@@ -172,13 +172,14 @@ func TestIssueWorkflow_Trigger_NoChannelRepos_UsesExternalSelector(t *testing.T)
 func TestIssueWorkflow_HandleResult_Created_PostsIssueURL(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{Job: job}
 	result := &queue.JobResult{
 		JobID:  "j1",
 		Status: "completed",
 		RawOutput: `===TRIAGE_RESULT===
 {"status":"CREATED","title":"T","body":"B","confidence":"high","files_found":3,"open_questions":0}`,
 	}
-	if err := w.HandleResult(context.Background(), job, result); err != nil {
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
 	joined := strings.Join(slack.Posted, " | ")
@@ -190,13 +191,14 @@ func TestIssueWorkflow_HandleResult_Created_PostsIssueURL(t *testing.T) {
 func TestIssueWorkflow_HandleResult_Rejected_PostsLowConfidence(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{Job: job}
 	result := &queue.JobResult{
 		JobID:  "j1",
 		Status: "completed",
 		RawOutput: `===TRIAGE_RESULT===
 {"status":"REJECTED","message":"not our repo"}`,
 	}
-	if err := w.HandleResult(context.Background(), job, result); err != nil {
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
 	joined := strings.Join(slack.Posted, " | ")
@@ -208,8 +210,9 @@ func TestIssueWorkflow_HandleResult_Rejected_PostsLowConfidence(t *testing.T) {
 func TestIssueWorkflow_HandleResult_Failed_FirstAttempt_AttachesRetryButton(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	state := &queue.JobState{Job: job}
 	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "agent timeout"}
-	if err := w.HandleResult(context.Background(), job, result); err != nil {
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
 	joined := strings.Join(slack.Posted, " | ")
@@ -221,8 +224,9 @@ func TestIssueWorkflow_HandleResult_Failed_FirstAttempt_AttachesRetryButton(t *t
 func TestIssueWorkflow_HandleResult_Failed_Retried_NoButton(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", TaskType: "issue", RetryCount: 1, StatusMsgTS: "s-ts"}
+	state := &queue.JobState{Job: job}
 	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "agent timeout"}
-	if err := w.HandleResult(context.Background(), job, result); err != nil {
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
 	joined := strings.Join(slack.Posted, " | ")
@@ -234,13 +238,14 @@ func TestIssueWorkflow_HandleResult_Failed_Retried_NoButton(t *testing.T) {
 func TestIssueWorkflow_HandleResult_ErrorStatus_RoutesToFailure(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	state := &queue.JobState{Job: job}
 	result := &queue.JobResult{
 		JobID:  "j1",
 		Status: "completed",
 		RawOutput: `===TRIAGE_RESULT===
 {"status":"ERROR","message":"gh exploded"}`,
 	}
-	if err := w.HandleResult(context.Background(), job, result); err != nil {
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
 	joined := strings.Join(slack.Posted, " | ")
@@ -253,13 +258,14 @@ func TestIssueWorkflow_HandleResult_GitHubCreateFails_ReturnsErrorAndPostsWarnin
 	w, slack, ic := newTestIssueWorkflow(t)
 	ic.err = errors.New("github API 503")
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{Job: job}
 	result := &queue.JobResult{
 		JobID:  "j1",
 		Status: "completed",
 		RawOutput: `===TRIAGE_RESULT===
 {"status":"CREATED","title":"T","body":"B","confidence":"high","files_found":3,"open_questions":0}`,
 	}
-	err := w.HandleResult(context.Background(), job, result)
+	err := w.HandleResult(context.Background(), state, result)
 	if err == nil {
 		t.Fatal("expected non-nil error from HandleResult when GitHub create-issue fails")
 	}
@@ -272,17 +278,90 @@ func TestIssueWorkflow_HandleResult_GitHubCreateFails_ReturnsErrorAndPostsWarnin
 func TestIssueWorkflow_HandleResult_ParseFailed_RoutesToFailure(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	state := &queue.JobState{Job: job}
 	result := &queue.JobResult{
 		JobID:     "j1",
 		Status:    "completed",
 		RawOutput: "totally not valid agent output",
 	}
-	if err := w.HandleResult(context.Background(), job, result); err != nil {
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
 	joined := strings.Join(slack.Posted, " | ")
 	if !strings.Contains(joined, "分析失敗") {
 		t.Errorf("expected failure text containing \"分析失敗\", got: %v", slack.Posted)
+	}
+}
+
+// ── new tests for Task 5.0: worker-label restoration ─────────────────────────
+
+// TestIssueWorkflow_HandleResult_SuccessShowsWorkerLabel confirms the final
+// success message includes the worker-label diagnostic derived from
+// state.AgentStatus. This restores behavior dropped in the Task 2.5 port.
+func TestIssueWorkflow_HandleResult_SuccessShowsWorkerLabel(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{
+		Job: job,
+		AgentStatus: &queue.StatusReport{
+			WorkerID:       "w-42",
+			WorkerNickname: "alice",
+		},
+	}
+	result := &queue.JobResult{
+		JobID:  "j1",
+		Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"CREATED","title":"T","body":"B","confidence":"high","files_found":3,"open_questions":0}`,
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "worker: alice (w-42)") {
+		t.Errorf("expected success message to include worker-label %q, got: %v", "worker: alice (w-42)", slack.Posted)
+	}
+}
+
+// TestIssueWorkflow_HandleResult_FailureShowsWorkerLabel confirms the failure
+// message path also shows the worker label.
+func TestIssueWorkflow_HandleResult_FailureShowsWorkerLabel(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	state := &queue.JobState{
+		Job: job,
+		AgentStatus: &queue.StatusReport{
+			WorkerID:       "w-7",
+			WorkerNickname: "bob",
+		},
+	}
+	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "agent timeout"}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "worker: bob (w-7)") {
+		t.Errorf("expected failure message to include worker-label %q, got: %v", "worker: bob (w-7)", slack.Posted)
+	}
+}
+
+// TestIssueWorkflow_HandleResult_FallsBackToStateWorkerID confirms that when
+// state.AgentStatus is nil, state.WorkerID is used as the fallback.
+func TestIssueWorkflow_HandleResult_FallsBackToStateWorkerID(t *testing.T) {
+	w, slack, _ := newTestIssueWorkflow(t)
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", TaskType: "issue", RetryCount: 0}
+	state := &queue.JobState{
+		Job:      job,
+		WorkerID: "w-fallback",
+		// AgentStatus left nil — fallback path.
+	}
+	result := &queue.JobResult{JobID: "j1", Status: "failed", Error: "agent timeout"}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "worker: w-fallback") {
+		t.Errorf("expected failure message to include fallback worker-label %q, got: %v", "worker: w-fallback", slack.Posted)
 	}
 }
 

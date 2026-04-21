@@ -237,9 +237,10 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 // HandleResult routes the JobResult through REJECTED / ERROR / CREATED / parse-fail / failure branches.
 // Slack posting and GitHub issue creation happen here. Store status transitions and dedup-clearing
 // remain the ResultListener's responsibility (Phase 3 delegates through).
-func (w *IssueWorkflow) HandleResult(ctx context.Context, job *queue.Job, r *queue.JobResult) error {
+func (w *IssueWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r *queue.JobResult) error {
+	job := state.Job
 	if r.Status == "failed" {
-		w.handleFailure(job, r)
+		w.handleFailure(state, r)
 		return nil
 	}
 	if r.RawOutput == "" {
@@ -254,7 +255,7 @@ func (w *IssueWorkflow) HandleResult(ctx context.Context, job *queue.Job, r *que
 		w.logger.Warn("issue parse failed", "phase", "失敗", "output", truncated)
 		r.Status = "failed"
 		r.Error = fmt.Sprintf("parse failed: %v", err)
-		w.handleFailure(job, r)
+		w.handleFailure(state, r)
 		return nil
 	}
 	switch parsed.Status {
@@ -268,10 +269,10 @@ func (w *IssueWorkflow) HandleResult(ctx context.Context, job *queue.Job, r *que
 		}
 		r.Status = "failed"
 		r.Error = "agent error: " + msg
-		w.handleFailure(job, r)
+		w.handleFailure(state, r)
 		return nil
 	case "CREATED":
-		return w.createAndPostIssue(ctx, job, r, parsed)
+		return w.createAndPostIssue(ctx, state, r, parsed)
 	default:
 		return fmt.Errorf("unknown parsed status %q", parsed.Status)
 	}
@@ -280,10 +281,12 @@ func (w *IssueWorkflow) HandleResult(ctx context.Context, job *queue.Job, r *que
 // handleFailure posts either a retry button (first attempt) or an exhausted-retry
 // message (subsequent attempts). Store status transitions are omitted here;
 // ResultListener handles those in Phase 3.
-func (w *IssueWorkflow) handleFailure(job *queue.Job, result *queue.JobResult) {
-	// Worker-label derivation (WorkerID / WorkerNickname) was dropped in the Task 2.5
-	// port because store.Get is no longer available here. Phase 3 re-threads it via JobState.
+func (w *IssueWorkflow) handleFailure(state *queue.JobState, result *queue.JobResult) {
+	job := state.Job
 	workerInfo := ""
+	if label := workerLabel(state); label != "" {
+		workerInfo = fmt.Sprintf(" | worker: %s", label)
+	}
 
 	// Extract short error reason for Slack (before first colon detail, max 80 chars).
 	errMsg := result.Error
@@ -308,6 +311,32 @@ func (w *IssueWorkflow) handleFailure(job *queue.Job, result *queue.JobResult) {
 	}
 }
 
+// workerLabel derives the worker identity label for diagnostics, preferring
+// the live AgentStatus report (relayed by StatusListener) but falling back to
+// JobState.WorkerID for jobs that finished before any status reports landed.
+// Returns empty string when no identity is available.
+func workerLabel(state *queue.JobState) string {
+	if state == nil {
+		return ""
+	}
+	workerID := ""
+	workerNickname := ""
+	if state.AgentStatus != nil {
+		workerID = state.AgentStatus.WorkerID
+		workerNickname = state.AgentStatus.WorkerNickname
+	}
+	if workerID == "" {
+		workerID = state.WorkerID
+	}
+	label := workerNickname
+	if label == "" {
+		label = workerID
+	} else if workerID != "" {
+		label = fmt.Sprintf("%s (%s)", workerNickname, workerID)
+	}
+	return label
+}
+
 // postLowConfidence posts the REJECTED / low-confidence message to the thread.
 func (w *IssueWorkflow) postLowConfidence(job *queue.Job, message string) {
 	w.logger.Info("issue rejected", "reason", "low_confidence", "job_id", job.ID, "repo", job.Repo)
@@ -322,7 +351,8 @@ func (w *IssueWorkflow) postLowConfidence(job *queue.Job, message string) {
 // createAndPostIssue calls w.github.CreateIssue and posts the issue URL + diagnostics to Slack.
 // The degraded flag is computed inline: files_found == 0 || open_questions >= 5 strips triage sections.
 // Store status transitions are omitted here; ResultListener handles them in Phase 3.
-func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, job *queue.Job, r *queue.JobResult, parsed TriageResult) error {
+func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.JobState, r *queue.JobResult, parsed TriageResult) error {
+	job := state.Job
 	if w.github == nil {
 		w.logger.Info("issue rejected", "reason", "no_github", "job_id", job.ID, "repo", job.Repo)
 		metrics.WorkflowCompletionsTotal.WithLabelValues("issue", "rejected").Inc()
@@ -360,20 +390,19 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, job *queue.Job, 
 	// Preserve worker diagnostics on the final message so the thread captures
 	// what the job actually consumed.
 	line := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url)
-	if diag := w.formatDiagnostics(job, r); diag != "" {
+	if diag := w.formatDiagnostics(state, r); diag != "" {
 		line = line + "\n" + diag
 	}
 	w.updateStatus(job, line)
 	return nil
 }
 
-// formatDiagnostics renders the elapsed time and cost diagnostics line.
-// The worker-label segment (WorkerID / WorkerNickname) was dropped in the Task 2.5 port
-// because store.Get is no longer available here. Phase 3 re-threads it via JobState.
-func (w *IssueWorkflow) formatDiagnostics(job *queue.Job, result *queue.JobResult) string {
+// formatDiagnostics renders the worker-label, elapsed time, and cost diagnostics line.
+func (w *IssueWorkflow) formatDiagnostics(state *queue.JobState, result *queue.JobResult) string {
 	var parts []string
-	// Worker-label segment was dropped in the Task 2.5 port because store.Get
-	// is no longer available here. Phase 3 re-threads it via JobState.
+	if label := workerLabel(state); label != "" {
+		parts = append(parts, "worker: "+label)
+	}
 	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
 		parts = append(parts, humanDuration(elapsed))
 	}

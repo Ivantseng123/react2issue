@@ -125,7 +125,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 			r.attachments.Cleanup(ctx, result.JobID)
 			return
 		}
-		if err := wf.HandleResult(ctx, job, result); err != nil {
+		if err := wf.HandleResult(ctx, state, result); err != nil {
 			r.logger.Error("工作完成處理失敗", "phase", "失敗", "job_id", result.JobID, "error", err)
 			// Treat as failure — no retry button on internal errors.
 			r.store.UpdateStatus(job.ID, queue.JobFailed)

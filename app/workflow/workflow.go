@@ -116,6 +116,7 @@ type Workflow interface {
 	// HandleResult is called by ResultListener after the worker returns
 	// a result for a job whose TaskType matches this workflow. The workflow
 	// owns parsing, Slack posting, optional GitHub side-effects, retry-button
-	// decisions, and dedup-clear.
-	HandleResult(ctx context.Context, job *queue.Job, result *queue.JobResult) error
+	// decisions, and dedup-clear. state.Job provides the dispatched Job; state
+	// also carries WorkerID/AgentStatus for diagnostics.
+	HandleResult(ctx context.Context, state *queue.JobState, result *queue.JobResult) error
 }
