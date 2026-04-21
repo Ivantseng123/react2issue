@@ -157,6 +157,46 @@ func TestPRReviewWorkflow_HandleResult_NilStateReturnsError(t *testing.T) {
 	}
 }
 
+func TestPRReviewWorkflow_HandleResult_ParseFail(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "pr_review",
+		WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7"},
+	}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "agent chatter without marker", // no ===REVIEW_RESULT===
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "Review 失敗") || !strings.Contains(joined, "parse error") {
+		t.Errorf("expected parse-fail message, got: %v", slack.Posted)
+	}
+}
+
+func TestPRReviewWorkflow_HandleResult_ErrorStatus(t *testing.T) {
+	w, slack := newTestPRReviewWorkflow(t)
+	job := &queue.Job{
+		ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "pr_review",
+		WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7"},
+	}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: "===REVIEW_RESULT===\n" + `{"status":"ERROR","error":"422 invalid head sha"}`,
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if !strings.Contains(joined, "Review 失敗") || !strings.Contains(joined, "422") {
+		t.Errorf("expected ERROR-branch message containing '422', got: %v", slack.Posted)
+	}
+}
+
 func newTestPRReviewWorkflow(t *testing.T) (*PRReviewWorkflow, *fakeSlackPort) {
 	t.Helper()
 	cfg := &config.Config{}
