@@ -238,6 +238,9 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 // Slack posting and GitHub issue creation happen here. Store status transitions and dedup-clearing
 // remain the ResultListener's responsibility (Phase 3 delegates through).
 func (w *IssueWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r *queue.JobResult) error {
+	if state == nil || state.Job == nil {
+		return fmt.Errorf("HandleResult: state or state.Job is nil")
+	}
 	job := state.Job
 	if r.Status == "failed" {
 		w.handleFailure(state, r)
@@ -397,17 +400,18 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 	return nil
 }
 
-// formatDiagnostics renders the worker-label, elapsed time, and cost diagnostics line.
+// formatDiagnostics renders the elapsed time, cost, and worker-label diagnostics line.
+// Order matches result_listener's failure-path format: stats first, identity last.
 func (w *IssueWorkflow) formatDiagnostics(state *queue.JobState, result *queue.JobResult) string {
 	var parts []string
-	if label := workerLabel(state); label != "" {
-		parts = append(parts, "worker: "+label)
-	}
 	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
 		parts = append(parts, humanDuration(elapsed))
 	}
 	if result.CostUSD > 0 {
 		parts = append(parts, fmt.Sprintf("$%.2f", result.CostUSD))
+	}
+	if label := workerLabel(state); label != "" {
+		parts = append(parts, "worker: "+label)
 	}
 	return strings.Join(parts, " · ")
 }

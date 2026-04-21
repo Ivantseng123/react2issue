@@ -231,6 +231,9 @@ func (r *ResultListener) recordMetrics(state *queue.JobState, result *queue.JobR
 func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, result *queue.JobResult) {
 	r.store.UpdateStatus(job.ID, queue.JobFailed)
 
+	// Pre-workflow failure path. Worker-label derivation is duplicated in
+	// app/workflow/issue.go:workerLabel — keep the two in sync until a future
+	// refactor exports one version (likely moved to shared/queue).
 	workerID := ""
 	workerNickname := ""
 	if state.AgentStatus != nil {

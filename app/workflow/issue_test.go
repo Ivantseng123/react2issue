@@ -317,9 +317,15 @@ func TestIssueWorkflow_HandleResult_SuccessShowsWorkerLabel(t *testing.T) {
 	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
-	joined := strings.Join(slack.Posted, " | ")
-	if !strings.Contains(joined, "worker: alice (w-42)") {
-		t.Errorf("expected success message to include worker-label %q, got: %v", "worker: alice (w-42)", slack.Posted)
+	found := false
+	for _, msg := range slack.Posted {
+		if strings.Contains(msg, "Issue created") && strings.Contains(msg, "worker: alice (w-42)") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected issue URL + worker label on same message, got posts: %v", slack.Posted)
 	}
 }
 
@@ -339,9 +345,15 @@ func TestIssueWorkflow_HandleResult_FailureShowsWorkerLabel(t *testing.T) {
 	if err := w.HandleResult(context.Background(), state, result); err != nil {
 		t.Fatalf("HandleResult: %v", err)
 	}
-	joined := strings.Join(slack.Posted, " | ")
-	if !strings.Contains(joined, "worker: bob (w-7)") {
-		t.Errorf("expected failure message to include worker-label %q, got: %v", "worker: bob (w-7)", slack.Posted)
+	found := false
+	for _, msg := range slack.Posted {
+		if strings.Contains(msg, "分析失敗") && strings.Contains(msg, "worker: bob (w-7)") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected failure text + worker label on same message, got posts: %v", slack.Posted)
 	}
 }
 
