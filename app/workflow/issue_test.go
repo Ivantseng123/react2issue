@@ -28,6 +28,9 @@ func TestIssueWorkflow_TriggerWithRepoArg_ShortCircuits(t *testing.T) {
 	if step.Kind == NextStepError {
 		t.Errorf("expected non-error NextStep, got error: %q", step.ErrorText)
 	}
+	if step.Pending == nil || step.Pending.State == nil {
+		t.Errorf("expected Pending != nil and Pending.State != nil")
+	}
 }
 
 // ── new tests for Task 2.4 ────────────────────────────────────────────────────
@@ -89,6 +92,16 @@ func TestIssueWorkflow_Selection_RepoPhase_TransitionsToBranchOrDescription(t *t
 	if step.Kind == NextStepError {
 		t.Errorf("unexpected error: %q", step.ErrorText)
 	}
+	if step.Kind != NextStepPostSelector {
+		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	}
+	if step.Pending == nil || step.Pending.Phase != "description" {
+		phase := "<nil pending>"
+		if step.Pending != nil {
+			phase = step.Pending.Phase
+		}
+		t.Errorf("expected Pending.Phase == description, got %q", phase)
+	}
 }
 
 func TestIssueWorkflow_BuildJob_SetsTaskType(t *testing.T) {
@@ -135,6 +148,12 @@ func TestIssueWorkflow_Trigger_NoChannelRepos_UsesExternalSelector(t *testing.T)
 	}
 	if step.SelectorPrompt == "" {
 		t.Error("SelectorPrompt should carry the external-search placeholder text")
+	}
+	if step.SelectorActionID != "repo_search" {
+		t.Errorf("SelectorActionID = %q, want repo_search", step.SelectorActionID)
+	}
+	if step.SelectorPlaceholder == "" {
+		t.Error("SelectorPlaceholder should be non-empty")
 	}
 	if step.Pending == nil || step.Pending.Phase != "repo_search" {
 		t.Errorf("Pending.Phase = %q, want repo_search", func() string {

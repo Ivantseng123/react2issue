@@ -31,7 +31,6 @@ type issueState struct {
 	SelectedBranch string
 	ExtraDesc      string
 	RepoWasPicked  bool
-	CmdArgs        string
 }
 
 // NewIssueWorkflow constructs a workflow instance. All dependencies are
@@ -61,8 +60,8 @@ func NewIssueWorkflow(
 func (w *IssueWorkflow) Type() string { return "issue" }
 
 // Trigger is the entry point from the dispatcher for `@bot issue ...` and
-// the legacy `@bot <repo>` paths. It parses args, checks channel config,
-// short-circuits single-repo, and posts repo selector for multi.
+// the legacy bare-repo `@bot <repo>` paths. It parses args, checks channel
+// config, short-circuits single-repo, and posts repo selector for multi.
 func (w *IssueWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string) (NextStep, error) {
 	// Resolve channel config — caller (Task 2.6 shim) has already verified the
 	// channel is bound; Trigger just reads the config.
@@ -112,10 +111,11 @@ func (w *IssueWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args strin
 		// External-search: no repos configured for this channel.
 		p.Phase = "repo_search"
 		return NextStep{
-			Kind:            NextStepPostExternalSelector,
-			SelectorPrompt:  ":point_right: Search and select a repo:",
-			SelectorActions: nil, // placeholder text goes to ActionID in dispatcher
-			Pending:         p,
+			Kind:                NextStepPostExternalSelector,
+			SelectorPrompt:      ":point_right: Search and select a repo:",
+			SelectorActionID:    "repo_search",
+			SelectorPlaceholder: "Type to search repos...",
+			Pending:             p,
 		}, nil
 
 	case 1:
@@ -140,7 +140,7 @@ func (w *IssueWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args strin
 func (w *IssueWorkflow) Selection(ctx context.Context, p *Pending, value string) (NextStep, error) {
 	st, ok := p.State.(*issueState)
 	if !ok {
-		return NextStep{Kind: NextStepError, ErrorText: "IssueWorkflow: unexpected state type"}, nil
+		return NextStep{Kind: NextStepError, ErrorText: ":x: IssueWorkflow: unexpected state type"}, nil
 	}
 
 	// Back-to-repo always wins regardless of phase.
@@ -179,7 +179,7 @@ func (w *IssueWorkflow) Selection(ctx context.Context, p *Pending, value string)
 				Pending: p,
 			}, nil
 		default:
-			return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf("unexpected description value: %q", value)}, nil
+			return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf(":x: unexpected description value: %q", value)}, nil
 		}
 
 	case "description_modal":
@@ -188,7 +188,7 @@ func (w *IssueWorkflow) Selection(ctx context.Context, p *Pending, value string)
 		return NextStep{Kind: NextStepSubmit, Pending: p}, nil
 
 	default:
-		return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf("IssueWorkflow: unknown phase %q", p.Phase)}, nil
+		return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf(":x: IssueWorkflow: unknown phase %q", p.Phase)}, nil
 	}
 }
 
@@ -349,9 +349,11 @@ func (w *IssueWorkflow) handleBackToRepo(p *Pending, st *issueState) NextStep {
 	if len(repos) == 0 {
 		p.Phase = "repo_search"
 		return NextStep{
-			Kind:           NextStepPostExternalSelector,
-			SelectorPrompt: ":point_right: Search and select a repo:",
-			Pending:        p,
+			Kind:                NextStepPostExternalSelector,
+			SelectorPrompt:      ":point_right: Search and select a repo:",
+			SelectorActionID:    "repo_search",
+			SelectorPlaceholder: "Type to search repos...",
+			Pending:             p,
 		}
 	}
 

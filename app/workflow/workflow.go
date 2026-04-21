@@ -65,6 +65,10 @@ type NextStep struct {
 	SelectorActions []SelectorAction
 	SelectorBack    string // optional "back" action ID; empty = no back button
 
+	// PostExternalSelector — Kind == NextStepPostExternalSelector
+	SelectorActionID    string // Slack action_id for the external select
+	SelectorPlaceholder string // placeholder text shown in the search box
+
 	// OpenModal — Kind == NextStepOpenModal
 	ModalTriggerID string
 	ModalTitle     string
