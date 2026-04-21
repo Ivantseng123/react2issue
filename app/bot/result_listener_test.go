@@ -732,3 +732,152 @@ func TestResultListener_ParseMalformedRoutesToFailure(t *testing.T) {
 		t.Errorf("store status = %q, want JobFailed", state.Status)
 	}
 }
+
+func TestResultListener_DiagnosticsPrefersWorkerNickname(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jnick", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "ts1"})
+	store.SetAgentStatus("jnick", queue.StatusReport{
+		JobID:          "jnick",
+		WorkerID:       "host/worker-2",
+		WorkerNickname: "小明",
+		ToolCalls:      3,
+		FilesRead:      1,
+	})
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/1"}
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID:      "jnick",
+		Status:     "completed",
+		Title:      "Bug",
+		Body:       "body",
+		Labels:     []string{"bug"},
+		Confidence: "high",
+		FilesFound: 3,
+		StartedAt:  time.Now().Add(-30 * time.Second),
+		FinishedAt: time.Now(),
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	slackMock.mu.Lock()
+	defer slackMock.mu.Unlock()
+
+	var final string
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "Issue created") {
+			final = msg
+		}
+	}
+	if final == "" {
+		t.Fatalf("expected Issue-created message, got %v", slackMock.messages)
+	}
+	if !strings.Contains(final, "小明") {
+		t.Errorf("diagnostics should show nickname 小明, got %q", final)
+	}
+	if strings.Contains(final, "worker-2") {
+		t.Errorf("diagnostics should hide raw worker id when nickname is set, got %q", final)
+	}
+}
+
+func TestResultListener_FailureShowsNicknameAndWorkerID(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jfnick", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.SetAgentStatus("jfnick", queue.StatusReport{
+		JobID:          "jfnick",
+		WorkerID:       "host/worker-2",
+		WorkerNickname: "小明",
+	})
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID:  "jfnick",
+		Status: "failed",
+		Error:  "agent crashed",
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	slackMock.mu.Lock()
+	defer slackMock.mu.Unlock()
+
+	var fail string
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "分析失敗") {
+			fail = msg
+		}
+	}
+	if fail == "" {
+		t.Fatalf("expected failure message, got %v", slackMock.messages)
+	}
+	if !strings.Contains(fail, "小明") {
+		t.Errorf("failure should show nickname 小明, got %q", fail)
+	}
+	if !strings.Contains(fail, "host/worker-2") {
+		t.Errorf("failure should also show raw worker id for debugging, got %q", fail)
+	}
+}
+
+func TestResultListener_FailureWithoutNicknameShowsWorkerID(t *testing.T) {
+	store := queue.NewMemJobStore()
+	store.Put(&queue.Job{ID: "jfraw", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.SetAgentStatus("jfraw", queue.StatusReport{
+		JobID:    "jfraw",
+		WorkerID: "host/worker-3",
+	})
+
+	bundle := queue.NewInMemBundle(10, 3, store)
+	defer bundle.Close()
+
+	slackMock := &mockSlackPoster{}
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go listener.Listen(ctx)
+
+	bundle.Results.Publish(ctx, &queue.JobResult{
+		JobID:  "jfraw",
+		Status: "failed",
+		Error:  "boom",
+	})
+
+	time.Sleep(200 * time.Millisecond)
+
+	slackMock.mu.Lock()
+	defer slackMock.mu.Unlock()
+
+	var fail string
+	for _, msg := range slackMock.messages {
+		if strings.Contains(msg, "分析失敗") {
+			fail = msg
+		}
+	}
+	if fail == "" {
+		t.Fatalf("expected failure message, got %v", slackMock.messages)
+	}
+	if !strings.Contains(fail, "host/worker-3") {
+		t.Errorf("failure should show raw worker id when no nickname, got %q", fail)
+	}
+}

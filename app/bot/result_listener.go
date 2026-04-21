@@ -281,16 +281,25 @@ func (r *ResultListener) handleFailure(job *queue.Job, state *queue.JobState, re
 	r.store.UpdateStatus(job.ID, queue.JobFailed)
 
 	workerID := ""
+	workerNickname := ""
 	if state.AgentStatus != nil {
 		workerID = state.AgentStatus.WorkerID
+		workerNickname = state.AgentStatus.WorkerNickname
 	}
 	if workerID == "" {
 		workerID = state.WorkerID
 	}
 
+	label := workerNickname
+	if label == "" {
+		label = workerID
+	} else if workerID != "" {
+		label = fmt.Sprintf("%s (%s)", workerNickname, workerID)
+	}
+
 	workerInfo := ""
-	if workerID != "" {
-		workerInfo = fmt.Sprintf(" | worker: %s", workerID)
+	if label != "" {
+		workerInfo = fmt.Sprintf(" | worker: %s", label)
 	}
 
 	// Extract short error reason for Slack (before first colon detail, max 80 chars).
@@ -376,8 +385,8 @@ func (r *ResultListener) formatDiagnostics(job *queue.Job, result *queue.JobResu
 		agent = state.AgentStatus
 	}
 	if agent != nil {
-		if id := shortWorkerID(agent.WorkerID); id != "" {
-			parts = append(parts, id)
+		if label := formatWorkerLabel(agent.WorkerID, agent.WorkerNickname); label != "" {
+			parts = append(parts, label)
 		}
 	}
 	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
@@ -395,13 +404,6 @@ func (r *ResultListener) formatDiagnostics(job *queue.Job, result *queue.JobResu
 		parts = append(parts, fmt.Sprintf("$%.2f", result.CostUSD))
 	}
 	return strings.Join(parts, " · ")
-}
-
-func shortWorkerID(id string) string {
-	if i := strings.LastIndex(id, "/"); i >= 0 {
-		return id[i+1:]
-	}
-	return id
 }
 
 func humanDuration(d time.Duration) string {
