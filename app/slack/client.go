@@ -450,8 +450,11 @@ type ThreadRawMessage struct {
 	Files     []slack.File
 }
 
-// FetchThreadContext reads all messages in a thread up to the trigger point.
-func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID string, limit int) ([]ThreadRawMessage, error) {
+// FetchThreadContext reads all messages in a thread up to the trigger
+// point, filtering out our own bot's posts. botUserID and botID are
+// both checked because edge cases (custom username, thread broadcast,
+// new block API) can leave one field mismatched.
+func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID, botID string, limit int) ([]ThreadRawMessage, error) {
 	start := time.Now()
 	if limit <= 0 {
 		limit = 50
@@ -481,24 +484,44 @@ func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID st
 		cursor = nextCursor
 	}
 
-	result := filterThreadMessages(allMessages, triggerTS, botUserID)
+	result := filterThreadMessages(allMessages, triggerTS, botUserID, botID)
 	c.logger.Debug("訊息串內容已讀取", "phase", "處理中", "channel_id", channelID, "message_count", len(result), "duration_ms", time.Since(start).Milliseconds())
 	return result, nil
 }
 
-// filterThreadMessages filters out bot messages and messages at/after the trigger.
-func filterThreadMessages(messages []slack.Message, triggerTS, botUserID string) []ThreadRawMessage {
+// filterThreadMessages keeps messages from other participants (human or
+// external bots) and drops our own bot's posts (identified by botUserID
+// or botID). Bot messages get their text reconstructed from blocks or
+// attachments when m.Text is empty; messages whose reconstructed text is
+// also empty are dropped entirely. Bot display names are prefixed with
+// "bot:" in the User field so downstream prompts can tell them apart
+// from humans.
+func filterThreadMessages(messages []slack.Message, triggerTS, botUserID, botID string) []ThreadRawMessage {
 	var result []ThreadRawMessage
 	for _, m := range messages {
 		if m.Timestamp >= triggerTS {
 			continue
 		}
-		if m.BotID != "" || m.User == botUserID {
+		if botUserID != "" && m.User == botUserID {
 			continue
 		}
+		if botID != "" && m.BotID == botID {
+			continue
+		}
+		text := extractMessageText(m)
+		if m.BotID != "" && text == "" {
+			// Pure interactive / reaction-only bot message — no signal for triage.
+			continue
+		}
+		user := m.User
+		if m.BotID != "" {
+			if name := resolveBotDisplayName(m); name != "" {
+				user = "bot:" + name
+			}
+		}
 		result = append(result, ThreadRawMessage{
-			User:      m.User,
-			Text:      m.Text,
+			User:      user,
+			Text:      text,
 			Timestamp: m.Timestamp,
 			Files:     m.Files,
 		})
