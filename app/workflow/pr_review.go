@@ -178,13 +178,16 @@ func (w *PRReviewWorkflow) validateAndBuild(ctx context.Context, ev TriggerEvent
 
 // mapGitHubErrorToSlack turns raw GitHub client errors into friendly Slack text.
 // 404 / 403 / network classes each get a distinct message so operators can
-// self-diagnose without reading logs.
+// self-diagnose without reading logs. Status codes use HasPrefix because
+// ghclient.Client.GetPullRequest formats errors as "<code> <body>" — a Contains
+// check would misclassify a 500 whose body happens to contain "404". Network
+// errors (dial/timeout) stay on Contains since they have no structured prefix.
 func mapGitHubErrorToSlack(err error) string {
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "404"):
+	case strings.HasPrefix(msg, "404"):
 		return "找不到 PR"
-	case strings.Contains(msg, "403"):
+	case strings.HasPrefix(msg, "403"):
 		return "沒權限存取 PR"
 	case strings.Contains(msg, "dial"), strings.Contains(msg, "timeout"):
 		return "GitHub 不可達，請稍後重試"

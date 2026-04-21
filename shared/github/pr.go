@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 // Client is a thin GitHub REST client for endpoints that need precise HTTP
@@ -21,11 +22,13 @@ type Client struct {
 }
 
 // NewClient builds a Client. token is the GitHub PAT used for Authorization;
-// pass an empty string for unauthenticated requests (rate-limited).
+// pass an empty string for unauthenticated requests (rate-limited). Uses a
+// dedicated http.Client with a 10s timeout — never share http.DefaultClient
+// because callers mutating its Timeout would affect unrelated packages.
 func NewClient(token string) *Client {
 	return &Client{
 		token: token,
-		http:  http.DefaultClient,
+		http:  &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
