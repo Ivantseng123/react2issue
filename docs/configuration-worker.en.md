@@ -47,7 +47,6 @@ nickname_pool: ["Alice", "Bob", "Gary"]  # optional: random display nicknames dr
 
 prompt:
   extra_rules:                        # worker-side rules appended to the app prompt (flat!)
-    - "List every related file with its full path"
     - "Do not guess, do not invent"
 
 repo_cache:
