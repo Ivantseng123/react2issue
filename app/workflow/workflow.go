@@ -51,7 +51,8 @@ const (
 	NextStepOpenModal
 	NextStepSubmit
 	NextStepError
-	NextStepNoop // used when the workflow handled everything in-place (rare)
+	NextStepNoop                // used when the workflow handled everything in-place (rare)
+	NextStepPostExternalSelector // external searchable selector (no configured repos)
 )
 
 // NextStep is a discriminated union of what the dispatcher should do next.
