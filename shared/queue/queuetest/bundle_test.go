@@ -47,7 +47,7 @@ func TestResultBus_PublishAndSubscribe(t *testing.T) {
 	defer bundle.Close()
 	ctx := context.Background()
 	ch, _ := bundle.Results.Subscribe(ctx)
-	bundle.Results.Publish(ctx, &queue.JobResult{JobID: "j1", Status: "completed", Title: "test"})
+	bundle.Results.Publish(ctx, &queue.JobResult{JobID: "j1", Status: "completed", RawOutput: "test"})
 	select {
 	case r := <-ch:
 		if r.JobID != "j1" {

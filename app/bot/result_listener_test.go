@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ivantseng123/agentdock/app/workflow"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 	"github.com/Ivantseng123/agentdock/shared/queue/queuetest"
 )
@@ -22,7 +23,7 @@ type mockSlackPoster struct {
 	mu          sync.Mutex
 	messages    []string
 	buttons     []string
-	updateCalls []updateCall // NEW
+	updateCalls []updateCall
 }
 
 func (m *mockSlackPoster) PostMessage(channelID, text, threadTS string) {
@@ -34,7 +35,7 @@ func (m *mockSlackPoster) PostMessage(channelID, text, threadTS string) {
 func (m *mockSlackPoster) UpdateMessage(channelID, messageTS, text string) {
 	m.mu.Lock()
 	m.messages = append(m.messages, text)
-	m.updateCalls = append(m.updateCalls, updateCall{channelID, messageTS, text}) // NEW
+	m.updateCalls = append(m.updateCalls, updateCall{channelID, messageTS, text})
 	m.mu.Unlock()
 }
 
@@ -46,88 +47,49 @@ func (m *mockSlackPoster) PostMessageWithButton(channelID, text, threadTS, actio
 	return "msg-ts-mock", nil
 }
 
-type mockIssueCreator struct {
-	url string
-	err error
+// ── fake workflow ─────────────────────────────────────────────────────────────
+
+// fakeWorkflow is a configurable workflow.Workflow stub for listener dispatch
+// tests. It records calls to HandleResult and can be configured to return an
+// error or mutate result.Status.
+type fakeWorkflow struct {
+	taskType        string
+	handleResultErr error
+	// onHandleResult is called synchronously inside HandleResult if non-nil.
+	// Use it to mutate result.Status (e.g. simulate ERROR → "failed").
+	onHandleResult func(job *queue.Job, result *queue.JobResult)
+
+	mu           sync.Mutex
+	handleCalls  int
+	lastJob      *queue.Job
+	lastResult   *queue.JobResult
 }
 
-func (m *mockIssueCreator) CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (string, error) {
-	return m.url, m.err
+func newFakeWorkflow() *fakeWorkflow { return &fakeWorkflow{taskType: "issue"} }
+
+func (f *fakeWorkflow) Type() string { return f.taskType }
+func (f *fakeWorkflow) Trigger(ctx context.Context, ev workflow.TriggerEvent, args string) (workflow.NextStep, error) {
+	return workflow.NextStep{Kind: workflow.NextStepSubmit}, nil
+}
+func (f *fakeWorkflow) Selection(ctx context.Context, p *workflow.Pending, value string) (workflow.NextStep, error) {
+	return workflow.NextStep{Kind: workflow.NextStepSubmit}, nil
+}
+func (f *fakeWorkflow) BuildJob(ctx context.Context, p *workflow.Pending) (*queue.Job, string, error) {
+	return &queue.Job{TaskType: "issue"}, "status", nil
+}
+func (f *fakeWorkflow) HandleResult(ctx context.Context, job *queue.Job, result *queue.JobResult) error {
+	f.mu.Lock()
+	f.handleCalls++
+	f.lastJob = job
+	f.lastResult = result
+	f.mu.Unlock()
+	if f.onHandleResult != nil {
+		f.onHandleResult(job, result)
+	}
+	return f.handleResultErr
 }
 
-func TestResultListener_CompletedCreatesIssue(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
-
-	bundle := queuetest.NewBundle(10, 3, store)
-	defer bundle.Close()
-
-	slackMock := &mockSlackPoster{}
-	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/1"}
-
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go listener.Listen(ctx)
-
-	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:      "j1",
-		Status:     "completed",
-		Title:      "Bug",
-		Body:       "body",
-		Labels:     []string{"bug"},
-		Confidence: "high",
-		FilesFound: 3,
-	})
-
-	time.Sleep(200 * time.Millisecond)
-
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-	found := false
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "issues/1") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected issue URL in messages, got %v", slackMock.messages)
-	}
-
-	state, _ := store.Get("j1")
-	if state.Status != queue.JobCompleted {
-		t.Errorf("store status = %q, want JobCompleted", state.Status)
-	}
-}
-
-func TestResultListener_IssueCreationFailureMarksJobFailed(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jcerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
-
-	bundle := queuetest.NewBundle(10, 3, store)
-	defer bundle.Close()
-
-	slackMock := &mockSlackPoster{}
-	githubMock := &mockIssueCreator{err: errBoomGitHub}
-
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go listener.Listen(ctx)
-
-	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID: "jcerr", Status: "completed",
-		Title: "Bug", Body: "body", Confidence: "high", FilesFound: 2,
-	})
-	time.Sleep(200 * time.Millisecond)
-
-	state, _ := store.Get("jcerr")
-	if state.Status != queue.JobFailed {
-		t.Errorf("store status = %q, want JobFailed", state.Status)
-	}
-}
+// ── tests: failed path (listener-owned) ──────────────────────────────────────
 
 func TestResultListener_FailedPostsError(t *testing.T) {
 	store := queue.NewMemJobStore()
@@ -162,85 +124,6 @@ func TestResultListener_FailedPostsError(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected error in messages, got %v", slackMock.messages)
-	}
-}
-
-func TestResultListener_LowConfidenceRejects(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "j1", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
-
-	bundle := queuetest.NewBundle(10, 3, store)
-	defer bundle.Close()
-
-	slackMock := &mockSlackPoster{}
-
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go listener.Listen(ctx)
-
-	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:      "j1",
-		Status:     "completed",
-		Confidence: "low",
-	})
-
-	time.Sleep(200 * time.Millisecond)
-
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-	found := false
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "跳過") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected rejection in messages, got %v", slackMock.messages)
-	}
-
-	state, _ := store.Get("j1")
-	if state.Status != queue.JobCompleted {
-		t.Errorf("store status = %q, want JobCompleted", state.Status)
-	}
-}
-
-// REJECTED results carry the agent's reason in Message — the listener must
-// surface it so the user knows *why* we skipped, not just that we did.
-func TestResultListener_LowConfidenceIncludesMessage(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jmsg", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1"})
-
-	bundle := queuetest.NewBundle(10, 3, store)
-	defer bundle.Close()
-
-	slackMock := &mockSlackPoster{}
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, nil, nil, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go listener.Listen(ctx)
-
-	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:      "jmsg",
-		Status:     "completed",
-		Confidence: "low",
-		Message:    "repo has no login page code",
-	})
-
-	time.Sleep(200 * time.Millisecond)
-
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-	found := false
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "repo has no login page code") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected message in Slack text, got %v", slackMock.messages)
 	}
 }
 
@@ -344,6 +227,8 @@ func TestResultListener_FailedNoButtonAfterRetry(t *testing.T) {
 	}
 }
 
+// ── tests: cancelled path (listener-owned) ───────────────────────────────────
+
 func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jcan", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
@@ -382,6 +267,9 @@ func TestResultListener_CancelledResultUpdatesSlack(t *testing.T) {
 	}
 }
 
+// TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled
+// verifies that Design A dominates: if the store marks the job cancelled, a
+// concurrent "completed" result is routed to cancellation, not the workflow.
 func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(t *testing.T) {
 	store := queue.NewMemJobStore()
 	store.Put(&queue.Job{ID: "jrace", Repo: "o/r", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "S1"})
@@ -391,8 +279,8 @@ func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
-	github := &mockIssueCreator{url: "https://github.com/o/r/issues/42"}
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, github, nil, slog.Default())
+	fw := newFakeWorkflow()
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -400,18 +288,21 @@ func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(
 
 	bundle.Results.Publish(ctx, &queue.JobResult{
 		JobID: "jrace", Status: "completed",
-		Title: "Bug", Body: "b", Confidence: "high", FilesFound: 2,
+		RawOutput: `===TRIAGE_RESULT===` + "\n" + `{"status":"CREATED","title":"Bug"}`,
 	})
 	time.Sleep(200 * time.Millisecond)
+
+	// Workflow must NOT have been called — cancellation dominated.
+	fw.mu.Lock()
+	calls := fw.handleCalls
+	fw.mu.Unlock()
+	if calls != 0 {
+		t.Errorf("workflow.HandleResult must not be called when store says cancelled; got %d calls", calls)
+	}
 
 	slackMock.mu.Lock()
 	defer slackMock.mu.Unlock()
 
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "issues/42") {
-			t.Errorf("issue URL must not be posted when store says cancelled; messages=%v", slackMock.messages)
-		}
-	}
 	found := false
 	for _, msg := range slackMock.messages {
 		if strings.Contains(msg, "已取消") {
@@ -422,6 +313,8 @@ func TestResultListener_CompletedResultDeferredToCancellationWhenStoreCancelled(
 		t.Errorf("expected cancelled message, got %v", slackMock.messages)
 	}
 }
+
+// ── tests: dedup ──────────────────────────────────────────────────────────────
 
 func TestResultListener_DedupDropsDuplicateResult(t *testing.T) {
 	store := queue.NewMemJobStore()
@@ -452,6 +345,16 @@ func TestResultListener_DedupDropsDuplicateResult(t *testing.T) {
 	}
 }
 
+// ── tests: double-write StatusMsgTS (listener-owned) ─────────────────────────
+
+// TestHandleResult_FinalStatusMessageDoubleWrite verifies that the listener's
+// updateStatus issues a defensive re-write 2s after the initial update.
+// The "completed" path delegates to the workflow, which calls updateStatus
+// on its own slack port — but the listener still controls dedup and store.
+// Here we use a fake workflow that posts no Slack messages, verifying the
+// listener does NOT itself double-write for completed results (the workflow
+// owns that). We instead verify via the cancelled path, which uses
+// listener's own updateStatus.
 func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
 	slack := &mockSlackPoster{}
 	store := queue.NewMemJobStore()
@@ -459,18 +362,17 @@ func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
 		ID: "jdouble", Repo: "o/r", ChannelID: "C1",
 		ThreadTS: "T1", StatusMsgTS: "S1",
 	})
-	store.UpdateStatus("jdouble", queue.JobCompleted)
+	// Mark as cancelled so cancellation path fires (which uses listener's own updateStatus).
+	store.UpdateStatus("jdouble", queue.JobCancelled)
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
-	gh := &mockIssueCreator{url: "https://github.com/o/r/issues/1"}
-	r := NewResultListener(nil, store, bundle.Attachments, slack, gh, nil,
+	r := NewResultListener(nil, store, bundle.Attachments, slack, nil, nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	result := &queue.JobResult{
 		JobID: "jdouble", Status: "completed",
-		Title: "bug", Body: "desc", Labels: []string{"bug"},
 	}
 	r.handleResult(context.Background(), result)
 
@@ -507,289 +409,101 @@ func TestHandleResult_FinalStatusMessageDoubleWrite(t *testing.T) {
 	}
 }
 
-// TestResultListener_ParseCompletedCreatesIssue verifies the app-side parse
-// path: worker ships RawOutput with a valid TRIAGE_RESULT, the listener
-// parses it, and the parsed Title/Body/Labels flow into CreateIssue.
-func TestResultListener_ParseCompletedCreatesIssue(t *testing.T) {
+// ── tests: completed path dispatches to workflow ──────────────────────────────
+
+// TestResultListener_CompletedDispatchesToWorkflow verifies that a completed
+// result is forwarded to the workflow's HandleResult and the store is updated
+// to JobCompleted on success.
+func TestResultListener_CompletedDispatchesToWorkflow(t *testing.T) {
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jparse", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.Put(&queue.Job{ID: "jdisp", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
-	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/9"}
+	fw := newFakeWorkflow()
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go listener.Listen(ctx)
 
-	rawOutput := "Analysis done.\n\n===TRIAGE_RESULT===\n" +
-		`{"status":"CREATED","title":"Cache bug","body":"details","labels":["bug"],"confidence":"high","files_found":3}`
-
 	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:     "jparse",
+		JobID:     "jdisp",
 		Status:    "completed",
-		RawOutput: rawOutput,
+		RawOutput: "===TRIAGE_RESULT===\n{\"status\":\"CREATED\",\"title\":\"Bug\"}",
 	})
 
 	time.Sleep(200 * time.Millisecond)
 
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-	found := false
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "issues/9") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("expected issue URL in messages, got %v", slackMock.messages)
+	fw.mu.Lock()
+	calls := fw.handleCalls
+	fw.mu.Unlock()
+
+	if calls != 1 {
+		t.Errorf("expected workflow.HandleResult called once, got %d", calls)
 	}
 
-	state, _ := store.Get("jparse")
+	state, _ := store.Get("jdisp")
 	if state.Status != queue.JobCompleted {
 		t.Errorf("store status = %q, want JobCompleted", state.Status)
 	}
 }
 
-// TestResultListener_ParseRejectedRoutesToLowConfidence verifies that a
-// REJECTED agent payload triggers the "跳過" lane instead of issue creation.
-func TestResultListener_ParseRejectedRoutesToLowConfidence(t *testing.T) {
+// TestResultListener_WorkflowMutatesStatusToFailed verifies that when the
+// workflow mutates result.Status to "failed" (e.g. for ERROR or parse-fail),
+// the listener records JobFailed in the store and does NOT clear dedup.
+func TestResultListener_WorkflowMutatesStatusToFailed(t *testing.T) {
 	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jrej", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
+	store.Put(&queue.Job{ID: "jmfail", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
 
 	bundle := queuetest.NewBundle(10, 3, store)
 	defer bundle.Close()
 
 	slackMock := &mockSlackPoster{}
-	// If the listener were to misroute REJECTED to issue creation, this mock
-	// would return an error-free URL — a positive signal for the test to catch.
-	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/should-not-appear"}
+	var dedupMu sync.Mutex
+	dedupCleared := false
 
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
+	fw := newFakeWorkflow()
+	fw.onHandleResult = func(job *queue.Job, result *queue.JobResult) {
+		result.Status = "failed"
+	}
+
+	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, fw,
+		func(channelID, threadTS string) {
+			dedupMu.Lock()
+			dedupCleared = true
+			dedupMu.Unlock()
+		}, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	go listener.Listen(ctx)
 
-	rawOutput := "done.\n\n===TRIAGE_RESULT===\n" +
-		`{"status":"REJECTED","message":"not our repo"}`
-
 	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:     "jrej",
+		JobID:     "jmfail",
 		Status:    "completed",
-		RawOutput: rawOutput,
+		RawOutput: "===TRIAGE_RESULT===\n{\"status\":\"ERROR\",\"message\":\"gh exploded\"}",
 	})
 
 	time.Sleep(200 * time.Millisecond)
 
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "should-not-appear") {
-			t.Errorf("issue URL must not be posted for REJECTED; messages=%v", slackMock.messages)
-		}
-	}
-
-	skippedFound := false
-	reasonFound := false
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "跳過") {
-			skippedFound = true
-		}
-		if strings.Contains(msg, "not our repo") {
-			reasonFound = true
-		}
-	}
-	if !skippedFound {
-		t.Errorf("expected '跳過' in messages, got %v", slackMock.messages)
-	}
-	if !reasonFound {
-		t.Errorf("expected 'not our repo' reason in messages, got %v", slackMock.messages)
-	}
-
-	state, _ := store.Get("jrej")
-	if state.Status != queue.JobCompleted {
-		t.Errorf("store status = %q, want JobCompleted", state.Status)
-	}
-}
-
-// TestResultListener_ParseErrorRoutesToFailure verifies that an ERROR agent
-// payload is routed to the failure path (retry button, no issue).
-func TestResultListener_ParseErrorRoutesToFailure(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jerr", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
-
-	bundle := queuetest.NewBundle(10, 3, store)
-	defer bundle.Close()
-
-	slackMock := &mockSlackPoster{}
-	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/should-not-appear"}
-
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go listener.Listen(ctx)
-
-	rawOutput := "done.\n\n===TRIAGE_RESULT===\n" +
-		`{"status":"ERROR","message":"gh exploded"}`
-
-	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:     "jerr",
-		Status:    "completed",
-		RawOutput: rawOutput,
-	})
-
-	time.Sleep(200 * time.Millisecond)
-
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "should-not-appear") {
-			t.Errorf("issue URL must not be posted when agent ERRORs; messages=%v", slackMock.messages)
-		}
-	}
-
-	// handleFailure on first attempt posts a button.
-	if len(slackMock.buttons) != 1 {
-		t.Errorf("expected 1 retry button post, got %d (buttons=%v)", len(slackMock.buttons), slackMock.buttons)
-	}
-
-	foundAgentError := false
-	for _, msg := range slackMock.messages {
-		// handleFailure truncates the error at the first ":", so the Slack
-		// message surfaces "分析失敗: agent error" — we key on that prefix.
-		if strings.Contains(msg, "agent error") {
-			foundAgentError = true
-		}
-	}
-	if !foundAgentError {
-		t.Errorf("expected 'agent error' in failure message, got %v", slackMock.messages)
-	}
-
-	state, _ := store.Get("jerr")
+	state, _ := store.Get("jmfail")
 	if state.Status != queue.JobFailed {
 		t.Errorf("store status = %q, want JobFailed", state.Status)
 	}
-}
 
-// TestResultListener_ParseMalformedRoutesToFailure verifies that
-// unparseable agent output fails the job with a clear "parse failed" reason.
-func TestResultListener_ParseMalformedRoutesToFailure(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jbad", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1"})
-
-	bundle := queuetest.NewBundle(10, 3, store)
-	defer bundle.Close()
-
-	slackMock := &mockSlackPoster{}
-	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/should-not-appear"}
-
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go listener.Listen(ctx)
-
-	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:     "jbad",
-		Status:    "completed",
-		RawOutput: "totally not valid agent output",
-	})
-
-	time.Sleep(200 * time.Millisecond)
-
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "should-not-appear") {
-			t.Errorf("issue URL must not be posted when parse fails; messages=%v", slackMock.messages)
-		}
-	}
-
-	if len(slackMock.buttons) != 1 {
-		t.Errorf("expected 1 retry button post, got %d", len(slackMock.buttons))
-	}
-
-	foundParseFailed := false
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "parse failed") || strings.Contains(msg, "分析失敗") {
-			foundParseFailed = true
-		}
-	}
-	if !foundParseFailed {
-		t.Errorf("expected parse-failure indicator in messages, got %v", slackMock.messages)
-	}
-
-	state, _ := store.Get("jbad")
-	if state.Status != queue.JobFailed {
-		t.Errorf("store status = %q, want JobFailed", state.Status)
+	dedupMu.Lock()
+	actual := dedupCleared
+	dedupMu.Unlock()
+	if actual {
+		t.Error("dedup must NOT be cleared when workflow routes to failure (retry button path)")
 	}
 }
 
-func TestResultListener_DiagnosticsPrefersWorkerNickname(t *testing.T) {
-	store := queue.NewMemJobStore()
-	store.Put(&queue.Job{ID: "jnick", Repo: "owner/repo", ChannelID: "C1", ThreadTS: "T1", StatusMsgTS: "ts1"})
-	store.SetAgentStatus("jnick", queue.StatusReport{
-		JobID:          "jnick",
-		WorkerID:       "host/worker-2",
-		WorkerNickname: "小明",
-		ToolCalls:      3,
-		FilesRead:      1,
-	})
-
-	bundle := queuetest.NewBundle(10, 3, store)
-	defer bundle.Close()
-
-	slackMock := &mockSlackPoster{}
-	githubMock := &mockIssueCreator{url: "https://github.com/owner/repo/issues/1"}
-
-	listener := NewResultListener(bundle.Results, store, bundle.Attachments, slackMock, githubMock, nil, slog.Default())
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	go listener.Listen(ctx)
-
-	bundle.Results.Publish(ctx, &queue.JobResult{
-		JobID:      "jnick",
-		Status:     "completed",
-		Title:      "Bug",
-		Body:       "body",
-		Labels:     []string{"bug"},
-		Confidence: "high",
-		FilesFound: 3,
-		StartedAt:  time.Now().Add(-30 * time.Second),
-		FinishedAt: time.Now(),
-	})
-
-	time.Sleep(200 * time.Millisecond)
-
-	slackMock.mu.Lock()
-	defer slackMock.mu.Unlock()
-
-	var final string
-	for _, msg := range slackMock.messages {
-		if strings.Contains(msg, "Issue created") {
-			final = msg
-		}
-	}
-	if final == "" {
-		t.Fatalf("expected Issue-created message, got %v", slackMock.messages)
-	}
-	if !strings.Contains(final, "小明") {
-		t.Errorf("diagnostics should show nickname 小明, got %q", final)
-	}
-	if strings.Contains(final, "worker-2") {
-		t.Errorf("diagnostics should hide raw worker id when nickname is set, got %q", final)
-	}
-}
+// ── tests: worker info in failure messages ────────────────────────────────────
 
 func TestResultListener_FailureShowsNicknameAndWorkerID(t *testing.T) {
 	store := queue.NewMemJobStore()

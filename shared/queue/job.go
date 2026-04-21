@@ -71,13 +71,6 @@ type PromptContext struct {
 type JobResult struct {
 	JobID          string    `json:"job_id"`
 	Status         string    `json:"status"`
-	Title          string    `json:"title"`
-	Body           string    `json:"body"`
-	Labels         []string  `json:"labels"`
-	Confidence     string    `json:"confidence"`
-	FilesFound     int       `json:"files_found"`
-	Questions      int       `json:"open_questions"`
-	Message        string    `json:"message,omitempty"`
 	RawOutput      string    `json:"raw_output"`
 	Error          string    `json:"error"`
 	StartedAt      time.Time `json:"started_at"`

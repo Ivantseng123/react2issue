@@ -166,8 +166,9 @@ func Run(cfg *config.Config) (*Handle, error) {
 
 	// Build workflow registry + dispatcher.
 	slackPort := &slackAdapterPort{client: slackClient, logger: slackLogger}
+	issueWorkflow := workflow.NewIssueWorkflow(cfg, slackPort, issueClient, repoCache, repoDiscovery, agentLogger)
 	reg := workflow.NewRegistry()
-	reg.Register(workflow.NewIssueWorkflow(cfg, slackPort, issueClient, repoCache, repoDiscovery, agentLogger))
+	reg.Register(issueWorkflow)
 	dispatcher := workflow.NewDispatcher(reg, slackPort, appLogger)
 
 	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger)
@@ -370,7 +371,7 @@ func Run(cfg *config.Config) (*Handle, error) {
 	}
 	wf.SetSubmitHook(submitJob)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
-		&slackPosterAdapter{client: slackClient, logger: slackLogger}, issueClient,
+		&slackPosterAdapter{client: slackClient, logger: slackLogger}, issueWorkflow,
 		func(channelID, threadTS string) {
 			handler.ClearThreadDedup(channelID, threadTS)
 		}, agentLogger)

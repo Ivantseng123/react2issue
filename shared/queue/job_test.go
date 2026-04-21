@@ -2,6 +2,7 @@ package queue
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,28 @@ func TestPromptContext_JSONRoundTrip(t *testing.T) {
 	}
 	if !got.AllowWorkerRules {
 		t.Error("AllowWorkerRules = false, want true")
+	}
+}
+
+// TestJobResult_NoIssueSpecificFields asserts that JobResult does NOT carry
+// Issue-specific fields (Title, Body, Labels, Confidence, FilesFound,
+// Questions, Message). These are now owned by workflow-local types (e.g.
+// TriageResult) and must not appear on the wire type.
+// TestJobResult_NoIssueSpecificFields asserts that JobResult does NOT carry
+// Issue-specific fields (Title, Body, Labels, Confidence, FilesFound,
+// Questions, Message). These are now owned by workflow-local types (e.g.
+// TriageResult) and must not appear on the wire type.
+func TestJobResult_NoIssueSpecificFields(t *testing.T) {
+	r := JobResult{}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(data)
+	for _, banned := range []string{"title", "body", "labels", "confidence", "files_found", "open_questions", "message"} {
+		if strings.Contains(s, `"`+banned+`"`) {
+			t.Errorf("JobResult JSON must not contain field %q; got %s", banned, s)
+		}
 	}
 }
 

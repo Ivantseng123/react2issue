@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,19 +20,14 @@ type SlackPoster interface {
 	PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
 }
 
-// IssueCreator abstracts GitHub issue creation for testing.
-type IssueCreator interface {
-	CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (string, error)
-}
-
 type ResultListener struct {
-	results      queue.ResultBus
-	store        queue.JobStore
-	attachments  queue.AttachmentStore
-	slack        SlackPoster
-	github       IssueCreator
-	onDedupClear func(channelID, threadTS string)
-	logger       *slog.Logger
+	results       queue.ResultBus
+	store         queue.JobStore
+	attachments   queue.AttachmentStore
+	slack         SlackPoster
+	issueWorkflow workflow.Workflow
+	onDedupClear  func(channelID, threadTS string)
+	logger        *slog.Logger
 
 	mu                 sync.Mutex
 	processedJobs      map[string]bool
@@ -45,7 +39,7 @@ func NewResultListener(
 	store queue.JobStore,
 	attachments queue.AttachmentStore,
 	slack SlackPoster,
-	github IssueCreator,
+	issueWorkflow workflow.Workflow,
 	onDedupClear func(channelID, threadTS string),
 	logger *slog.Logger,
 ) *ResultListener {
@@ -54,7 +48,7 @@ func NewResultListener(
 		store:         store,
 		attachments:   attachments,
 		slack:         slack,
-		github:        github,
+		issueWorkflow: issueWorkflow,
 		onDedupClear:  onDedupClear,
 		logger:        logger,
 		processedJobs: make(map[string]bool),
@@ -101,7 +95,6 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	r.recordMetrics(state, result)
 
 	job := state.Job
-	owner, repo := splitRepo(job.Repo)
 
 	// Design A: user cancellation dominates, regardless of result.Status.
 	if state.Status == queue.JobCancelled || result.Status == "cancelled" {
@@ -110,93 +103,40 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 		return
 	}
 
-	logger := r.logger.With("job_id", result.JobID, "repo", job.Repo, "status", result.Status)
-
-	// Parse agent output for completed jobs. Non-completed results (failed/
-	// cancelled) skip this step, and tests that pre-populate parsed fields
-	// (without RawOutput) also fall through unchanged — this parse path is
-	// guarded by result.RawOutput != "".
-	if result.Status == "completed" && result.RawOutput != "" {
-		parsed, err := workflow.ParseAgentOutput(result.RawOutput)
-		if err != nil {
-			truncated := result.RawOutput
-			if len(truncated) > 2000 {
-				truncated = truncated[:2000] + "…(truncated)"
-			}
-			logger.Warn("解析失敗，輸出原始內容", "phase", "失敗", "output", truncated)
-			failed := *result
-			failed.Status = "failed"
-			failed.Error = fmt.Sprintf("parse failed: %v", err)
-			r.handleFailure(job, state, &failed)
-			r.attachments.Cleanup(ctx, result.JobID)
-			return
-		}
-		logger.Info("解析成功", "phase", "完成", "parsed_status", parsed.Status, "confidence", parsed.Confidence, "files_found", parsed.FilesFound)
-		switch parsed.Status {
-		case "REJECTED":
-			// "Not our bug" — short-circuit into the low-confidence lane below
-			// so the user sees the reason instead of an issue with an empty
-			// title.
-			result.Confidence = "low"
-			result.Message = parsed.Message
-		case "ERROR":
-			// Agent self-reported ERROR — route to failure so the user gets a
-			// retry button and a clear reason instead of a silent 422.
-			msg := parsed.Message
-			if msg == "" {
-				msg = "agent reported ERROR without message"
-			}
-			failed := *result
-			failed.Status = "failed"
-			failed.Error = fmt.Sprintf("agent error: %s", msg)
-			r.handleFailure(job, state, &failed)
-			r.attachments.Cleanup(ctx, result.JobID)
-			return
-		default:
-			// CREATED — populate the parsed fields on the result for the
-			// issue-creation path below.
-			result.Title = parsed.Title
-			result.Body = parsed.Body
-			result.Labels = []string(parsed.Labels)
-			result.Confidence = parsed.Confidence
-			result.FilesFound = parsed.FilesFound
-			result.Questions = parsed.Questions
-		}
-	}
-
-	switch result.Status {
-	case "failed":
-		truncated := result.RawOutput
-		if len(truncated) > 2000 {
-			truncated = truncated[:2000] + "…(truncated)"
-		}
-		logger.Warn("工作失敗", "phase", "降級", "error", result.Error, "raw_output", truncated)
-	default:
-		logger.Info("工作完成", "phase", "完成", "title", result.Title, "confidence", result.Confidence, "files_found", result.FilesFound)
-	}
-
-	switch {
-	case result.Status == "failed":
+	// Failed path: listener owns retry-button logic and store transition.
+	if result.Status == "failed" {
 		r.handleFailure(job, state, result)
-
-	case result.Confidence == "low":
-		metrics.IssueRejectedTotal.WithLabelValues("low_confidence").Inc()
-		r.store.UpdateStatus(job.ID, queue.JobCompleted)
-		text := ":warning: 判斷不屬於此 repo，已跳過"
-		if result.Message != "" {
-			text = text + "\n> " + result.Message
-		}
-		r.updateStatus(job, text)
-		r.clearDedup(job)
-
-	case result.FilesFound == 0 || result.Questions >= 5:
-		r.createAndPostIssue(ctx, job, owner, repo, result, true)
-		r.clearDedup(job)
-
-	default:
-		r.createAndPostIssue(ctx, job, owner, repo, result, false)
-		r.clearDedup(job)
+		r.attachments.Cleanup(ctx, result.JobID)
+		return
 	}
+
+	// Completed path: delegate entirely to the workflow handler.
+	// The workflow owns parsing (REJECTED/ERROR/CREATED), Slack posting, and
+	// GitHub side-effects. The listener keeps store-status transitions,
+	// dedup-clearing, and attachment cleanup.
+	if r.issueWorkflow != nil {
+		if err := r.issueWorkflow.HandleResult(ctx, job, result); err != nil {
+			r.logger.Error("工作完成處理失敗", "phase", "失敗", "job_id", result.JobID, "error", err)
+			// Treat as failure — no retry button on internal errors.
+			r.store.UpdateStatus(job.ID, queue.JobFailed)
+			r.clearDedup(job)
+			r.attachments.Cleanup(ctx, result.JobID)
+			return
+		}
+	}
+
+	// Store status transition: workflow may have mutated result.Status to
+	// "failed" (e.g. ERROR or parse-fail paths inside HandleResult).
+	if result.Status == "failed" {
+		r.store.UpdateStatus(job.ID, queue.JobFailed)
+		// Failed path inside completed: no dedup clear (retry button was posted
+		// by the workflow's handleFailure — keep dedup locked).
+		r.attachments.Cleanup(ctx, result.JobID)
+		return
+	}
+
+	r.store.UpdateStatus(job.ID, queue.JobCompleted)
+	r.clearDedup(job)
 
 	// Cleanup attachments.
 	r.attachments.Cleanup(ctx, result.JobID)
@@ -333,93 +273,6 @@ func (r *ResultListener) handleCancellation(job *queue.Job, state *queue.JobStat
 	r.clearDedup(job)
 }
 
-func (r *ResultListener) createAndPostIssue(ctx context.Context, job *queue.Job, owner, repo string, result *queue.JobResult, degraded bool) {
-	if r.github == nil {
-		metrics.IssueRejectedTotal.WithLabelValues("no_github").Inc()
-		r.slack.PostMessage(job.ChannelID,
-			":warning: GitHub client not configured", job.ThreadTS)
-		return
-	}
-
-	body := result.Body
-	if degraded {
-		body = stripTriageSection(body)
-	}
-
-	branchInfo := ""
-	if job.Branch != "" {
-		branchInfo = fmt.Sprintf(" (branch: `%s`)", job.Branch)
-	}
-
-	url, err := r.github.CreateIssue(ctx, owner, repo, result.Title, body, result.Labels)
-	if err != nil {
-		r.store.UpdateStatus(job.ID, queue.JobFailed)
-		r.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
-		return
-	}
-
-	confidence := result.Confidence
-	if confidence == "" {
-		confidence = "unknown"
-	}
-	metrics.IssueCreatedTotal.WithLabelValues(confidence, strconv.FormatBool(degraded)).Inc()
-
-	r.store.UpdateStatus(job.ID, queue.JobCompleted)
-
-	// Preserve worker diagnostics (worker id, elapsed, tool calls, files read,
-	// cost) on the final message so the thread captures what the job actually
-	// consumed. StatusReport only lives in the store while the job ran.
-	line := fmt.Sprintf(":white_check_mark: Issue created%s: %s", branchInfo, url)
-	if diag := r.formatDiagnostics(job, result); diag != "" {
-		line = line + "\n" + diag
-	}
-	r.updateStatus(job, line)
-}
-
-// formatDiagnostics renders "worker-0 · 5m 12s · 工具呼叫 42 · 讀檔 18 · $0.23".
-// Each segment is omitted when the underlying value is zero/empty so the line
-// stays compact for short jobs. Returns "" when nothing useful is available.
-func (r *ResultListener) formatDiagnostics(job *queue.Job, result *queue.JobResult) string {
-	var parts []string
-	var agent *queue.StatusReport
-	if state, err := r.store.Get(job.ID); err == nil && state != nil {
-		agent = state.AgentStatus
-	}
-	if agent != nil {
-		if label := formatWorkerLabel(agent.WorkerID, agent.WorkerNickname); label != "" {
-			parts = append(parts, label)
-		}
-	}
-	if elapsed := result.FinishedAt.Sub(result.StartedAt); elapsed > 0 {
-		parts = append(parts, humanDuration(elapsed))
-	}
-	if agent != nil {
-		if n := agent.ToolCalls; n > 0 {
-			parts = append(parts, fmt.Sprintf("工具呼叫 %d", n))
-		}
-		if n := agent.FilesRead; n > 0 {
-			parts = append(parts, fmt.Sprintf("讀檔 %d", n))
-		}
-	}
-	if result.CostUSD > 0 {
-		parts = append(parts, fmt.Sprintf("$%.2f", result.CostUSD))
-	}
-	return strings.Join(parts, " · ")
-}
-
-func humanDuration(d time.Duration) string {
-	s := int(d.Seconds())
-	if s < 60 {
-		return fmt.Sprintf("%ds", s)
-	}
-	m := s / 60
-	s = s % 60
-	if s == 0 {
-		return fmt.Sprintf("%dm", m)
-	}
-	return fmt.Sprintf("%dm %ds", m, s)
-}
-
 // SetStatusJobClearer installs a hook called after a result is fully handled,
 // so the StatusListener can drop its debounce bookkeeping for that job.
 func (r *ResultListener) SetStatusJobClearer(f func(jobID string)) {
@@ -448,21 +301,4 @@ func (r *ResultListener) clearDedup(job *queue.Job) {
 	if r.onDedupClear != nil {
 		r.onDedupClear(job.ChannelID, job.ThreadTS)
 	}
-}
-
-func splitRepo(repo string) (string, string) {
-	parts := strings.SplitN(repo, "/", 2)
-	if len(parts) != 2 {
-		return repo, ""
-	}
-	return parts[0], parts[1]
-}
-
-func stripTriageSection(body string) string {
-	for _, marker := range []string{"## Root Cause Analysis", "## TDD Fix Plan"} {
-		if idx := strings.Index(body, marker); idx > 0 {
-			body = strings.TrimSpace(body[:idx])
-		}
-	}
-	return body
 }
