@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/Ivantseng123/agentdock/app/mantis"
 	"github.com/Ivantseng123/agentdock/app/skill"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
+	"github.com/Ivantseng123/agentdock/app/workflow"
 	"github.com/Ivantseng123/agentdock/shared/crypto"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	"github.com/Ivantseng123/agentdock/shared/logging"
@@ -150,7 +152,25 @@ func Run(cfg *config.Config) (*Handle, error) {
 	)
 	coordinator.RegisterQueue("triage", bundle.Queue)
 
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, mantisClient, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader)
+	// Decode secret key for job encryption (used in submitJob below).
+	var secretKey []byte
+	if cfg.SecretKey != "" {
+		var skErr error
+		secretKey, skErr = crypto.DecodeSecretKey(cfg.SecretKey)
+		if skErr != nil {
+			appLogger.Warn("secret_key 解碼失敗，secret 加密功能停用", "phase", "失敗", "error", skErr)
+		}
+	}
+
+	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
+
+	// Build workflow registry + dispatcher.
+	slackPort := &slackAdapterPort{client: slackClient, logger: slackLogger}
+	reg := workflow.NewRegistry()
+	reg.Register(workflow.NewIssueWorkflow(cfg, slackPort, issueClient, repoCache, repoDiscovery, agentLogger))
+	dispatcher := workflow.NewDispatcher(reg, slackPort, appLogger)
+
+	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		DedupTTL:        5 * time.Minute,
@@ -165,7 +185,190 @@ func Run(cfg *config.Config) (*Handle, error) {
 	})
 	wf.SetHandler(handler)
 
-	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
+	// submitJob is the queue-submission closure wired to the workflow shim.
+	// It mirrors the old Workflow.runTriage logic, now accepting a *workflow.Pending
+	// and calling BuildJob on the matching registered workflow.
+	submitJob := func(ctx context.Context, p *workflow.Pending) {
+		wfImpl, ok := reg.Get(p.TaskType)
+		if !ok {
+			appLogger.Error("submitJob: unknown task_type", "phase", "失敗", "task_type", p.TaskType)
+			_ = slackPort.PostMessage(p.ChannelID, ":x: internal error: unknown workflow type", p.ThreadTS)
+			return
+		}
+
+		job, statusText, err := wfImpl.BuildJob(ctx, p)
+		if err != nil {
+			appLogger.Error("BuildJob failed", "phase", "失敗", "error", err)
+			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: %v", err), p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		}
+
+		// Post lifecycle status message.
+		statusMsgTS, postErr := slackPort.PostMessageWithTS(p.ChannelID, statusText, p.ThreadTS)
+		if postErr != nil {
+			appLogger.Warn("狀態訊息發送失敗", "phase", "失敗", "error", postErr)
+			statusMsgTS = ""
+		}
+
+		// Fetch thread context.
+		botUserID := ""
+		rawMsgs, err := slackPort.FetchThreadContext(p.ChannelID, p.ThreadTS, p.TriggerTS, botUserID, cfg.MaxThreadMessages)
+		if err != nil {
+			appLogger.Error("Failed to read thread", "phase", "失敗", "error", err)
+			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to read thread: %v", err), p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		}
+
+		// Enrich messages (Mantis URL expansion).
+		var threadMsgs []queue.ThreadMessage
+		for _, m := range rawMsgs {
+			text := m.Text
+			if mantisClient.IsConfigured() {
+				text = bot.EnrichMessage(text, mantisClient)
+			}
+			threadMsgs = append(threadMsgs, queue.ThreadMessage{
+				User:      slackPort.ResolveUser(m.User),
+				Timestamp: m.Timestamp,
+				Text:      text,
+			})
+		}
+
+		if len(threadMsgs) == 0 {
+			_ = slackPort.PostMessage(p.ChannelID, ":x: Thread has no messages to process", p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		}
+
+		// Download attachments.
+		tempDir, tempErr := os.MkdirTemp("", "triage-meta-*")
+		if tempErr != nil {
+			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to create temp dir: %v", tempErr), p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		}
+		defer os.RemoveAll(tempDir)
+
+		downloads := slackPort.DownloadAttachments(rawMsgs, tempDir)
+
+		// Build attachment metadata and payloads.
+		var attachMeta []queue.AttachmentMeta
+		var attachPayloads []queue.AttachmentPayload
+		for _, d := range downloads {
+			if d.Failed {
+				continue
+			}
+			attachMeta = append(attachMeta, queue.AttachmentMeta{
+				Filename: d.Name,
+				MimeType: d.Type,
+			})
+			data, readErr := os.ReadFile(d.Path)
+			if readErr != nil {
+				appLogger.Warn("Failed to read attachment", "name", d.Name, "error", readErr)
+				continue
+			}
+			attachPayloads = append(attachPayloads, queue.AttachmentPayload{
+				Filename: d.Name,
+				MimeType: d.Type,
+				Data:     data,
+				Size:     int64(len(data)),
+			})
+		}
+
+		// Enrich job with thread context and attachments.
+		if job.PromptContext != nil {
+			job.PromptContext.ThreadMessages = threadMsgs
+		}
+		job.Attachments = attachMeta
+		job.Skills = loadSkills(ctx, skillLoader, appLogger)
+
+		// Encrypt secrets if configured.
+		if len(secretKey) > 0 && len(cfg.Secrets) > 0 {
+			secretsJSON, mErr := json.Marshal(cfg.Secrets)
+			if mErr != nil {
+				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to marshal secrets: %v", mErr), p.ThreadTS)
+				if handler != nil {
+					handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+				}
+				return
+			}
+			encrypted, eErr := crypto.Encrypt(secretKey, secretsJSON)
+			if eErr != nil {
+				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to encrypt secrets: %v", eErr), p.ThreadTS)
+				if handler != nil {
+					handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+				}
+				return
+			}
+			job.EncryptedSecrets = encrypted
+		}
+
+		// Submit to queue.
+		if err := coordinator.Submit(ctx, job); err != nil {
+			if err == queue.ErrQueueFull {
+				_ = slackPort.PostMessage(p.ChannelID, ":warning: 系統忙碌，請稍後再試", p.ThreadTS)
+			} else {
+				_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to submit job: %v", err), p.ThreadTS)
+			}
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		}
+
+		// Prepare attachment payloads so workers can retrieve them.
+		if len(attachPayloads) > 0 {
+			if err := bundle.Attachments.Prepare(ctx, job.ID, attachPayloads); err != nil {
+				appLogger.Error("附件上傳至 Redis 失敗", "phase", "失敗", "error", err)
+				jobStore.UpdateStatus(job.ID, queue.JobFailed)
+				bundle.Results.Publish(ctx, &queue.JobResult{
+					JobID:      job.ID,
+					Status:     "failed",
+					Error:      fmt.Sprintf("attachment prepare failed: %v", err),
+					StartedAt:  time.Now(),
+					FinishedAt: time.Now(),
+				})
+				return
+			}
+		}
+
+		// Update the status message to show queue position.
+		pos, _ := coordinator.QueuePosition(job.ID)
+		var queueMsg string
+		if pos <= 1 {
+			queueMsg = ":hourglass_flowing_sand: 正在處理你的請求..."
+		} else {
+			queueMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
+		}
+
+		if statusMsgTS != "" {
+			if upErr := slackPort.UpdateMessageWithButton(p.ChannelID, statusMsgTS,
+				queueMsg, "cancel_job", "取消", job.ID); upErr != nil {
+				appLogger.Warn("狀態訊息更新失敗，改為另起新訊息", "phase", "失敗", "error", upErr)
+				statusMsgTS = ""
+			}
+		}
+		if statusMsgTS == "" {
+			if ts, pErr := slackPort.PostMessageWithButton(p.ChannelID,
+				queueMsg, p.ThreadTS, "cancel_job", "取消", job.ID); pErr == nil {
+				statusMsgTS = ts
+			}
+		}
+		if statusMsgTS != "" {
+			job.StatusMsgTS = statusMsgTS
+			jobStore.Put(job)
+		}
+	}
+	wf.SetSubmitHook(submitJob)
 	resultListener := bot.NewResultListener(bundle.Results, jobStore, bundle.Attachments,
 		&slackPosterAdapter{client: slackClient, logger: slackLogger}, issueClient,
 		func(channelID, threadTS string) {
@@ -375,4 +578,18 @@ func handleInteraction(
 		meta := cb.View.PrivateMetadata
 		wf.HandleDescriptionSubmit(meta, "")
 	}
+}
+
+// loadSkills loads the current skill set from the skill loader. Returns nil on
+// error so callers can treat a missing skill-set as "no skills" gracefully.
+func loadSkills(ctx context.Context, loader *skill.Loader, logger *slog.Logger) map[string]*queue.SkillPayload {
+	if loader == nil {
+		return nil
+	}
+	skills, err := loader.LoadAll(ctx)
+	if err != nil {
+		logger.Warn("載入 skill 失敗", "phase", "失敗", "error", err)
+		return nil
+	}
+	return skills
 }

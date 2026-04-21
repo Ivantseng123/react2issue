@@ -11,10 +11,10 @@ import (
 
 var urlRegex = regexp.MustCompile(`https?://[^\s<>|]+`)
 
-// enrichMessage expands URLs in the message with their content.
+// EnrichMessage expands URLs in the message with their content.
 // - Mantis URLs: fetch title + description via API
 // - Other URLs: kept as-is
-func enrichMessage(message string, mantisClient *mantis.Client) string {
+func EnrichMessage(message string, mantisClient *mantis.Client) string {
 	if mantisClient == nil || !mantisClient.IsConfigured() {
 		return message
 	}
