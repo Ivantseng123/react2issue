@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Ivantseng123/agentdock/app/workflow"
 	"github.com/Ivantseng123/agentdock/shared/metrics"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
@@ -116,7 +117,7 @@ func (r *ResultListener) handleResult(ctx context.Context, result *queue.JobResu
 	// (without RawOutput) also fall through unchanged — this parse path is
 	// guarded by result.RawOutput != "".
 	if result.Status == "completed" && result.RawOutput != "" {
-		parsed, err := ParseAgentOutput(result.RawOutput)
+		parsed, err := workflow.ParseAgentOutput(result.RawOutput)
 		if err != nil {
 			truncated := result.RawOutput
 			if len(truncated) > 2000 {
