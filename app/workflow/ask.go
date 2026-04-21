@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
+	"github.com/Ivantseng123/agentdock/shared/logging"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 // AskWorkflow handles @bot ask queries. Optional attached repo (short wizard),
@@ -39,14 +42,23 @@ func (w *AskWorkflow) Type() string { return "ask" }
 // Trigger posts the attach-repo selector regardless of whether args has
 // question text; if args is empty, the thread content is the question.
 func (w *AskWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string) (NextStep, error) {
+	// Populate common fields on the pending envelope — matches IssueWorkflow
+	// so BuildJob can rely on p.RequestID / p.Reporter / p.ChannelName.
+	reqID := logging.NewRequestID()
+	reporter := w.slack.ResolveUser(ev.UserID)
+	channelName := w.slack.GetChannelName(ev.ChannelID)
+
 	pending := &Pending{
-		ChannelID: ev.ChannelID,
-		ThreadTS:  ev.ThreadTS,
-		TriggerTS: ev.TriggerTS,
-		UserID:    ev.UserID,
-		Phase:     "ask_repo_prompt",
-		TaskType:  "ask",
-		State:     &askState{Question: args},
+		ChannelID:   ev.ChannelID,
+		ThreadTS:    ev.ThreadTS,
+		TriggerTS:   ev.TriggerTS,
+		UserID:      ev.UserID,
+		Reporter:    reporter,
+		ChannelName: channelName,
+		RequestID:   reqID,
+		Phase:       "ask_repo_prompt",
+		TaskType:    "ask",
+		State:       &askState{Question: args},
 	}
 	return NextStep{
 		Kind:           NextStepPostSelector,
@@ -109,4 +121,49 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 	}
 
 	return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf("unknown phase %q", p.Phase)}, nil
+}
+
+// BuildJob assembles the queue.Job from the completed pending state.
+// Status text is the message posted while the worker runs.
+func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, string, error) {
+	st, ok := p.State.(*askState)
+	if !ok {
+		return nil, "", fmt.Errorf("AskWorkflow.BuildJob: unexpected state type")
+	}
+
+	reqID := p.RequestID
+	if reqID == "" {
+		reqID = logging.NewRequestID()
+	}
+
+	cloneURL := ""
+	if st.AttachRepo && st.SelectedRepo != "" {
+		cloneURL = fmt.Sprintf("https://github.com/%s.git", st.SelectedRepo)
+	}
+
+	job := &queue.Job{
+		ID:          reqID,
+		RequestID:   reqID,
+		TaskType:    "ask",
+		ChannelID:   p.ChannelID,
+		ThreadTS:    p.ThreadTS,
+		UserID:      p.UserID,
+		Repo:        st.SelectedRepo,
+		CloneURL:    cloneURL,
+		SubmittedAt: time.Now(),
+		PromptContext: &queue.PromptContext{
+			Goal:             w.cfg.Prompt.Ask.Goal,
+			OutputRules:      w.cfg.Prompt.Ask.OutputRules,
+			Language:         w.cfg.Prompt.Language,
+			ExtraDescription: st.Question,
+			Channel:          p.ChannelName,
+			Reporter:         p.Reporter,
+			AllowWorkerRules: w.cfg.Prompt.IsWorkerRulesAllowed(),
+			// ThreadMessages, Attachments filled by downstream submit-helper.
+		},
+		// Skills intentionally nil — Ask flow defensive until empty-dir skill
+		// spike (Phase 4) observed-safe for a release cycle.
+		Skills: nil,
+	}
+	return job, ":thinking_face: 思考中...", nil
 }

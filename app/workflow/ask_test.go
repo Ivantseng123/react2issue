@@ -27,6 +27,11 @@ func TestAskWorkflow_Trigger_ReturnsRepoPrompt(t *testing.T) {
 	if len(step.SelectorActions) != 2 {
 		t.Errorf("expected 2 actions (attach/skip), got %d", len(step.SelectorActions))
 	}
+	// Identity resolution must populate RequestID on the Pending envelope
+	// so downstream BuildJob can re-use it (matches IssueWorkflow.Trigger).
+	if step.Pending == nil || step.Pending.RequestID == "" {
+		t.Error("Pending.RequestID must be populated by Trigger")
+	}
 }
 
 func newTestAskWorkflow(t *testing.T) (*AskWorkflow, *fakeSlackPort) {
@@ -111,5 +116,52 @@ func TestAskWorkflow_Selection_AttachWithNoReposUsesExternalSearch(t *testing.T)
 	st := p.State.(*askState)
 	if !st.AttachRepo {
 		t.Error("AttachRepo should be true after attach value")
+	}
+}
+
+func TestAskWorkflow_BuildJob_NoRepo_LeavesCloneURLEmpty(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		RequestID: "req-1",
+		State:     &askState{Question: "Q", AttachRepo: false},
+	}
+	job, status, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.TaskType != "ask" {
+		t.Errorf("TaskType = %q", job.TaskType)
+	}
+	if job.CloneURL != "" {
+		t.Errorf("CloneURL should be empty, got %q", job.CloneURL)
+	}
+	if job.Skills != nil {
+		t.Errorf("Skills should be nil for Ask (spec defensive)")
+	}
+	if status != ":thinking_face: 思考中..." {
+		t.Errorf("status = %q, want '思考中'", status)
+	}
+	if job.PromptContext == nil || job.PromptContext.Goal == "" {
+		t.Error("PromptContext.Goal must be populated (ApplyDefaults)")
+	}
+}
+
+func TestAskWorkflow_BuildJob_WithRepo_PopulatesCloneURL(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	p := &Pending{
+		ChannelID: "C1", ThreadTS: "1.0", UserID: "U1",
+		RequestID: "req-2",
+		State:     &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Repo != "foo/bar" {
+		t.Errorf("Repo = %q", job.Repo)
+	}
+	if job.CloneURL != "https://github.com/foo/bar.git" {
+		t.Errorf("CloneURL = %q", job.CloneURL)
 	}
 }
