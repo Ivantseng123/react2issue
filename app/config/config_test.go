@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -139,5 +140,52 @@ secrets:
 `)
 	if got := cfg.Secrets["MANTIS_API_TOKEN"]; got != "from-secrets" {
 		t.Errorf("MANTIS_API_TOKEN = %q, want from-secrets (user override preserved)", got)
+	}
+}
+
+func TestValidate_Mantis_PartialConfigBaseURLOnly(t *testing.T) {
+	cfg := loadFromString(t, `
+mantis:
+  base_url: https://mantis.example.com
+`)
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for partial mantis config")
+	}
+	if !strings.Contains(err.Error(), "mantis.base_url and mantis.api_token") {
+		t.Errorf("error = %v, want message naming both fields", err)
+	}
+}
+
+func TestValidate_Mantis_PartialConfigTokenOnly(t *testing.T) {
+	cfg := loadFromString(t, `
+mantis:
+  api_token: just-a-token
+`)
+	err := Validate(cfg)
+	if err == nil {
+		t.Fatal("expected validation error for partial mantis config")
+	}
+}
+
+func TestValidate_Mantis_BothEmpty_OK(t *testing.T) {
+	cfg := loadFromString(t, ``)
+	if err := Validate(cfg); err != nil {
+		if strings.Contains(err.Error(), "mantis") {
+			t.Errorf("got unexpected mantis error: %v", err)
+		}
+	}
+}
+
+func TestValidate_Mantis_BothSet_OK(t *testing.T) {
+	cfg := loadFromString(t, `
+mantis:
+  base_url: https://mantis.example.com
+  api_token: t
+`)
+	if err := Validate(cfg); err != nil {
+		if strings.Contains(err.Error(), "mantis") {
+			t.Errorf("got unexpected mantis error: %v", err)
+		}
 	}
 }
