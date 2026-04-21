@@ -263,13 +263,17 @@ func (w *IssueWorkflow) afterRepoSelected(p *Pending, channelCfg config.ChannelC
 		}
 		repoPath, err := w.repoCache.EnsureRepo(st.SelectedRepo, ghToken)
 		if err != nil {
-			// Graceful fallback: can't access repo → skip branch step.
-			p.Phase = "description"
-			return w.descriptionPromptStep(p)
+			// Surface the error so operators know repo access failed.
+			return NextStep{
+				Kind:      NextStepError,
+				ErrorText: fmt.Sprintf(":x: Failed to access repo %s: %v", st.SelectedRepo, err),
+				Pending:   p,
+			}
 		}
 		var listErr error
 		branches, listErr = w.repoCache.ListBranches(repoPath)
 		if listErr != nil {
+			// Graceful fallback: branch list unavailable → skip branch step.
 			p.Phase = "description"
 			return w.descriptionPromptStep(p)
 		}

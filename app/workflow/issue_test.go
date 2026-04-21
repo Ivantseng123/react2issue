@@ -119,6 +119,33 @@ func TestIssueWorkflow_BuildJob_SetsTaskType(t *testing.T) {
 	}
 }
 
+func TestIssueWorkflow_Trigger_NoChannelRepos_UsesExternalSelector(t *testing.T) {
+	// When channel config has no repos, Trigger falls back to external-search
+	// selector so the user can type a repo name. This preserves the old
+	// PostExternalSelector path.
+	w, _ := newTestIssueWorkflow(t) // no withChannelRepos opts → empty repos
+	ev := TriggerEvent{ChannelID: "C1", ThreadTS: "1.0", UserID: "U1"}
+
+	step, err := w.Trigger(context.Background(), ev, "")
+	if err != nil {
+		t.Fatalf("Trigger: %v", err)
+	}
+	if step.Kind != NextStepPostExternalSelector {
+		t.Errorf("expected NextStepPostExternalSelector, got %v", step.Kind)
+	}
+	if step.SelectorPrompt == "" {
+		t.Error("SelectorPrompt should carry the external-search placeholder text")
+	}
+	if step.Pending == nil || step.Pending.Phase != "repo_search" {
+		t.Errorf("Pending.Phase = %q, want repo_search", func() string {
+			if step.Pending == nil {
+				return "<nil>"
+			}
+			return step.Pending.Phase
+		}())
+	}
+}
+
 // ── test helpers ─────────────────────────────────────────────────────────────
 
 type issueOpt func(*config.Config)
