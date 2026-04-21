@@ -2,8 +2,12 @@ package prreview
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -111,3 +115,37 @@ func containsString(xs []string, s string) bool {
 }
 
 var _ = context.Background
+
+func TestFingerprint_PRAware(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module x\n\ngo 1.25\n")
+	mustWrite(t, filepath.Join(dir, "main.go"), "package main\n")
+	mustWrite(t, filepath.Join(dir, "services/billing/package.json"), `{"name":"billing"}`)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/pulls/42/files") {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[
+			{"filename":"services/billing/index.py","status":"modified","patch":"@@ -1 +1 @@\n-old\n+new"},
+			{"filename":"docs/intro.md","status":"added","patch":"@@ -0,0 +1 @@\n+hello"}
+		]`)
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	fp, err := Fingerprint(ctx, dir, "https://github.com/x/y/pull/42", "tok", fingerprintOptions{apiBase: srv.URL})
+	if err != nil {
+		t.Fatalf("Fingerprint: %v", err)
+	}
+	if !containsString(fp.PRTouchedLanguages, "python") {
+		t.Errorf("want python in pr_touched_languages, got %v", fp.PRTouchedLanguages)
+	}
+	if !containsString(fp.PRTouchedLanguages, "markdown") {
+		t.Errorf("want markdown in pr_touched_languages, got %v", fp.PRTouchedLanguages)
+	}
+	if !containsString(fp.PRSubprojects, "services/billing") {
+		t.Errorf("want services/billing in pr_subprojects, got %v", fp.PRSubprojects)
+	}
+}

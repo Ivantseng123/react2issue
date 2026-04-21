@@ -1,12 +1,89 @@
 package prreview
 
 import (
+	"context"
 	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// fingerprintOptions is for tests to inject a mock GitHub API base URL.
+// Production callers pass the zero value. (Renamed to FingerprintOptions in Task 10.)
+type fingerprintOptions struct {
+	apiBase string
+}
+
+// Fingerprint returns a full FingerprintResult combining local probes with
+// PR-aware fields fetched from the GitHub API.
+func Fingerprint(ctx context.Context, repoDir, prURL, token string, opts fingerprintOptions) (*FingerprintResult, error) {
+	fp, err := fingerprintLocal(repoDir)
+	if err != nil {
+		return nil, err
+	}
+
+	apiBase := opts.apiBase
+	if apiBase == "" {
+		apiBase = "https://api.github.com"
+	}
+	files, err := listDiffFiles(ctx, apiBase, prURL, token, DefaultMaxWallTime)
+	if err != nil {
+		// Surface empty PR-aware fields on API error; caller decides.
+		return fp, nil
+	}
+
+	fp.PRTouchedLanguages = prTouchedLanguages(files)
+	fp.PRSubprojects = prSubprojects(repoDir, files)
+	return fp, nil
+}
+
+func prTouchedLanguages(files []PRFile) []string {
+	extLang := map[string]string{
+		".go": "go", ".py": "python", ".ts": "ts", ".tsx": "ts",
+		".js": "js", ".jsx": "js", ".rs": "rust", ".rb": "ruby",
+		".java": "java", ".md": "markdown", ".yml": "yaml", ".yaml": "yaml",
+		".toml": "toml", ".json": "json",
+	}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, f := range files {
+		ext := strings.ToLower(filepath.Ext(f.Filename))
+		if l, ok := extLang[ext]; ok && !seen[l] {
+			seen[l] = true
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func prSubprojects(repoDir string, files []PRFile) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, f := range files {
+		dir := filepath.Dir(f.Filename)
+		for dir != "." && dir != "/" && dir != "" {
+			if hasManifest(filepath.Join(repoDir, dir)) {
+				if !seen[dir] {
+					seen[dir] = true
+					out = append(out, dir)
+				}
+				break
+			}
+			dir = filepath.Dir(dir)
+		}
+	}
+	return out
+}
+
+func hasManifest(dir string) bool {
+	for _, m := range []string{"go.mod", "package.json", "pyproject.toml", "Cargo.toml", "Gemfile", "pom.xml", "build.gradle"} {
+		if fileExists(filepath.Join(dir, m)) {
+			return true
+		}
+	}
+	return false
+}
 
 // fingerprintLocal inspects a cloned repo on disk and returns the language,
 // style sources, test runner, and framework best guesses. Missing files are

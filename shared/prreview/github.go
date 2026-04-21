@@ -3,9 +3,12 @@ package prreview
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -117,4 +120,87 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
+}
+
+// PRFile is the minimal shape we need from GET /pulls/:n/files.
+type PRFile struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"`
+	Patch    string `json:"patch"`
+}
+
+var prURLPattern = regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/pull/(\d+)`)
+
+func parsePRURL(s string) (owner, repo string, number int, err error) {
+	m := prURLPattern.FindStringSubmatch(s)
+	if m == nil {
+		return "", "", 0, fmt.Errorf("not a github.com PR URL: %q", s)
+	}
+	n, err := strconv.Atoi(m[3])
+	if err != nil {
+		return "", "", 0, fmt.Errorf("invalid PR number in %q: %w", s, err)
+	}
+	return m[1], m[2], n, nil
+}
+
+// listDiffFiles fetches GET /repos/{owner}/{repo}/pulls/{n}/files with
+// pagination. apiBase lets tests point at an httptest.Server.URL.
+func listDiffFiles(ctx context.Context, apiBase, prURL, token string, maxWallTime time.Duration) ([]PRFile, error) {
+	owner, repo, num, err := parsePRURL(prURL)
+	if err != nil {
+		return nil, err
+	}
+
+	var all []PRFile
+	page := 1
+	for {
+		u := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/files?per_page=100&page=%d",
+			strings.TrimRight(apiBase, "/"), url.PathEscape(owner), url.PathEscape(repo), num, page)
+		req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+
+		resp, err := httpCallWithRetry(ctx, req, maxWallTime)
+		if err != nil {
+			return nil, err
+		}
+
+		if resp.StatusCode == 401 {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("%s", ErrGitHubUnauth)
+		}
+		if resp.StatusCode == 403 {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("%s", ErrGitHubForbidden)
+		}
+		if resp.StatusCode == 404 {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("%s", ErrGitHubNotFound)
+		}
+		if resp.StatusCode >= 400 {
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("list files: %d %s", resp.StatusCode, string(body))
+		}
+
+		var page1 []PRFile
+		if err := json.NewDecoder(resp.Body).Decode(&page1); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("decode list files: %w", err)
+		}
+		_ = resp.Body.Close()
+
+		all = append(all, page1...)
+		if len(page1) < 100 {
+			break
+		}
+		page++
+		if page > 20 {
+			break
+		}
+	}
+	return all, nil
 }
