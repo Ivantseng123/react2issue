@@ -423,3 +423,74 @@ func TestSubmit_BusyEnqueueOK_SetsBusyHint(t *testing.T) {
 		t.Errorf("BusyHint should contain 預估等候; got %q", gotPending.BusyHint)
 	}
 }
+
+func TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{SoftVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers}}
+	cfg := &config.Config{
+		Channels: map[string]config.ChannelConfig{"C1": {}},
+	}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	onSubmitCalled := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		onSubmitCalled = true
+	})
+
+	wf.HandleTrigger(slackclient.TriggerEvent{
+		ChannelID: "C1",
+		ThreadTS:  "T1",
+		TriggerTS: "T1",
+		UserID:    "U1",
+		Text:      "issue foo/bar",
+	})
+
+	if avail.SoftCalls != 1 {
+		t.Errorf("SoftCalls = %d, want 1", avail.SoftCalls)
+	}
+
+	foundWarn := false
+	for _, m := range sl.posted {
+		if strings.Contains(m, ":warning:") && strings.Contains(m, "沒有 worker") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("expected :warning: soft warn; got posts: %+v", sl.posted)
+	}
+
+	// fakeIssueWorkflow.Trigger returns NextStepSubmit → submit() runs. The stub's
+	// hard verdict is zero-valued (VerdictKind("")) which matches none of the switch
+	// cases, so submit() falls through to onSubmit. That's the assertion that soft
+	// warn doesn't short-circuit dispatch.
+	if !onSubmitCalled {
+		t.Error("soft warn must not block dispatch; expected onSubmit to still be called")
+	}
+}
+
+func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{SoftVerdict: queue.Verdict{Kind: queue.VerdictOK}}
+	cfg := &config.Config{
+		Channels: map[string]config.ChannelConfig{"C1": {}},
+	}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
+
+	wf.HandleTrigger(slackclient.TriggerEvent{
+		ChannelID: "C1", ThreadTS: "T1", TriggerTS: "T1", UserID: "U1", Text: "issue foo/bar",
+	})
+
+	for _, m := range sl.posted {
+		if strings.Contains(m, "沒有 worker") {
+			t.Errorf("OK verdict should not post soft warn; got %q", m)
+		}
+	}
+}

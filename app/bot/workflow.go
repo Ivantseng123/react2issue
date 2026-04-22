@@ -100,6 +100,16 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		}
 	}
 
+	// Soft availability check — informational only; do NOT block dispatch.
+	// The hard check inside submit() gates actual queue submission.
+	if w.availability != nil {
+		verdict := w.availability.CheckSoft(context.Background())
+		if verdict.Kind == queue.VerdictNoWorkers {
+			_ = w.slack.PostMessage(event.ChannelID,
+				RenderSoftWarn(verdict), event.ThreadTS)
+		}
+	}
+
 	ctx := context.Background()
 	ev := workflow.TriggerEvent{
 		ChannelID: event.ChannelID,
