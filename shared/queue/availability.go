@@ -67,10 +67,36 @@ func (a *availability) compute(ctx context.Context) Verdict {
 	if len(workers) == 0 {
 		return Verdict{Kind: VerdictNoWorkers}
 	}
+
+	depth := a.queue.QueueDepth()
+	states, err := a.store.ListAll()
+	if err != nil {
+		a.logger.Warn("可用性檢查: 列舉工作狀態失敗", "phase", "失敗", "error", err)
+		return Verdict{Kind: VerdictOK, WorkerCount: len(workers), TotalSlots: totalSlots}
+	}
+	running := 0
+	for _, s := range states {
+		if s.Status == JobPreparing || s.Status == JobRunning {
+			running++
+		}
+	}
+	active := depth + running
+
+	if active >= totalSlots {
+		overflow := active - totalSlots + 1
+		return Verdict{
+			Kind:          VerdictBusyEnqueueOK,
+			WorkerCount:   len(workers),
+			TotalSlots:    totalSlots,
+			ActiveJobs:    active,
+			EstimatedWait: time.Duration(overflow) * a.avgJob,
+		}
+	}
 	return Verdict{
 		Kind:        VerdictOK,
 		WorkerCount: len(workers),
 		TotalSlots:  totalSlots,
+		ActiveJobs:  active,
 	}
 }
 

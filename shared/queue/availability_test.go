@@ -48,3 +48,52 @@ func TestAvailability_NoWorkers(t *testing.T) {
 		t.Errorf("WorkerCount = %d, want 0", v.WorkerCount)
 	}
 }
+
+func TestAvailability_BusyEnqueueOK_FullySaturated(t *testing.T) {
+	q, store, a := newAvail(t)
+	ctx := context.Background()
+
+	q.Register(ctx, queue.WorkerInfo{WorkerID: "w1", Slots: 1})
+	q.Register(ctx, queue.WorkerInfo{WorkerID: "w2", Slots: 1})
+
+	// Two jobs in JobRunning consume both slots; queue depth = 0.
+	store.Put(&queue.Job{ID: "j1"})
+	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(&queue.Job{ID: "j2"})
+	store.UpdateStatus("j2", queue.JobRunning)
+
+	v := a.CheckHard(ctx)
+	if v.Kind != queue.VerdictBusyEnqueueOK {
+		t.Errorf("Kind = %q, want %q", v.Kind, queue.VerdictBusyEnqueueOK)
+	}
+	if v.ActiveJobs != 2 {
+		t.Errorf("ActiveJobs = %d, want 2", v.ActiveJobs)
+	}
+	wantETA := 1 * 3 * time.Minute // overflow=1
+	if v.EstimatedWait != wantETA {
+		t.Errorf("EstimatedWait = %v, want %v", v.EstimatedWait, wantETA)
+	}
+}
+
+func TestAvailability_BusyEnqueueOK_WithQueueDepth(t *testing.T) {
+	q, store, a := newAvail(t)
+	ctx := context.Background()
+
+	q.Register(ctx, queue.WorkerInfo{WorkerID: "w1", Slots: 1})
+
+	// 1 running + 4 queued = 5 active, slots = 1, overflow = 5
+	store.Put(&queue.Job{ID: "j1"})
+	store.UpdateStatus("j1", queue.JobRunning)
+	for i := 0; i < 4; i++ {
+		q.Submit(ctx, &queue.Job{ID: "p" + string(rune('a'+i))})
+	}
+
+	v := a.CheckHard(ctx)
+	if v.Kind != queue.VerdictBusyEnqueueOK {
+		t.Errorf("Kind = %q, want %q", v.Kind, queue.VerdictBusyEnqueueOK)
+	}
+	wantETA := time.Duration(5) * 3 * time.Minute
+	if v.EstimatedWait != wantETA {
+		t.Errorf("EstimatedWait = %v, want %v", v.EstimatedWait, wantETA)
+	}
+}
