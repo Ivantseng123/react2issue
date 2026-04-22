@@ -106,6 +106,9 @@ func (a *availability) compute(ctx context.Context) Verdict {
 		return Verdict{Kind: VerdictNoWorkers}
 	}
 
+	// QueueDepth() has no error return (interface signature in queue.JobQueue),
+	// so it never contributes to depErrorHook. Spec test matrix lists it as a
+	// fail-open dep, but the interface makes that case unreachable today.
 	depth := a.queue.QueueDepth()
 	states, err := a.store.ListAll()
 	if err != nil {

@@ -437,8 +437,10 @@ func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
 		verdict := w.availability.CheckHard(ctx)
 		switch verdict.Kind {
 		case queue.VerdictNoWorkers:
-			_ = w.slack.PostMessage(p.ChannelID,
-				RenderHardReject(verdict), p.ThreadTS)
+			if err := w.slack.PostMessage(p.ChannelID,
+				RenderHardReject(verdict), p.ThreadTS); err != nil {
+				w.logger.Error("可用性檢查: 硬性拒絕訊息發送失敗", "phase", "失敗", "error", err)
+			}
 			if w.handler != nil {
 				w.handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
 			}
