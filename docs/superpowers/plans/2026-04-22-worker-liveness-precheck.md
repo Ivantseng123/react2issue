@@ -6,18 +6,18 @@
 
 **Goal:** Wire a two-stage worker availability precheck into the Slack triage flow so that the user is told (a) at trigger time when no workers are online, and (b) at submit time gets a hard reject (no workers) or an ETA (busy) — replacing today's silent wait that ends in a watchdog timeout.
 
-**Architecture:** New `shared/queue.WorkerAvailability` service produces a typed `Verdict` from `JobQueue.ListWorkers`, `JobQueue.QueueDepth`, and `JobStore.ListAll`. The Slack adapter (`app/bot/workflow.go`) calls `CheckSoft` in `HandleTrigger` (non-blocking warn) and `CheckHard` at the top of `runTriage` (can reject). A small `app/bot/verdict_message.go` translates `Verdict` into Slack-flavored text — the seam where future mediums plug in their own renderers.
+**Architecture:** New `shared/queue.WorkerAvailability` service produces a typed `Verdict` from `JobQueue.ListWorkers`, `JobQueue.QueueDepth`, and `JobStore.ListAll`. The Slack adapter (`app/bot/workflow.go`, post-dispatcher refactor) calls `CheckSoft` in `HandleTrigger` (non-blocking warn) and `CheckHard` inside a new `submit()` helper that consolidates the three current `executeStep` → `onSubmit` call sites. A small `app/bot/verdict_message.go` translates `Verdict` into Slack-flavored text — the seam where future mediums plug in their own renderers. `workflow.Pending` gains an exported `BusyHint` field so the `submitJob` closure in `app/app.go` can append the ETA hint to the lifecycle status text returned by `BuildJob`.
 
 **Tech Stack:** Go 1.22+ / `slog` / `prometheus/client_golang` / existing `shared/queue` Redis transport / `queuetest` in-memory bundle for unit tests.
 
 **Phases (one commit per task):**
 1. Data model — `WorkerInfo.Slots`
-2. Availability service — TDD growth
+2. Availability service — TDD growth (5 tasks)
 3. Metrics
 4. Verdict rendering
-5. Workflow integration (4 sub-tasks)
+5. Workflow integration (4 tasks: wiring → submit() helper + NoWorkers → BusyHint on busy → soft warn)
 6. Worker side
-7. App wiring + config
+7. App wiring + config (config struct → app.go construction + BusyHint append)
 8. Final verification
 
 ---
@@ -27,11 +27,11 @@
 ### Task 1: Add `Slots` field to `WorkerInfo`
 
 **Files:**
-- Modify: `shared/queue/job.go:116-123`
+- Modify: `shared/queue/job.go` (`WorkerInfo` struct, around line 111)
 
 - [ ] **Step 1: Add the field**
 
-In `shared/queue/job.go`, replace the existing `WorkerInfo` struct (lines 116–123) with:
+In `shared/queue/job.go`, replace the existing `WorkerInfo` struct (the block beginning `type WorkerInfo struct {`) with:
 
 ```go
 type WorkerInfo struct {
@@ -649,12 +649,12 @@ EOF
 ### Task 7: Add availability metrics + register + wire
 
 **Files:**
-- Modify: `shared/metrics/metrics.go:139-194`
+- Modify: `shared/metrics/metrics.go` (`WatchdogKillsTotal` ~line 135, `Register` ~line 165)
 - Modify: `shared/queue/availability.go`
 
 - [ ] **Step 1: Add the three new metrics in `shared/metrics/metrics.go`**
 
-After the existing `WatchdogKillsTotal` declaration (around line 145), insert:
+After the existing `WatchdogKillsTotal` declaration (around line 141), insert:
 
 ```go
 // ---- Availability ----
@@ -1015,110 +1015,142 @@ EOF
 
 ## Phase 5 — Workflow Integration
 
-### Task 9: Inject availability + add busyHint field (no behaviour change yet)
+### Task 9: Add availability wiring + `Pending.BusyHint` (no behaviour yet)
 
 **Files:**
-- Modify: `app/bot/workflow.go:60-115` (Workflow struct + NewWorkflow)
-- Modify: `app/bot/workflow.go:41-58` (pendingTriage struct)
+- Modify: `app/workflow/workflow.go` (`Pending` struct, ~line 30)
+- Modify: `app/bot/workflow.go` (`Workflow` struct ~line 19, `NewWorkflow` ~line 38)
+- Modify: `app/bot/workflow_test.go` (5 existing `NewWorkflow` call sites need a trailing `nil`)
+- Modify: `app/app.go` (`bot.NewWorkflow(...)` call ~line 170 — append `nil` placeholder until Task 15)
 
-- [ ] **Step 1: Add the field, constructor param, and pendingTriage field**
+- [ ] **Step 1: Add `BusyHint` to `workflow.Pending`**
 
-In `app/bot/workflow.go`:
-
-(a) Inside `pendingTriage` (around line 41–58), append:
+In `app/workflow/workflow.go`, append a `BusyHint` field to the `Pending` struct:
 
 ```go
-type pendingTriage struct {
-	// ... existing fields ...
-	RepoWasPicked  bool
-	busyHint       string // populated by hard check when verdict is BusyEnqueueOK
+type Pending struct {
+	ChannelID   string
+	ThreadTS    string
+	TriggerTS   string
+	UserID      string
+	Reporter    string
+	ChannelName string
+	RequestID   string
+	SelectorTS  string // TS of the latest selector/modal message; used as pending-map key
+	Phase       string // workflow-defined phase label
+	TaskType    string // workflow identity, equal to Workflow.Type()
+	State       any    // per-workflow state struct
+	BusyHint    string // populated by bot.Workflow.submit() when verdict is BusyEnqueueOK; app.submitJob appends to statusText
 }
 ```
 
-(b) Inside `Workflow` (around line 60–77), add an `availability` field:
+- [ ] **Step 2: Add `availability` field + extend `NewWorkflow` signature in `app/bot/workflow.go`**
+
+(a) Add the field to the `Workflow` struct (around line 19):
 
 ```go
 type Workflow struct {
-	// ... existing fields ...
-	skillProvider SkillProvider
-	secretKey     []byte
-	identity      Identity
+	cfg           *config.Config
+	dispatcher    *workflow.Dispatcher
+	slack         workflow.SlackPort
+	handler       *slackclient.Handler
+	repoDiscovery *ghclient.RepoDiscovery
+	logger        *slog.Logger
 	availability  queue.WorkerAvailability // NEW
 
 	mu        sync.Mutex
-	pending   map[string]*pendingTriage
+	pending   map[string]*workflow.Pending
 	autoBound map[string]bool
+
+	onSubmit func(ctx context.Context, p *workflow.Pending)
 }
 ```
 
-(c) Update the `NewWorkflow` signature (around line 79–115). Add `availability queue.WorkerAvailability` as the LAST parameter (after `identity Identity`):
+(b) Add `"github.com/Ivantseng123/agentdock/shared/queue"` to the imports if not already present.
+
+(c) Update `NewWorkflow` to accept availability as the LAST parameter:
 
 ```go
 func NewWorkflow(
 	cfg *config.Config,
-	slack slackAPI,
-	repoCache *ghclient.RepoCache,
+	dispatcher *workflow.Dispatcher,
+	slack workflow.SlackPort,
 	repoDiscovery *ghclient.RepoDiscovery,
-	jobQueue queue.JobQueue,
-	jobStore queue.JobStore,
-	attachStore queue.AttachmentStore,
-	resultBus queue.ResultBus,
-	skillProvider SkillProvider,
-	identity Identity,
+	logger *slog.Logger,
 	availability queue.WorkerAvailability, // NEW
 ) *Workflow {
+	return &Workflow{
+		cfg:           cfg,
+		dispatcher:    dispatcher,
+		slack:         slack,
+		repoDiscovery: repoDiscovery,
+		logger:        logger,
+		availability:  availability, // NEW
+		pending:       make(map[string]*workflow.Pending),
+		autoBound:     make(map[string]bool),
+	}
+}
 ```
 
-And inside the function body, add `availability: availability,` to the struct literal.
+- [ ] **Step 3: Update existing `NewWorkflow` call sites in tests**
 
-- [ ] **Step 2: Update the only existing caller (`app/app.go:142`)**
-
-In `app/app.go` line 142, the current call is:
+`app/bot/workflow_test.go` has 5 calls of the form `NewWorkflow(cfg, disp, slack, nil, nil)` (search for `:= NewWorkflow(`). Append a trailing `nil` argument to each so they pass `nil` for the new `availability` parameter:
 
 ```go
-wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader, identity)
+wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 ```
 
-Update to pass `nil` for now (Task 15 will replace this with a real instance):
+Also in `app/bot/workflow_test.go:222` the call is `NewWorkflow(cfg, disp, sl, nil, slog.Default())` — becomes `NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)`.
+
+- [ ] **Step 4: Update the production caller in `app/app.go`**
+
+In `app/app.go` around line 170, the current call is:
 
 ```go
-wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader, identity, nil)
+wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger)
 ```
 
-- [ ] **Step 3: Verify the whole tree compiles**
+Append a `nil` (Task 15 replaces this with a real instance):
+
+```go
+wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger, nil)
+```
+
+- [ ] **Step 5: Verify the whole tree compiles**
 
 Run: `go build ./...`
 Expected: success.
 
-- [ ] **Step 4: Run all existing tests (regression)**
+- [ ] **Step 6: Run all tests (regression)**
 
 Run: `go test ./...`
-Expected: all PASS. (No existing test calls `HandleTrigger` or `runTriage`, so the nil `availability` is not yet dereferenced. The new tests in Tasks 10–12 will set a stub.)
+Expected: all PASS. The new `availability` field is nil; no existing test touches availability. New tests in Tasks 10–12 will set a stub.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add app/bot/workflow.go app/app.go
+git add app/workflow/workflow.go app/bot/workflow.go app/bot/workflow_test.go app/app.go
 git commit -m "$(cat <<'EOF'
-refactor(bot): inject WorkerAvailability + busyHint field
+refactor(bot+workflow): add availability wiring + Pending.BusyHint
 
-Wiring only — no behaviour change. The hard/soft check call sites
-land in subsequent commits.
+No behaviour change. Workflow constructor gains a nil-allowed
+availability parameter and Pending gains a BusyHint field; the
+hard/soft check call sites land in subsequent commits.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
 
-### Task 10: Submit-time hard check — NoWorkers reject path
+### Task 10: `Workflow.submit()` helper + NoWorkers hard reject
 
 **Files:**
-- Modify: `app/bot/workflow.go:386-396` (top of `runTriage`)
+- Modify: `app/bot/workflow.go` (`executeStep` ~line 277, add new `submit` method)
 - Modify: `app/bot/workflow_test.go` (add `stubAvailability` + new test)
 
 - [ ] **Step 1: Add the `stubAvailability` helper to `workflow_test.go`**
 
-Append to `app/bot/workflow_test.go` (right above `func newTestWorkflow`):
+Append to `app/bot/workflow_test.go` (the end of the existing helper block, e.g. right after `fakeIssueWorkflow`):
 
 ```go
 // stubAvailability lets tests pre-program verdicts.
@@ -1144,302 +1176,262 @@ func (s *stubAvailability) CheckHard(ctx context.Context) queue.Verdict {
 }
 ```
 
-You will also need to add `"context"` to the existing imports if not already present.
+Also add `"sync"` to imports if not already present.
 
 - [ ] **Step 2: Write the failing test**
 
 Append to `app/bot/workflow_test.go`:
 
 ```go
-func TestRunTriage_NoWorkers_HardRejects(t *testing.T) {
-	slack := &stubSlack{}
-	avail := &stubAvailability{
-		HardVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers},
-	}
-	cfg := &config.Config{
-		Channels:        map[string]config.ChannelConfig{"C1": {Repo: "o/r"}},
-		ChannelDefaults: config.ChannelConfig{},
-	}
-	w := newTestWorkflow(t, slack, cfg)
-	w.availability = avail
+func TestSubmit_NoWorkers_HardRejects(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{HardVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers}}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
 
-	pt := testPending("C1", "T1", true, "")
-	pt.SelectedRepo = "o/r"
-	pt.SelectedBranch = "main"
+	onSubmitCalled := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		onSubmitCalled = true
+	})
 
-	w.runTriage(pt)
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
 
 	if avail.HardCalls != 1 {
 		t.Errorf("HardCalls = %d, want 1", avail.HardCalls)
 	}
+	if onSubmitCalled {
+		t.Error("onSubmit must NOT be called when verdict is NoWorkers")
+	}
 
 	foundReject := false
-	for _, m := range slack.PostMessageCalls {
-		if containsStr(m.Text, ":x:") && containsStr(m.Text, "沒有 worker") {
+	for _, m := range sl.posted {
+		if strings.Contains(m, ":x:") && strings.Contains(m, "沒有 worker") {
 			foundReject = true
 		}
 	}
 	if !foundReject {
-		t.Errorf("expected hard reject :x: message; got posts: %+v", slack.PostMessageCalls)
-	}
-
-	// Verify the lifecycle ":mag:" message was NOT posted (hard reject runs first).
-	for _, m := range slack.PostMessageCalls {
-		if containsStr(m.Text, ":mag:") {
-			t.Errorf("lifecycle :mag: message should NOT appear after hard reject; got %q", m.Text)
-		}
+		t.Errorf("expected :x: hard reject message; got posts: %+v", sl.posted)
 	}
 }
 ```
 
-- [ ] **Step 3: Run — should fail**
+Also add `"strings"` to imports if not already present (and `slog` / `context` / `queue` which are already imported).
 
-Run: `cd app && go test ./bot/ -run TestRunTriage_NoWorkers_HardRejects -v`
-Expected: FAIL — the hard check is not yet wired; the test will see the `:mag:` lifecycle message and no `:x:` reject. (Note: it will likely panic on nil queue at `w.queue.Submit` — the failure is expected one way or another. The point is the green-light test will pass after Step 4.)
+- [ ] **Step 3: Run — should fail (submit helper + reject not implemented)**
 
-- [ ] **Step 4: Implement the hard check**
+Run: `cd app && go test ./bot/ -run TestSubmit_NoWorkers_HardRejects -v`
+Expected: FAIL — either `onSubmit` fires (no gate exists), or compilation fails because `w.submit` is undefined. Either failure mode is acceptable; Step 4 makes it pass.
 
-In `app/bot/workflow.go`, locate `runTriage` (line 386). Right after `ctx := context.Background()` (line 387) and BEFORE the `statusMsgTS, err := w.slack.PostMessageWithTS(...)` line (line 392), insert:
+- [ ] **Step 4: Add `submit()` helper and refactor `executeStep` to use it**
+
+In `app/bot/workflow.go`, add a new method (place it right after `executeStep`):
 
 ```go
-	// Hard availability check — must run before any lifecycle Slack post so
-	// rejections don't leave orphan ":mag:" messages.
+// submit is the single chokepoint for sending a Pending to the queue-submission
+// closure. Consolidates the three former `if w.onSubmit != nil { w.onSubmit(...) }`
+// call sites in executeStep so pre-submit checks (like the worker-availability
+// hard check below) only need to land in one place.
+func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
 	if w.availability != nil {
 		verdict := w.availability.CheckHard(ctx)
 		switch verdict.Kind {
 		case queue.VerdictNoWorkers:
-			w.slack.PostMessage(pt.ChannelID,
-				RenderHardReject(verdict), pt.ThreadTS)
-			w.clearDedup(pt)
+			_ = w.slack.PostMessage(p.ChannelID,
+				RenderHardReject(verdict), p.ThreadTS)
+			if w.handler != nil {
+				w.handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
 			return
 		case queue.VerdictBusyEnqueueOK:
-			pt.busyHint = RenderBusyHint(verdict)
+			// Task 11 adds p.BusyHint = RenderBusyHint(verdict) here.
 		case queue.VerdictOK:
 			// continue
 		}
 	}
+	if w.onSubmit != nil {
+		w.onSubmit(ctx, p)
+	} else {
+		w.logger.Warn("submit but no onSubmit hook set", "phase", "失敗")
+	}
+}
 ```
 
-The `if w.availability != nil` guard exists only because Task 15 hasn't replaced the `nil` in `app.go` yet — once that's done, the field is always populated.
+Then refactor the three `executeStep` call sites (they are inside the `NextStepOpenModal` case and the `NextStepSubmit` case; search for `w.onSubmit`). Replace each of the three `if w.onSubmit != nil { w.onSubmit(ctx, …) }` blocks with a single call:
+
+Old (three occurrences, varying only in the variable name — `pending` or `p`):
+```go
+if w.onSubmit != nil {
+    w.onSubmit(ctx, pending)
+}
+```
+
+New:
+```go
+w.submit(ctx, pending)
+```
+
+For the `NextStepSubmit` case specifically, also remove the `else { w.logger.Warn("NextStepSubmit but no onSubmit hook set", ...) }` branch — the equivalent warn now lives inside `submit()`. The final case shape becomes:
+
+```go
+case workflow.NextStepSubmit:
+	p := step.Pending
+	if p == nil {
+		p = pending
+	}
+	w.submit(ctx, p)
+```
 
 - [ ] **Step 5: Run — should pass**
 
-Run: `cd app && go test ./bot/ -run TestRunTriage_NoWorkers_HardRejects -v`
+Run: `cd app && go test ./bot/ -run TestSubmit_NoWorkers_HardRejects -v`
 Expected: PASS.
 
-- [ ] **Step 6: Run full bot test package (regression)**
+- [ ] **Step 6: Run full bot tests (regression)**
 
 Run: `cd app && go test ./bot/`
-Expected: all PASS.
+Expected: all PASS. In particular, the existing `TestExecuteStep_Submit_CallsHook` and `TestHandleSelection_DSelector_DispatchesWorkflow` must still pass — they do not set availability, so `submit()` passes straight through to `onSubmit` (the `if w.availability != nil` guard).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add app/bot/workflow.go app/bot/workflow_test.go
 git commit -m "$(cat <<'EOF'
-feat(bot): runTriage hard-rejects when no workers are online
+feat(bot): add submit() helper, reject when no workers online
 
-Posts the reject message, clears thread dedup so the user can retry,
-and returns before the lifecycle ':mag:' message is sent.
+Collapses three executeStep→onSubmit call sites into a single submit()
+chokepoint, and runs a hard availability check before dispatching.
+NoWorkers verdict posts a reject message and clears thread dedup.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
 
-### Task 11: Submit-time hard check — BusyEnqueueOK appends ETA hint
+### Task 11: `submit()` sets `Pending.BusyHint` on BusyEnqueueOK
 
 **Files:**
-- Modify: `app/bot/workflow.go:537-544` (the statusMsg block)
+- Modify: `app/bot/workflow.go` (the `submit()` method added in Task 10)
 - Modify: `app/bot/workflow_test.go` (new test)
 
-- [ ] **Step 1: Append busyHint to statusMsg in `workflow.go`**
-
-In `app/bot/workflow.go`, locate the block (around lines 537–544):
-
-```go
-	pos, _ := w.queue.QueuePosition(job.ID)
-	var statusMsg string
-	if pos <= 1 {
-		statusMsg = ":hourglass_flowing_sand: 正在處理你的請求..."
-	} else {
-		statusMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
-	}
-```
-
-Replace with:
-
-```go
-	pos, _ := w.queue.QueuePosition(job.ID)
-	var statusMsg string
-	if pos <= 1 {
-		statusMsg = ":hourglass_flowing_sand: 正在處理你的請求..."
-	} else {
-		statusMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
-	}
-	if pt.busyHint != "" {
-		statusMsg += " " + pt.busyHint
-	}
-```
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 1: Write the failing test**
 
 Append to `app/bot/workflow_test.go`:
 
 ```go
-func TestRunTriage_BusyEnqueueOK_LifecycleMessageIncludesETA(t *testing.T) {
-	slack := &stubSlack{}
+func TestSubmit_BusyEnqueueOK_SetsBusyHint(t *testing.T) {
+	sl := &shimSlack{}
 	avail := &stubAvailability{
 		HardVerdict: queue.Verdict{
 			Kind:          queue.VerdictBusyEnqueueOK,
 			EstimatedWait: 6 * time.Minute,
 		},
 	}
-	cfg := &config.Config{
-		Channels:        map[string]config.ChannelConfig{"C1": {Repo: "o/r"}},
-		ChannelDefaults: config.ChannelConfig{},
-	}
-	w := newTestWorkflow(t, slack, cfg)
-	w.availability = avail
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
 
-	// runTriage requires a working queue + store + attachments + results.
-	store := queue.NewMemJobStore()
-	bundle := queuetest.NewBundle(50, 1, store)
-	w.queue = bundle.Queue
-	w.store = store
-	w.attachments = bundle.Attachments
-	w.results = bundle.Results
+	var gotPending *workflow.Pending
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		gotPending = p
+	})
 
-	pt := testPending("C1", "T1", true, "")
-	pt.SelectedRepo = "o/r"
-	pt.SelectedBranch = "main"
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
 
-	// FetchThreadContext stub returns nil messages — runTriage handles this by
-	// notifying error and returning. To exercise the ETA path we need at least
-	// one message. Inject one via a custom stub return.
-	slack.FetchThreadResult = []slackclient.ThreadRawMessage{
-		{User: "U1", Timestamp: "T1", Text: "help me"},
+	if gotPending == nil {
+		t.Fatal("onSubmit was not called; expected BusyEnqueueOK to pass through")
 	}
-
-	w.runTriage(pt)
-
-	// Find the lifecycle status message (post-submit). It should contain the ETA hint.
-	foundETA := false
-	for _, u := range slack.UpdateMessageCalls {
-		if containsStr(u.Text, ":hourglass") && containsStr(u.Text, "預估等候") {
-			foundETA = true
-		}
+	if gotPending.BusyHint == "" {
+		t.Errorf("BusyHint should be set; got empty")
 	}
-	for _, m := range slack.PostMessageCalls {
-		if containsStr(m.Text, ":hourglass") && containsStr(m.Text, "預估等候") {
-			foundETA = true
-		}
-	}
-	for _, b := range slack.PostMessageWithButtonCalls {
-		if containsStr(b.Text, ":hourglass") && containsStr(b.Text, "預估等候") {
-			foundETA = true
-		}
-	}
-	if !foundETA {
-		t.Errorf("expected lifecycle message containing 預估等候; got updates=%+v posts=%+v buttons=%+v",
-			slack.UpdateMessageCalls, slack.PostMessageCalls, slack.PostMessageWithButtonCalls)
+	if !strings.Contains(gotPending.BusyHint, "預估等候") {
+		t.Errorf("BusyHint should contain 預估等候; got %q", gotPending.BusyHint)
 	}
 }
 ```
 
-You will also need to:
-- Add `"time"` import to `workflow_test.go` if not present.
-- Add `"github.com/Ivantseng123/agentdock/shared/queue/queuetest"` import.
-- Extend `stubSlack` with a `FetchThreadResult []slackclient.ThreadRawMessage` field (and update `FetchThreadContext` to return it):
+Add `"time"` import to workflow_test.go if not already present.
+
+- [ ] **Step 2: Run — should fail**
+
+Run: `cd app && go test ./bot/ -run TestSubmit_BusyEnqueueOK_SetsBusyHint -v`
+Expected: FAIL — BusyHint is never set (Task 10 stubbed the branch with a TODO comment).
+
+- [ ] **Step 3: Implement BusyHint assignment**
+
+In `app/bot/workflow.go`, locate the `submit()` method added in Task 10. Replace the `case queue.VerdictBusyEnqueueOK` body (currently just a comment) with:
 
 ```go
-type stubSlack struct {
-	mu sync.Mutex
-	// ... existing fields ...
-	FetchThreadResult []slackclient.ThreadRawMessage
-}
-
-func (s *stubSlack) FetchThreadContext(channelID, threadTS, triggerTS, botUserID, botID string, limit int) ([]slackclient.ThreadRawMessage, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.FetchThreadResult, nil
-}
+		case queue.VerdictBusyEnqueueOK:
+			p.BusyHint = RenderBusyHint(verdict)
 ```
 
-(Replace the existing `FetchThreadContext` method that always returns `nil, nil`.)
+- [ ] **Step 4: Run — should pass**
 
-- [ ] **Step 3: Run — should pass**
-
-Run: `cd app && go test ./bot/ -run TestRunTriage_BusyEnqueueOK_LifecycleMessageIncludesETA -v`
+Run: `cd app && go test ./bot/ -run TestSubmit_BusyEnqueueOK -v`
 Expected: PASS.
 
-- [ ] **Step 4: Run full bot tests (regression)**
+- [ ] **Step 5: Run full bot tests (regression)**
 
 Run: `cd app && go test ./bot/`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add app/bot/workflow.go app/bot/workflow_test.go
 git commit -m "$(cat <<'EOF'
-feat(bot): runTriage appends ETA hint when verdict is BusyEnqueueOK
+feat(bot): submit() sets Pending.BusyHint on BusyEnqueueOK
 
-Lifecycle message becomes ':hourglass: 已加入排隊，前面有 N 個請求 (預估等候 ~Xm)'.
+app.submitJob reads the hint and appends it to the lifecycle status
+text (wired in Task 15).
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
 ```
 
-### Task 12: Trigger-time soft warn
+### Task 12: Trigger-time soft warn in `HandleTrigger`
 
 **Files:**
-- Modify: `app/bot/workflow.go:141-208` (`HandleTrigger`)
+- Modify: `app/bot/workflow.go` (`HandleTrigger` ~line 83)
 - Modify: `app/bot/workflow_test.go` (new test)
 
-- [ ] **Step 1: Insert the soft check in `HandleTrigger`**
-
-In `app/bot/workflow.go`, locate `HandleTrigger`. After the channel-guard block (around line 156, right after `channelCfg = w.cfg.ChannelDefaults` for the auto-bind branch — i.e., after the `if !ok { ... }` block ends) and BEFORE `reqID := logging.NewRequestID()`, insert:
-
-```go
-	// Soft availability check — informational only; do NOT block the flow.
-	// Hard check at submit time decides whether to proceed.
-	if w.availability != nil {
-		verdict := w.availability.CheckSoft(context.Background())
-		if verdict.Kind == queue.VerdictNoWorkers {
-			w.slack.PostMessage(event.ChannelID,
-				RenderSoftWarn(verdict), event.ThreadTS)
-		}
-	}
-```
-
-You will need to import `"context"` if not already imported (it is, per existing `runTriage` body).
-
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 1: Write the failing test**
 
 Append to `app/bot/workflow_test.go`:
 
 ```go
 func TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues(t *testing.T) {
-	slack := &stubSlack{}
-	avail := &stubAvailability{
-		SoftVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers},
-	}
+	sl := &shimSlack{}
+	avail := &stubAvailability{SoftVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers}}
 	cfg := &config.Config{
-		Channels: map[string]config.ChannelConfig{
-			"C1": {Repos: []string{"o/a", "o/b"}},
-		},
+		Channels: map[string]config.ChannelConfig{"C1": {}},
 	}
-	w := newTestWorkflow(t, slack, cfg)
-	w.availability = avail
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
 
-	w.HandleTrigger(slackclient.TriggerEvent{
+	onSubmitCalled := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		onSubmitCalled = true
+	})
+
+	wf.HandleTrigger(slackclient.TriggerEvent{
 		ChannelID: "C1",
 		ThreadTS:  "T1",
 		TriggerTS: "T1",
 		UserID:    "U1",
-		Text:      "<@bot>",
+		Text:      "issue foo/bar",
 	})
 
 	if avail.SoftCalls != 1 {
@@ -1447,64 +1439,91 @@ func TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues(t *testing.T) {
 	}
 
 	foundWarn := false
-	for _, m := range slack.PostMessageCalls {
-		if containsStr(m.Text, ":warning:") && containsStr(m.Text, "沒有 worker") {
+	for _, m := range sl.posted {
+		if strings.Contains(m, ":warning:") && strings.Contains(m, "沒有 worker") {
 			foundWarn = true
 		}
 	}
 	if !foundWarn {
-		t.Errorf("expected :warning: soft warn; got posts: %+v", slack.PostMessageCalls)
+		t.Errorf("expected :warning: soft warn; got posts: %+v", sl.posted)
 	}
 
-	// Selector must still be posted — soft warn does NOT short-circuit.
-	if len(slack.PostSelectorCalls) != 1 {
-		t.Errorf("expected 1 PostSelector call (flow continues); got %d", len(slack.PostSelectorCalls))
+	// fakeIssueWorkflow.Trigger returns NextStepSubmit → hard check runs.
+	// With nil hard verdict (zero value), submit() treats it as OK branch? No —
+	// zero-value Kind "" is none of the switch cases, so submit falls through
+	// to onSubmit. Thus soft warn must NOT short-circuit dispatch.
+	if !onSubmitCalled {
+		t.Error("soft warn must not block dispatch; expected onSubmit to still be called")
 	}
 }
 
 func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
-	slack := &stubSlack{}
-	avail := &stubAvailability{
-		SoftVerdict: queue.Verdict{Kind: queue.VerdictOK},
-	}
+	sl := &shimSlack{}
+	avail := &stubAvailability{SoftVerdict: queue.Verdict{Kind: queue.VerdictOK}}
 	cfg := &config.Config{
-		Channels: map[string]config.ChannelConfig{
-			"C1": {Repos: []string{"o/a", "o/b"}},
-		},
+		Channels: map[string]config.ChannelConfig{"C1": {}},
 	}
-	w := newTestWorkflow(t, slack, cfg)
-	w.availability = avail
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
 
-	w.HandleTrigger(slackclient.TriggerEvent{
-		ChannelID: "C1", ThreadTS: "T1", TriggerTS: "T1", UserID: "U1", Text: "<@bot>",
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
+
+	wf.HandleTrigger(slackclient.TriggerEvent{
+		ChannelID: "C1", ThreadTS: "T1", TriggerTS: "T1", UserID: "U1", Text: "issue foo/bar",
 	})
 
-	for _, m := range slack.PostMessageCalls {
-		if containsStr(m.Text, "沒有 worker") {
-			t.Errorf("OK verdict should not post soft warn; got %q", m.Text)
+	for _, m := range sl.posted {
+		if strings.Contains(m, "沒有 worker") {
+			t.Errorf("OK verdict should not post soft warn; got %q", m)
 		}
 	}
 }
 ```
 
-- [ ] **Step 3: Run — should pass**
+Note about the `TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues` test: the fake issue workflow returns `NextStepSubmit` directly, so the flow reaches `submit()`. With the stub's **hard** verdict zero-valued (default `VerdictKind("")`), the `switch` falls through to `onSubmit`. That's the assertion that soft warn doesn't short-circuit. If future refactoring makes zero-value verdicts reject, this test's hard verdict needs to be explicitly set to `VerdictOK`.
+
+- [ ] **Step 2: Run — should fail**
+
+Run: `cd app && go test ./bot/ -run TestHandleTrigger_NoWorkers_PostsSoftWarn -v`
+Expected: FAIL — `avail.SoftCalls` stays at 0 because `HandleTrigger` doesn't call `CheckSoft` yet.
+
+- [ ] **Step 3: Insert the soft check in `HandleTrigger`**
+
+In `app/bot/workflow.go`, locate `HandleTrigger` (~line 83). After the channel-binding check (the `if _, ok := w.cfg.Channels[...]` block ending with the `}`), and BEFORE `ctx := context.Background()` that precedes `dispatcher.Dispatch`, insert:
+
+```go
+	// Soft availability check — informational only; do NOT block dispatch.
+	// The hard check inside submit() gates actual queue submission.
+	if w.availability != nil {
+		verdict := w.availability.CheckSoft(context.Background())
+		if verdict.Kind == queue.VerdictNoWorkers {
+			_ = w.slack.PostMessage(event.ChannelID,
+				RenderSoftWarn(verdict), event.ThreadTS)
+		}
+	}
+```
+
+- [ ] **Step 4: Run — should pass**
 
 Run: `cd app && go test ./bot/ -run TestHandleTrigger -v`
-Expected: PASS for both new tests, plus the existing `HandleTrigger` tests if any. (The existing tests don't call `HandleTrigger` directly — verify no regressions.)
+Expected: PASS for the new tests AND the existing `TestHandleTrigger_NoThread_PostsWarning` / `TestHandleTrigger_UnboundChannel_Silent`.
 
-- [ ] **Step 4: Run full bot tests (regression)**
+- [ ] **Step 5: Run full bot tests (regression)**
 
 Run: `cd app && go test ./bot/`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add app/bot/workflow.go app/bot/workflow_test.go
 git commit -m "$(cat <<'EOF'
 feat(bot): HandleTrigger posts soft warn when no workers (non-blocking)
 
-Selection still proceeds; the hard check at submit is the gate.
+Dispatch still proceeds; the hard check inside submit() gates the
+actual queue submission.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1518,14 +1537,13 @@ EOF
 ### Task 13: Worker registers with `Slots: 1`
 
 **Files:**
-- Modify: `worker/pool/pool.go:242-248`
-- Modify: `worker/pool/pool.go:260-266`
+- Modify: `worker/pool/pool.go` (`workerHeartbeat`, around line 241)
 
 - [ ] **Step 1: Update both call sites in `workerHeartbeat`**
 
-In `worker/pool/pool.go`, the function `workerHeartbeat` (around line 239) builds `WorkerInfo` in two places. Add `Slots: 1,` to both:
+In `worker/pool/pool.go`, the function `workerHeartbeat` (around line 241) builds `WorkerInfo` in two places. Add `Slots: 1,` to both:
 
-(a) Initial registration (around line 242–247):
+(a) Initial registration (around line 244):
 
 ```go
 	for i := 0; i < p.cfg.WorkerCount; i++ {
@@ -1540,7 +1558,7 @@ In `worker/pool/pool.go`, the function `workerHeartbeat` (around line 239) build
 	}
 ```
 
-(b) Ticker re-registration (around line 260–265):
+(b) Ticker re-registration (around line 262):
 
 ```go
 			for i := 0; i < p.cfg.WorkerCount; i++ {
@@ -1639,14 +1657,14 @@ EOF
 )"
 ```
 
-### Task 15: Wire availability into `app/app.go`
+### Task 15: Wire availability into `app/app.go` + append BusyHint in `submitJob`
 
 **Files:**
-- Modify: `app/app.go:135-184` (around coordinator construction and `metrics.Register`)
+- Modify: `app/app.go` (construct availability before `bot.NewWorkflow` ~line 170; append `BusyHint` in `submitJob` closure after `BuildJob` ~line 196)
 
 - [ ] **Step 1: Construct availability and pass to `NewWorkflow`**
 
-In `app/app.go`, immediately after the `coordinator` is constructed and `RegisterQueue` is called (around line 140), but before the `wf := bot.NewWorkflow(...)` call (line 142), insert:
+In `app/app.go`, immediately after `dispatcher := workflow.NewDispatcher(reg, slackPort, appLogger)` (around line 168) and BEFORE `wf := bot.NewWorkflow(...)` (around line 170), insert:
 
 ```go
 	availability := queue.NewWorkerAvailability(coordinator, jobStore, queue.AvailabilityConfig{
@@ -1662,31 +1680,74 @@ In `app/app.go`, immediately after the `coordinator` is constructed and `Registe
 	)
 ```
 
-Then update the `NewWorkflow` call (line 142) — replace the trailing `nil` (added in Task 9) with `availability`:
+Then update the `NewWorkflow` call (around line 170) — replace the trailing `nil` (added in Task 9) with `availability`:
 
 ```go
-	wf := bot.NewWorkflow(cfg, slackClient, repoCache, repoDiscovery, coordinator, jobStore, bundle.Attachments, bundle.Results, skillLoader, identity, availability)
+	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger, availability)
 ```
 
-- [ ] **Step 2: Verify the whole tree compiles**
+- [ ] **Step 2: Append `BusyHint` to `statusText` in `submitJob`**
+
+In `app/app.go`, locate the `submitJob` closure. Find the block (around line 196):
+
+```go
+		job, statusText, err := wfImpl.BuildJob(ctx, p)
+		if err != nil {
+			appLogger.Error("BuildJob failed", "phase", "失敗", "error", err)
+			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: %v", err), p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		}
+
+		// Post lifecycle status message.
+		statusMsgTS, postErr := slackPort.PostMessageWithTS(p.ChannelID, statusText, p.ThreadTS)
+```
+
+Insert the append right after the error-return block and before `statusMsgTS` is posted:
+
+```go
+		job, statusText, err := wfImpl.BuildJob(ctx, p)
+		if err != nil {
+			appLogger.Error("BuildJob failed", "phase", "失敗", "error", err)
+			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: %v", err), p.ThreadTS)
+			if handler != nil {
+				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		}
+
+		// Append worker-availability busy hint if the pre-submit check set one.
+		if p.BusyHint != "" {
+			statusText += " " + p.BusyHint
+		}
+
+		// Post lifecycle status message.
+		statusMsgTS, postErr := slackPort.PostMessageWithTS(p.ChannelID, statusText, p.ThreadTS)
+```
+
+- [ ] **Step 3: Verify the whole tree compiles**
 
 Run: `go build ./...`
 Expected: success.
 
-- [ ] **Step 3: Run all tests (regression)**
+- [ ] **Step 4: Run all tests (regression)**
 
 Run: `go test ./...`
 Expected: all PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add app/app.go
 git commit -m "$(cat <<'EOF'
-feat(app): construct WorkerAvailability and inject into Workflow
+feat(app): construct WorkerAvailability + append BusyHint in submitJob
 
-Wires the verdict + dep-error hooks into Prometheus. Behaviour is
-now end-to-end: trigger soft warn + submit hard check both active.
+Wires verdict/dep-error hooks into Prometheus and injects availability
+into bot.Workflow. In submitJob, reads Pending.BusyHint (set by the
+shim's submit() helper) and appends it to the lifecycle status text
+before posting. Two-stage precheck is now end-to-end active.
 
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
@@ -1754,19 +1815,21 @@ Cross-referenced against `docs/superpowers/specs/2026-04-22-worker-liveness-prec
 | §2 Availability Service — types, interface, compute | Tasks 2–4 |
 | §2 Slots normalisation | Task 5 (locked by test) |
 | §2 Fail-open | Task 6 |
-| §3.1 NewWorkflow constructor change | Task 9 |
-| §3.2 Trigger-time soft warn | Task 12 |
-| §3.3 Submit-time hard check (NoWorkers) | Task 10 |
-| §3.3 Submit-time hard check (BusyEnqueueOK + ETA in lifecycle) | Task 11 |
-| §3 `pendingTriage.busyHint` field | Task 9 |
+| §3.1 Workflow struct + NewWorkflow constructor change | Task 9 |
+| §3.1 `workflow.Pending.BusyHint` field | Task 9 |
+| §3.2 Trigger-time soft warn in HandleTrigger | Task 12 |
+| §3.3 `submit()` helper + NoWorkers hard reject | Task 10 |
+| §3.3 BusyEnqueueOK sets `Pending.BusyHint` | Task 11 |
+| §3.3 `submitJob` appends BusyHint to statusText | Task 15 |
 | §4 Verdict rendering | Task 8 |
 | §5 Wiring + config | Tasks 14, 15 |
 | §6 Worker Slots: 1 | Task 13 |
 | §7 Metrics (verdict, duration, dep errors) | Tasks 7, 15 |
 | §8 Error Handling Summary | Tasks 6 (deps), 10 (Slack reject), 12 (Slack warn) |
-| §9 Ordering Constraints — soft AFTER channel-guard | Task 12 (insertion location specified) |
-| §9 Ordering — hard BEFORE first lifecycle post | Task 10 (insertion at line 387–392 boundary) |
-| §9 Ordering — hard reject calls clearDedup | Task 10 (assertion implicit; impl explicit) |
+| §9 Ordering — soft AFTER channel-guard | Task 12 (insertion location specified) |
+| §9 Ordering — hard check BEFORE onSubmit | Task 10 (enforced by `submit()` helper) |
+| §9 Ordering — hard reject calls ClearThreadDedup | Task 10 (impl explicit; test asserts onSubmit not called) |
+| §9 Ordering — BusyHint append after BuildJob, before PostMessageWithTS | Task 15 |
 | Testing — unit matrix (9 cases) | Tasks 2–6 cover all 9 rows |
 | Testing — 3 integration cases | Tasks 10, 11, 12 |
 | Migration / Rollout | Additive changes in Tasks 1, 14 (omitempty + optional config) |

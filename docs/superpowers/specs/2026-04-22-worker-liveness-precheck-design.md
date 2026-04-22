@@ -125,68 +125,110 @@ return {Kind: OK, ...}
 
 The fail-open early-return is the single source of truth for dependency-error behaviour. `WorkerAvailabilityCheckErrors` is incremented per failing dependency before returning.
 
-### 3. Slack Adapter Integration
+### 3. Slack Adapter Integration (dispatcher architecture)
+
+The bot has a thin Slack-side shim (`app/bot/workflow.go`) that delegates real logic to a `workflow.Dispatcher` and one of three workflows (`issue`, `ask`, `pr_review`) via the `app/workflow` package. Each workflow returns a `NextStep` of various kinds; `executeStep` (in the shim) calls a closure `onSubmit` (set by `app/app.go` via `SetSubmitHook`) when the workflow returns `NextStepSubmit` (or fallback paths in `NextStepOpenModal`). Today three call sites in `executeStep` reach `onSubmit`.
 
 **`app/bot/workflow.go`** changes:
 
-1. Inject availability via constructor:
+1. Add `availability` field + extend constructor:
 
 ```go
+type Workflow struct {
+    cfg           *config.Config
+    dispatcher    *workflow.Dispatcher
+    slack         workflow.SlackPort
+    handler       *slackclient.Handler
+    repoDiscovery *ghclient.RepoDiscovery
+    logger        *slog.Logger
+    availability  queue.WorkerAvailability // NEW
+    // ...
+}
+
 func NewWorkflow(
     cfg *config.Config,
-    slack slackAPI,
-    repoCache *ghclient.RepoCache,
+    dispatcher *workflow.Dispatcher,
+    slack workflow.SlackPort,
     repoDiscovery *ghclient.RepoDiscovery,
-    jobQueue queue.JobQueue,
-    jobStore queue.JobStore,
-    attachStore queue.AttachmentStore,
-    resultBus queue.ResultBus,
-    skillProvider SkillProvider,
-    identity Identity,
+    logger *slog.Logger,
     availability queue.WorkerAvailability, // NEW
 ) *Workflow
 ```
 
-2. **Trigger-time soft warn** in `HandleTrigger`, after the channel-guard block but before `repo` selection. `HandleTrigger` does not currently take a `context.Context`; use `context.Background()` to keep this spec's scope tight:
+2. **Trigger-time soft warn** in `HandleTrigger`, after the channel-binding check (`if _, ok := w.cfg.Channels[event.ChannelID]; !ok { ... }`) and BEFORE `ctx := context.Background()` / `dispatcher.Dispatch`:
 
 ```go
-verdict := w.availability.CheckSoft(context.Background())
-if verdict.Kind == queue.VerdictNoWorkers {
-    w.slack.PostMessage(event.ChannelID,
-        RenderSoftWarn(verdict), event.ThreadTS)
-    // Do NOT return — selection still proceeds; hard check will gate submit.
+if w.availability != nil {
+    verdict := w.availability.CheckSoft(context.Background())
+    if verdict.Kind == queue.VerdictNoWorkers {
+        _ = w.slack.PostMessage(event.ChannelID,
+            RenderSoftWarn(verdict), event.ThreadTS)
+        // Do NOT return — selection still proceeds; hard check at submit gates the submission.
+    }
 }
 ```
 
-3. **Submit-time hard check** in `runTriage`, immediately after the existing `ctx := context.Background()` (line 387) and **before** the `:mag: 正在排入處理佇列...` post (line 392):
+3. **Submit-time hard check** in a new `submit()` helper that consolidates the three current `onSubmit` call sites in `executeStep`:
 
 ```go
-verdict := w.availability.CheckHard(ctx)
-switch verdict.Kind {
-case queue.VerdictNoWorkers:
-    w.slack.PostMessage(pt.ChannelID,
-        RenderHardReject(verdict), pt.ThreadTS)
-    w.clearDedup(pt)
-    return
-case queue.VerdictBusyEnqueueOK:
-    pt.busyHint = RenderBusyHint(verdict) // attached to lifecycle message
-case queue.VerdictOK:
-    // continue
+// submit is the single chokepoint for sending a Pending to the queue-submission
+// closure. Replacing 3 onSubmit call sites in executeStep with this helper means
+// future pre-submit checks (rate limit, quota, etc.) only need to be added once.
+func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
+    if w.availability != nil {
+        verdict := w.availability.CheckHard(ctx)
+        switch verdict.Kind {
+        case queue.VerdictNoWorkers:
+            _ = w.slack.PostMessage(p.ChannelID,
+                RenderHardReject(verdict), p.ThreadTS)
+            if w.handler != nil {
+                w.handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+            }
+            return
+        case queue.VerdictBusyEnqueueOK:
+            p.BusyHint = RenderBusyHint(verdict)
+        case queue.VerdictOK:
+            // continue
+        }
+    }
+    if w.onSubmit != nil {
+        w.onSubmit(ctx, p)
+    } else {
+        w.logger.Warn("submit but no onSubmit hook set", "phase", "失敗")
+    }
 }
 ```
 
-`pendingTriage` gains an unexported `busyHint string` field. The existing block that builds the post-submit `statusMsg` (`workflow.go:537–544`) is amended:
+The three `executeStep` call sites that today read `if w.onSubmit != nil { w.onSubmit(ctx, ...) }` collapse to a single `w.submit(ctx, ...)`. (The `nil` check moves into `submit()`.)
+
+**`app/workflow/workflow.go`** changes:
+
+`Pending` gains an exported `BusyHint string` field (cross-package: shim sets it, `app/app.go` `submitJob` reads it):
 
 ```go
-if pos <= 1 {
-    statusMsg = ":hourglass_flowing_sand: 正在處理你的請求..."
-} else {
-    statusMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
-}
-if pt.busyHint != "" {
-    statusMsg += " " + pt.busyHint
+type Pending struct {
+    // ... existing fields ...
+    State    any    // per-workflow state struct
+    BusyHint string // populated by the shim's submit() when verdict is BusyEnqueueOK; appended to lifecycle status text
 }
 ```
+
+**`app/app.go`** `submitJob` closure changes:
+
+After `BuildJob` returns `statusText`, append the busy hint before posting the lifecycle status message:
+
+```go
+job, statusText, err := wfImpl.BuildJob(ctx, p)
+if err != nil { /* ... */ return }
+
+if p.BusyHint != "" {
+    statusText += " " + p.BusyHint
+}
+
+statusMsgTS, postErr := slackPort.PostMessageWithTS(p.ChannelID, statusText, p.ThreadTS)
+```
+
+Two-line insertion only; no other changes to `submitJob`.
 
 ### 4. Verdict Rendering
 
@@ -214,13 +256,22 @@ This file is the single point of change when (a) oncall handles need to be appen
 
 ### 5. Wiring
 
-**`app/app.go`** — construct availability after `coordinator` and `jobStore` exist (currently around `metrics.Register` at line 184), then pass into `NewWorkflow`:
+**`app/app.go`** — construct `availability` after `coordinator` and `jobStore` are built (around the existing dispatcher construction, ~line 168), then pass into `bot.NewWorkflow`:
 
 ```go
 availability := queue.NewWorkerAvailability(coordinator, jobStore, queue.AvailabilityConfig{
     AvgJobDuration: cfg.Availability.AvgJobDuration,
-})
-workflow := bot.NewWorkflow(..., availability)
+},
+    queue.WithVerdictHook(func(kind, stage string, d time.Duration) {
+        metrics.WorkerAvailabilityVerdictTotal.WithLabelValues(kind, stage).Inc()
+        metrics.WorkerAvailabilityCheckDuration.Observe(d.Seconds())
+    }),
+    queue.WithDepErrorHook(func(dep string) {
+        metrics.WorkerAvailabilityCheckErrors.WithLabelValues(dep).Inc()
+    }),
+)
+
+wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger, availability)
 ```
 
 **`app/config/`** — add an `Availability` block to `app.yaml` schema:
@@ -234,13 +285,15 @@ Field is optional; absent → service default of `3 * time.Minute`.
 
 ### 6. Worker-side Change
 
-**`worker/worker.go`** — when calling `JobQueue.Register`, populate `Slots`:
+**`worker/pool/pool.go`** — `workerHeartbeat` (around line 241) builds `WorkerInfo` in two places (initial registration and the 20s ticker re-registration). Both literals get a `Slots: 1`:
 
 ```go
 info := queue.WorkerInfo{
-    WorkerID: ...,
-    Slots:    1, // hardcoded today; future: read from worker.yaml
-    ...
+    WorkerID:    fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i),
+    Name:        p.cfg.Hostname,
+    Nickname:    p.nicknameForIndex(i),
+    Slots:       1, // hardcoded; future: read from worker.yaml when concurrent execution lands
+    ConnectedAt: now,
 }
 ```
 
@@ -275,8 +328,9 @@ Explicitly **not** doing: retry, circuit breaker, verdict caching. All YAGNI for
 
 - Soft check runs **after** `channel-guard` (`autoBound` / `AutoBind`) — never broadcast worker status to channels the bot is not bound to.
 - Soft check runs **after** `event.ThreadTS == ""` guard — outside-thread triggers get the existing usage hint, not a worker status.
-- Hard check runs **before** the first lifecycle `PostMessage` in `runTriage` — never leave a `":mag:"` orphan when rejecting.
-- Hard reject **must** call `clearDedup(pt)` — otherwise the user's retry within `DedupTTL` (5m default) is silently swallowed.
+- Hard check runs **inside the `submit()` helper, before** any call to `onSubmit` — never let a job reach `submitJob` (which posts the `:mag:` lifecycle text) when verdict is `NoWorkers`.
+- Hard reject **must** call `handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)` — otherwise the user's retry within `DedupTTL` (5m default) is silently swallowed.
+- BusyHint append in `submitJob` runs **after** `BuildJob` and **before** `slackPort.PostMessageWithTS` — appending later (after Post) would require an additional Slack edit call.
 
 ## Testing
 
@@ -298,11 +352,13 @@ Drive `WorkerAvailability` against the in-memory `queuetest` bundle:
 
 ### Integration — `app/bot/workflow_test.go`
 
-Add three cases using the existing `slackAPI` stub and a stub `WorkerAvailability`:
+Add three cases using the existing `shimSlack` and `fakeIssueWorkflow` test fixtures and a stub `WorkerAvailability`:
 
-- `TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues` — assert: soft warn message posted; repo selector still appears.
-- `TestRunTriage_NoWorkers_HardRejects` — assert: hard reject message posted; no `queue.Submit`; no lifecycle message; `clearDedup` invoked.
-- `TestRunTriage_BusyEnqueueOK_LifecycleMessageIncludesETA` — assert: `queue.Submit` called; lifecycle message contains `預估等候`.
+- `TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues` — assert: soft warn message posted; `dispatcher.Dispatch` was still reached (e.g. assert a follow-on selector post or `submitHook` invocation).
+- `TestSubmit_NoWorkers_HardRejects` — drive `executeStep` with `NextStepSubmit` and a stub availability returning `NoWorkers`; assert: hard reject posted, `handler.ClearThreadDedup` invoked, `onSubmit` **not** called.
+- `TestSubmit_BusyEnqueueOK_SetsBusyHint` — drive `executeStep` with `NextStepSubmit` and a stub availability returning `BusyEnqueueOK`; assert: `onSubmit` **was** called, the `*workflow.Pending` arg has `BusyHint != ""` containing `預估等候`.
+
+(End-to-end "lifecycle message contains ETA" is split: the shim's responsibility is setting `Pending.BusyHint`; the closure in `app/app.go` appends it to `statusText`. Each side is testable in isolation; an integration test of the closure can live in a separate file if desired but is not in this spec.)
 
 ### Out of Scope
 
