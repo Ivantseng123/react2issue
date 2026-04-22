@@ -26,6 +26,7 @@ type Config struct {
 	Attachments       AttachmentsConfig        `yaml:"attachments"`
 	RepoCache         RepoCacheConfig          `yaml:"repo_cache"`
 	Queue             QueueConfig              `yaml:"queue"`
+	Availability      AvailabilityConfig       `yaml:"availability"`
 	Logging           LoggingConfig            `yaml:"logging"`
 	Redis             RedisConfig              `yaml:"redis"`
 	SecretKey         string                   `yaml:"secret_key"`
@@ -156,3 +157,6 @@ type QueueConfig struct {
 	StatusInterval   time.Duration `yaml:"status_interval"`
 }
 
+type AvailabilityConfig struct {
+	AvgJobDuration time.Duration `yaml:"avg_job_duration"`
+}

@@ -10,6 +10,7 @@ import (
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/app/workflow"
 	ghclient "github.com/Ivantseng123/agentdock/shared/github"
+	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
 const pendingTimeout = 1 * time.Minute
@@ -23,6 +24,7 @@ type Workflow struct {
 	handler       *slackclient.Handler
 	repoDiscovery *ghclient.RepoDiscovery
 	logger        *slog.Logger
+	availability  queue.WorkerAvailability
 
 	mu        sync.Mutex
 	pending   map[string]*workflow.Pending
@@ -41,6 +43,7 @@ func NewWorkflow(
 	slack workflow.SlackPort,
 	repoDiscovery *ghclient.RepoDiscovery,
 	logger *slog.Logger,
+	availability queue.WorkerAvailability,
 ) *Workflow {
 	return &Workflow{
 		cfg:           cfg,
@@ -48,6 +51,7 @@ func NewWorkflow(
 		slack:         slack,
 		repoDiscovery: repoDiscovery,
 		logger:        logger,
+		availability:  availability,
 		pending:       make(map[string]*workflow.Pending),
 		autoBound:     make(map[string]bool),
 	}
@@ -93,6 +97,15 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 		w.mu.Unlock()
 		if !isBound && !w.cfg.AutoBind {
 			return
+		}
+	}
+
+	// Soft availability check — informational only; do NOT block dispatch.
+	// The hard check inside submit() gates actual queue submission.
+	if w.availability != nil {
+		verdict := w.availability.CheckSoft(context.Background())
+		if msg := RenderSoftWarn(verdict); msg != "" {
+			_ = w.slack.PostMessage(event.ChannelID, msg, event.ThreadTS)
 		}
 	}
 
@@ -350,9 +363,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 		if tid == "" {
 			// No trigger ID available — fall through to submit without description.
 			w.logger.Warn("OpenModal requested but no triggerID", "phase", "失敗")
-			if w.onSubmit != nil {
-				w.onSubmit(ctx, pending)
-			}
+			w.submit(ctx, pending)
 			return
 		}
 		// Modal-first flows (PR Review D-path when thread has no URL) reach
@@ -381,9 +392,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 				delete(w.pending, selectorTS)
 				w.mu.Unlock()
 			}
-			if w.onSubmit != nil {
-				w.onSubmit(ctx, pending)
-			}
+			w.submit(ctx, pending)
 		}
 		// Pending is now in the map under meta (either SelectorTS from a
 		// prior selector, or the synthesised "modal-<reqID>" key above); the
@@ -394,11 +403,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 		if p == nil {
 			p = pending
 		}
-		if w.onSubmit != nil {
-			w.onSubmit(ctx, p)
-		} else {
-			w.logger.Warn("NextStepSubmit but no onSubmit hook set", "phase", "失敗")
-		}
+		w.submit(ctx, p)
 
 	case workflow.NextStepError:
 		_ = w.slack.PostMessage(pending.ChannelID, ":x: "+step.ErrorText, pending.ThreadTS)
@@ -419,6 +424,36 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 
 	default:
 		w.logger.Warn("executeStep: unknown NextStepKind", "phase", "失敗", "kind", step.Kind)
+	}
+}
+
+// submit is the single chokepoint for sending a Pending to the queue-submission
+// closure. Consolidates the three former `if w.onSubmit != nil { w.onSubmit(...) }`
+// call sites in executeStep so pre-submit checks (like the worker-availability
+// hard check below) only need to land in one place.
+func (w *Workflow) submit(ctx context.Context, p *workflow.Pending) {
+	if w.availability != nil {
+		verdict := w.availability.CheckHard(ctx)
+		switch verdict.Kind {
+		case queue.VerdictNoWorkers:
+			if err := w.slack.PostMessage(p.ChannelID,
+				RenderHardReject(verdict), p.ThreadTS); err != nil {
+				w.logger.Error("可用性檢查: 硬性拒絕訊息發送失敗", "phase", "失敗", "error", err)
+			}
+			if w.handler != nil {
+				w.handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
+			}
+			return
+		case queue.VerdictBusyEnqueueOK:
+			p.BusyHint = RenderBusyHint(verdict)
+		case queue.VerdictOK:
+			// continue
+		}
+	}
+	if w.onSubmit != nil {
+		w.onSubmit(ctx, p)
+	} else {
+		w.logger.Warn("submit but no onSubmit hook set", "phase", "失敗")
 	}
 }
 

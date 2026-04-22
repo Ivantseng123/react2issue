@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
-	"github.com/Ivantseng123/agentdock/app/workflow"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
+	"github.com/Ivantseng123/agentdock/app/workflow"
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
@@ -26,7 +29,7 @@ func (s *shimSlack) PostMessageWithTS(ch, text, ts string) (string, error) { ret
 func (s *shimSlack) PostMessageWithButton(ch, text, ts, aid, bt, val string) (string, error) {
 	return "ts", nil
 }
-func (s *shimSlack) UpdateMessage(ch, mts, text string) error                  { return nil }
+func (s *shimSlack) UpdateMessage(ch, mts, text string) error                         { return nil }
 func (s *shimSlack) UpdateMessageWithButton(ch, mts, text, aid, bt, val string) error { return nil }
 func (s *shimSlack) PostSelector(ch, prompt, prefix string, labels, values []string, ts string) (string, error) {
 	return "sel-ts", nil
@@ -64,7 +67,7 @@ func TestHandleTrigger_NoThread_PostsWarning(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
 
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	wf.HandleTrigger(slackclient.TriggerEvent{
 		ChannelID: "C1",
@@ -99,7 +102,7 @@ func TestHandleTrigger_UnboundChannel_Silent(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
 
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	wf.HandleTrigger(slackclient.TriggerEvent{
 		ChannelID: "C_UNBOUND",
@@ -120,7 +123,7 @@ func TestExecuteStep_Submit_CallsHook(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	called := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -143,7 +146,7 @@ func TestExecuteStep_Error_PostsMessage(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, slack, nil)
-	wf := NewWorkflow(cfg, disp, slack, nil, nil)
+	wf := NewWorkflow(cfg, disp, slack, nil, nil, nil)
 
 	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1"}
 	step := workflow.NextStep{Kind: workflow.NextStepError, ErrorText: "boom"}
@@ -173,7 +176,7 @@ func TestHandleSelection_DSelector_DispatchesWorkflow(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, nil, nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -219,7 +222,7 @@ func TestExecuteStep_OpenModal_FirstStepStoresPending(t *testing.T) {
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
-	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default())
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
 
 	p := &workflow.Pending{
 		ChannelID: "C1", ThreadTS: "T1",
@@ -260,7 +263,7 @@ func TestHandleDescriptionAction_ModalFail_ConsumesPending(t *testing.T) {
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
 	logger := slog.Default()
-	wf := NewWorkflow(cfg, disp, sl, nil, logger)
+	wf := NewWorkflow(cfg, disp, sl, nil, logger, nil)
 
 	submitted := false
 	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
@@ -327,4 +330,167 @@ func (f *fakeIssueWorkflow) BuildJob(ctx context.Context, p *workflow.Pending) (
 }
 func (f *fakeIssueWorkflow) HandleResult(ctx context.Context, state *queue.JobState, result *queue.JobResult) error {
 	return nil
+}
+
+// stubAvailability lets tests pre-program verdicts.
+type stubAvailability struct {
+	mu          sync.Mutex
+	SoftVerdict queue.Verdict
+	HardVerdict queue.Verdict
+	SoftCalls   int
+	HardCalls   int
+}
+
+func (s *stubAvailability) CheckSoft(ctx context.Context) queue.Verdict {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.SoftCalls++
+	return s.SoftVerdict
+}
+func (s *stubAvailability) CheckHard(ctx context.Context) queue.Verdict {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.HardCalls++
+	return s.HardVerdict
+}
+
+func TestSubmit_NoWorkers_HardRejects(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{HardVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers}}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	onSubmitCalled := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		onSubmitCalled = true
+	})
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
+
+	if avail.HardCalls != 1 {
+		t.Errorf("HardCalls = %d, want 1", avail.HardCalls)
+	}
+	if onSubmitCalled {
+		t.Error("onSubmit must NOT be called when verdict is NoWorkers")
+	}
+
+	foundReject := false
+	for _, m := range sl.posted {
+		if strings.Contains(m, ":x:") && strings.Contains(m, "沒有 worker") {
+			foundReject = true
+		}
+	}
+	if !foundReject {
+		t.Errorf("expected :x: hard reject message; got posts: %+v", sl.posted)
+	}
+}
+
+func TestSubmit_BusyEnqueueOK_SetsBusyHint(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{
+		HardVerdict: queue.Verdict{
+			Kind:          queue.VerdictBusyEnqueueOK,
+			EstimatedWait: 6 * time.Minute,
+		},
+	}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	var gotPending *workflow.Pending
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		gotPending = p
+	})
+
+	p := &workflow.Pending{ChannelID: "C1", ThreadTS: "T1", TaskType: "issue"}
+	step := workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+	wf.executeStep(context.Background(), p, step, "")
+
+	if gotPending == nil {
+		t.Fatal("onSubmit was not called; expected BusyEnqueueOK to pass through")
+	}
+	if gotPending.BusyHint == "" {
+		t.Errorf("BusyHint should be set; got empty")
+	}
+	if !strings.Contains(gotPending.BusyHint, "預估等候") {
+		t.Errorf("BusyHint should contain 預估等候; got %q", gotPending.BusyHint)
+	}
+}
+
+func TestHandleTrigger_NoWorkers_PostsSoftWarnButContinues(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{SoftVerdict: queue.Verdict{Kind: queue.VerdictNoWorkers}}
+	cfg := &config.Config{
+		Channels: map[string]config.ChannelConfig{"C1": {}},
+	}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	onSubmitCalled := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		onSubmitCalled = true
+	})
+
+	wf.HandleTrigger(slackclient.TriggerEvent{
+		ChannelID: "C1",
+		ThreadTS:  "T1",
+		TriggerTS: "T1",
+		UserID:    "U1",
+		Text:      "issue foo/bar",
+	})
+
+	if avail.SoftCalls != 1 {
+		t.Errorf("SoftCalls = %d, want 1", avail.SoftCalls)
+	}
+
+	foundWarn := false
+	for _, m := range sl.posted {
+		if strings.Contains(m, ":warning:") && strings.Contains(m, "沒有 worker") {
+			foundWarn = true
+		}
+	}
+	if !foundWarn {
+		t.Errorf("expected :warning: soft warn; got posts: %+v", sl.posted)
+	}
+
+	// fakeIssueWorkflow.Trigger returns NextStepSubmit → submit() runs. The stub's
+	// hard verdict is zero-valued (VerdictKind("")) which matches none of the switch
+	// cases, so submit() falls through to onSubmit. That's the assertion that soft
+	// warn doesn't short-circuit dispatch.
+	if !onSubmitCalled {
+		t.Error("soft warn must not block dispatch; expected onSubmit to still be called")
+	}
+}
+
+func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
+	sl := &shimSlack{}
+	avail := &stubAvailability{SoftVerdict: queue.Verdict{Kind: queue.VerdictOK}}
+	cfg := &config.Config{
+		Channels: map[string]config.ChannelConfig{"C1": {}},
+	}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), avail)
+
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
+
+	wf.HandleTrigger(slackclient.TriggerEvent{
+		ChannelID: "C1", ThreadTS: "T1", TriggerTS: "T1", UserID: "U1", Text: "issue foo/bar",
+	})
+
+	for _, m := range sl.posted {
+		if strings.Contains(m, "沒有 worker") {
+			t.Errorf("OK verdict should not post soft warn; got %q", m)
+		}
+	}
 }

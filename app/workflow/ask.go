@@ -353,6 +353,11 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 // an answer.md file with a short preview comment, because long bodies
 // render awkwardly in Slack's message column and agent output is
 // mrkdwn-styled (which collapses its own structure at length).
+//
+// When file upload fails (e.g. workspace missing the files:write scope
+// for files.upload v2), the answer is posted inline as a fallback so the
+// user still sees the content — truncated messages are preferable to a
+// dangling "已附為檔案：" preview with no file.
 func (w *AskWorkflow) post(job *queue.Job, text string) error {
 	if len(text) <= askInlineThreshold {
 		if job.StatusMsgTS != "" {
@@ -362,11 +367,23 @@ func (w *AskWorkflow) post(job *queue.Job, text string) error {
 	}
 
 	preview := fmt.Sprintf(":memo: 答案較長（約 %d 字），已附為檔案：", len(text))
+	var uploadErr error
 	if job.StatusMsgTS != "" {
 		// Flip the earlier "思考中..." status into the preview so the
 		// thread has one lifecycle marker + the file, not two notices.
 		_ = w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, preview)
-		return w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", text, "")
+		uploadErr = w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", text, "")
+	} else {
+		uploadErr = w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", text, preview)
 	}
-	return w.slack.UploadFile(job.ChannelID, job.ThreadTS, "answer.md", "Answer", text, preview)
+	if uploadErr == nil {
+		return nil
+	}
+
+	w.logger.Warn("Slack 檔案上傳失敗，改用內嵌訊息",
+		"phase", "失敗", "error", uploadErr, "length", len(text))
+	if job.StatusMsgTS != "" {
+		_ = w.slack.UpdateMessage(job.ChannelID, job.StatusMsgTS, ":memo: 答案如下：")
+	}
+	return w.slack.PostMessage(job.ChannelID, text, job.ThreadTS)
 }
