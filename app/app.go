@@ -363,6 +363,10 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 		} else {
 			queueMsg = fmt.Sprintf(":hourglass_flowing_sand: 已加入排隊，前面有 %d 個請求", pos-1)
 		}
+		// Re-apply the busy hint so the post-submit update doesn't clobber it.
+		if p.BusyHint != "" {
+			queueMsg += " " + p.BusyHint
+		}
 
 		if statusMsgTS != "" {
 			if upErr := slackPort.UpdateMessageWithButton(p.ChannelID, statusMsgTS,
