@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/Ivantseng123/agentdock/app/config"
-	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/app/workflow"
+	ghclient "github.com/Ivantseng123/agentdock/shared/github"
 )
 
 const pendingTimeout = 1 * time.Minute

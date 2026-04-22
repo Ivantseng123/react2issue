@@ -14,7 +14,6 @@ import (
 
 	"github.com/Ivantseng123/agentdock/app/bot"
 	"github.com/Ivantseng123/agentdock/app/config"
-	"github.com/Ivantseng123/agentdock/app/mantis"
 	"github.com/Ivantseng123/agentdock/app/skill"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
 	"github.com/Ivantseng123/agentdock/app/workflow"
@@ -53,7 +52,7 @@ func (h *Handle) Wait() error {
 // Run initializes the app runtime (logging, Slack, Redis buses, listeners,
 // HTTP endpoints, socket-mode loop) and returns a Handle immediately. The
 // caller must call Wait to block until shutdown.
-func Run(cfg *config.Config) (*Handle, error) {
+func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	slog.SetDefault(slog.New(logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	stderrHandler := logging.NewStyledTextHandler(os.Stderr, &slog.HandlerOptions{Level: logging.ParseLevel(cfg.LogLevel)})
@@ -101,16 +100,6 @@ func Run(cfg *config.Config) (*Handle, error) {
 		if _, err := skillLoader.StartWatcher(cfg.SkillsConfig); err != nil {
 			appLogger.Warn("Skill 設定監視器啟動失敗", "phase", "失敗", "error", err)
 		}
-	}
-
-	mantisClient := mantis.NewClient(
-		cfg.Mantis.BaseURL,
-		cfg.Mantis.APIToken,
-		cfg.Mantis.Username,
-		cfg.Mantis.Password,
-	)
-	if mantisClient.IsConfigured() {
-		appLogger.Info("Mantis 整合已啟用", "phase", "處理中", "url", cfg.Mantis.BaseURL)
 	}
 
 	jobStore := queue.NewMemJobStore()
@@ -165,8 +154,10 @@ func Run(cfg *config.Config) (*Handle, error) {
 	issueClient := ghclient.NewIssueClient(cfg.GitHub.Token, githubLogger)
 	githubClient := ghclient.NewClient(cfg.GitHub.Token)
 
-	// Build workflow registry + dispatcher.
-	slackPort := &slackAdapterPort{client: slackClient, logger: slackLogger}
+	// Build workflow registry + dispatcher. The slack adapter owns the bot
+	// identity so FetchThreadContext always drops our own posts regardless of
+	// which workflow fires it.
+	slackPort := &slackAdapterPort{client: slackClient, logger: slackLogger, identity: identity}
 	issueWorkflow := workflow.NewIssueWorkflow(cfg, slackPort, issueClient, repoCache, repoDiscovery, agentLogger)
 	askWorkflow := workflow.NewAskWorkflow(cfg, slackPort, repoCache, agentLogger)
 	prReviewWorkflow := workflow.NewPRReviewWorkflow(cfg, slackPort, githubClient, repoCache, agentLogger)
@@ -219,9 +210,9 @@ func Run(cfg *config.Config) (*Handle, error) {
 			statusMsgTS = ""
 		}
 
-		// Fetch thread context.
-		botUserID := ""
-		rawMsgs, err := slackPort.FetchThreadContext(p.ChannelID, p.ThreadTS, p.TriggerTS, botUserID, cfg.MaxThreadMessages)
+		// Fetch thread context. slackPort knows the bot identity and drops
+		// our own posts internally.
+		rawMsgs, err := slackPort.FetchThreadContext(p.ChannelID, p.ThreadTS, p.TriggerTS, cfg.MaxThreadMessages)
 		if err != nil {
 			appLogger.Error("Failed to read thread", "phase", "失敗", "error", err)
 			_ = slackPort.PostMessage(p.ChannelID, fmt.Sprintf(":x: Failed to read thread: %v", err), p.ThreadTS)
@@ -231,17 +222,14 @@ func Run(cfg *config.Config) (*Handle, error) {
 			return
 		}
 
-		// Enrich messages (Mantis URL expansion).
+		// Shape messages for the queue. (Mantis enrichment is now the agent's
+		// job via the mantis skill + MANTIS_API_* env vars.)
 		var threadMsgs []queue.ThreadMessage
 		for _, m := range rawMsgs {
-			text := m.Text
-			if mantisClient.IsConfigured() {
-				text = bot.EnrichMessage(text, mantisClient)
-			}
 			threadMsgs = append(threadMsgs, queue.ThreadMessage{
 				User:      slackPort.ResolveUser(m.User),
 				Timestamp: m.Timestamp,
-				Text:      text,
+				Text:      m.Text,
 			})
 		}
 
@@ -421,19 +409,14 @@ func Run(cfg *config.Config) (*Handle, error) {
 	api := slack.New(cfg.Slack.BotToken, slack.OptionAppLevelToken(cfg.Slack.AppToken))
 	sm := socketmode.New(api)
 
-	botUserID := ""
-	if authResp, err := api.AuthTest(); err == nil {
-		botUserID = authResp.UserID
-		appLogger.Info("Bot 身份已解析", "phase", "處理中", "user_id", botUserID)
-	} else {
-		appLogger.Warn("Bot 身份解析失敗", "phase", "失敗", "error", err)
-	}
+	appLogger.Info("Bot 身份已解析", "phase", "處理中",
+		"user_id", identity.UserID, "bot_id", identity.BotID)
 
 	appLogger.Info("啟動 Bot", "phase", "處理中", "version", Version, "commit", Commit, "date", Date)
 
 	go func() {
 		for evt := range sm.Events {
-			handleSocketEvent(evt, sm, handler, wf, slackClient, jobStore, bundle, retryHandler, cfg, botUserID, appLogger)
+			handleSocketEvent(evt, sm, handler, wf, slackClient, jobStore, bundle, retryHandler, cfg, identity.UserID, appLogger)
 		}
 	}()
 

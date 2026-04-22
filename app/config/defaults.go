@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -150,7 +151,8 @@ func applyPromptDefaults(p *PromptConfig) {
 	}
 }
 
-// resolveSecrets merges github.token into secrets and applies env var overrides.
+// resolveSecrets merges github.token and mantis.* into secrets and
+// applies env var overrides.
 func resolveSecrets(cfg *Config) {
 	if cfg.Secrets == nil {
 		cfg.Secrets = make(map[string]string)
@@ -158,6 +160,14 @@ func resolveSecrets(cfg *Config) {
 	if cfg.GitHub.Token != "" {
 		if _, exists := cfg.Secrets["GH_TOKEN"]; !exists {
 			cfg.Secrets["GH_TOKEN"] = cfg.GitHub.Token
+		}
+	}
+	if cfg.Mantis.BaseURL != "" && cfg.Mantis.APIToken != "" {
+		if _, exists := cfg.Secrets["MANTIS_API_URL"]; !exists {
+			cfg.Secrets["MANTIS_API_URL"] = strings.TrimRight(cfg.Mantis.BaseURL, "/") + "/api/rest"
+		}
+		if _, exists := cfg.Secrets["MANTIS_API_TOKEN"]; !exists {
+			cfg.Secrets["MANTIS_API_TOKEN"] = cfg.Mantis.APIToken
 		}
 	}
 	for k, v := range scanSecretEnvVars() {

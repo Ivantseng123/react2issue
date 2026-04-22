@@ -40,7 +40,7 @@ func (s *shimSlack) PostExternalSelector(ch, prompt, aid, ph, ts string) (string
 func (s *shimSlack) OpenTextInputModal(tid, title, label, name, metadata string) error { return nil }
 func (s *shimSlack) ResolveUser(uid string) string                                     { return uid }
 func (s *shimSlack) GetChannelName(cid string) string                                  { return cid }
-func (s *shimSlack) FetchThreadContext(c, ts, tts, bot string, lim int) ([]slackclient.ThreadRawMessage, error) {
+func (s *shimSlack) FetchThreadContext(c, ts, tts string, lim int) ([]slackclient.ThreadRawMessage, error) {
 	return nil, nil
 }
 func (s *shimSlack) DownloadAttachments(msgs []slackclient.ThreadRawMessage, dir string) []slackclient.AttachmentDownload {
