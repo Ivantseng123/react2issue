@@ -138,6 +138,27 @@ var WatchdogKillsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 	Help:      "Jobs killed by the watchdog.",
 }, []string{"reason"})
 
+// ---- Availability ----
+
+var WorkerAvailabilityVerdictTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: namespace,
+	Name:      "worker_availability_verdict_total",
+	Help:      "Counts of availability verdicts by kind and stage.",
+}, []string{"kind", "stage"})
+
+var WorkerAvailabilityCheckDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+	Namespace: namespace,
+	Name:      "worker_availability_check_duration_seconds",
+	Help:      "Latency of WorkerAvailability.compute.",
+	Buckets:   []float64{0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1},
+})
+
+var WorkerAvailabilityCheckErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Namespace: namespace,
+	Name:      "worker_availability_check_errors_total",
+	Help:      "Errors from availability dependencies.",
+}, []string{"dependency"})
+
 // ---- External ----
 
 var ExternalDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -184,6 +205,9 @@ func Register(reg prometheus.Registerer, q queue.JobQueue, store queue.JobStore)
 		WatchdogKillsTotal,
 		ExternalDuration,
 		ExternalErrorsTotal,
+		WorkerAvailabilityVerdictTotal,
+		WorkerAvailabilityCheckDuration,
+		WorkerAvailabilityCheckErrors,
 	)
 
 	// GaugeFunc metrics — computed on each scrape.
