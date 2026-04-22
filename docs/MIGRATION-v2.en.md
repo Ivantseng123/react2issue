@@ -86,29 +86,13 @@ volumeMounts:
 args: ["app", "-c", "/etc/agentdock/app.yaml"]
 ```
 
-Inmem-mode app pod also needs worker.yaml:
-
-```yaml
-volumeMounts:
-  - name: app-config
-    mountPath: /etc/agentdock/app.yaml
-    subPath: app.yaml
-  - name: worker-config
-    mountPath: /etc/agentdock/worker.yaml
-    subPath: worker.yaml
-args:
-  - "app"
-  - "-c"
-  - "/etc/agentdock/app.yaml"
-  - "--worker-config"
-  - "/etc/agentdock/worker.yaml"
-```
-
-Worker deployment (Redis mode):
+Worker deployment:
 
 ```yaml
 args: ["worker", "-c", "/etc/agentdock/worker.yaml"]
 ```
+
+> Since v2.1, the inmem transport is gone, so the app pod no longer has to mount `worker.yaml` and the worker always runs as its own deployment. See the **v2.0 → v2.2 follow-up changes** section below.
 
 ## Worker machine (local launch)
 
@@ -121,6 +105,74 @@ agentdock worker               # reads ~/.config/agentdock/worker.yaml by defaul
 ## FAQ
 
 - **Q: startup logs `config file not found: ~/.config/agentdock/app.yaml`** → run `agentdock init app -i` to create it.
-- **Q: `unsupported queue.transport`** → v2.1 removes inmem mode. `queue.transport` must be `redis` on both app and worker, with `redis.addr` set.
 - **Q: worker preflight reports `secret_key 與 app 不匹配`** → the secret_key differs from the app's. Copy the value from the app config into worker.yaml.
 - **Q: log warns `未知設定鍵 key=worker.count`** → the schema is flat now. Rename `worker.count` to `count` and `worker.prompt.extra_rules` to `prompt.extra_rules`.
+
+## v2.0 → v2.2 follow-up changes
+
+v2.0 was the big config-split release. The 2.x point releases after that are mostly additive — only one real breaking change:
+
+### v2.0 → v2.1: inmem transport removed (**breaking**)
+
+v2.0 still supported `queue.transport: inmem` (app and worker in one process). v2.1 removes it entirely; only `redis` is accepted. Steps:
+
+1. Set `queue.transport: redis` in both `app.yaml` and `worker.yaml`.
+2. Both sides need `redis.addr` and a matching `secret_key`.
+3. Run the worker as its own deployment / process.
+
+Leaving `queue.transport: inmem` in place yields an `unsupported queue.transport` startup error.
+
+Other v2.1 changes (additive — existing yaml keeps working):
+
+- `nickname_pool` (worker.yaml) — random display nicknames.
+- `worker.github.token` is now optional — if the app ships `secrets["GH_TOKEN"]`, the worker inherits it.
+
+### v2.1 → v2.2: no breaking changes
+
+Adds the `github-pr-review` skill and the `agentdock pr-review-helper` subcommand. The PR Review workflow itself stays off until you set `pr_review.enabled: true` (see next).
+
+### v2.2 + workflow-types (PR #124): prompt schema reshape + PR Review feature flag
+
+Three verbs (`issue` / `ask` / `review`) each with their own prompt. All changes are additive, so an unchanged v2.0-style `app.yaml` still runs — but migrating is recommended.
+
+1. **Prompt moves to per-workflow nesting**:
+
+   Old (flat, supported as a legacy alias):
+
+   ```yaml
+   prompt:
+     goal: "Use the /triage-issue skill ..."
+     output_rules: [...]
+   ```
+
+   New:
+
+   ```yaml
+   prompt:
+     language: English
+     allow_worker_rules: true
+     issue:
+       goal: "..."
+       output_rules: []
+     ask:
+       goal: "..."
+       output_rules: [...]
+     pr_review:
+       goal: "..."
+       output_rules: [...]
+   ```
+
+   At load time the flat `prompt.goal` / `prompt.output_rules` fields are copied into `prompt.issue.*` (only if `prompt.issue.*` is empty). Any workflow field left blank falls back to the hardcoded defaults in `app/config/defaults.go`, so leaving the whole `prompt:` block empty is valid too.
+
+2. **PR Review feature flag (off by default)**:
+
+   ```yaml
+   pr_review:
+     enabled: false
+   ```
+
+   Before enabling: confirm the worker has the `github-pr-review` skill mounted, `agentdock pr-review-helper` is available on the worker host, and `secrets.GH_TOKEN` has permission to post review comments on the target PR.
+
+3. **Slack `/triage` slash command is now a fallback**: real triggers are `@bot <verb>` (`issue` / `ask` / `review`). The old `/triage` command is still registered — when invoked, the bot replies with a hint to switch to `@bot`. No manifest change is required for this to keep working, but updating the slash-command `description` to mark it legacy is recommended.
+
+Full field reference: [configuration-app.en.md](configuration-app.en.md#workflow-specific-prompts) and [configuration-app.en.md](configuration-app.en.md#enabling-pr-review).

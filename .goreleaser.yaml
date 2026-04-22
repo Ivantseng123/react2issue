@@ -33,7 +33,6 @@ archives:
       - README.md
       - README.en.md
       - LICENSE
-      - docs/MIGRATION-v1.md
 
 checksum:
   name_template: 'checksums.txt'

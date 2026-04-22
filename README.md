@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-> **從 v1 升級到 v2？** 請見 [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md)（`config.yaml` 拆成 `app.yaml` + `worker.yaml`，worker schema 扁平化）。早期 v0 → v1 請見 [docs/MIGRATION-v1.md](docs/MIGRATION-v1.md)。
+> **從 v1 升級到 v2？** 請見 [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md)（`config.yaml` 拆成 `app.yaml` + `worker.yaml`，worker schema 扁平化；底部有 v2.0 → v2.2 的後續變更）。
 
 AI agent 調度平台 — 從 Slack 接收請求，分派給 CLI agent（claude/codex/opencode）執行，回傳結構化結果。目前支援三個工作流，全部由 `@bot <verb>` 觸發：
 

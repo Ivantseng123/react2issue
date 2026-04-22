@@ -2,7 +2,7 @@
 
 [繁體中文](README.md)
 
-> **Upgrading from v1?** See [docs/MIGRATION-v2.en.md](docs/MIGRATION-v2.en.md) (`config.yaml` splits into `app.yaml` + `worker.yaml`, flat worker schema). v0 → v1 is [docs/MIGRATION-v1.en.md](docs/MIGRATION-v1.en.md).
+> **Upgrading from v1?** See [docs/MIGRATION-v2.en.md](docs/MIGRATION-v2.en.md) (`config.yaml` splits into `app.yaml` + `worker.yaml`, flat worker schema; bottom of that doc covers v2.0 → v2.2 follow-ups).
 
 AI agent dispatch platform — receives requests from Slack, dispatches to CLI agents (claude/codex/opencode) for execution, returns structured results. Three workflows today, all routed by `@bot <verb>`:
 
