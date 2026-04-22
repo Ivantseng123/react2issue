@@ -120,9 +120,7 @@ func TestPool_ExecutesJobAndPublishesResult(t *testing.T) {
 		if !strings.Contains(result.RawOutput, "===TRIAGE_RESULT===") {
 			t.Errorf("RawOutput missing TRIAGE_RESULT marker: %q", result.RawOutput)
 		}
-		if result.Title != "" {
-			t.Errorf("worker must not populate Title; got %q", result.Title)
-		}
+		// Title is no longer a JobResult field — parsing is app-side.
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for result")
 	}

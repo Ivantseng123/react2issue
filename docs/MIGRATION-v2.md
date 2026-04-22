@@ -86,29 +86,13 @@ volumeMounts:
 args: ["app", "-c", "/etc/agentdock/app.yaml"]
 ```
 
-Inmem 模式下 app pod 需要同時掛載 worker.yaml：
-
-```yaml
-volumeMounts:
-  - name: app-config
-    mountPath: /etc/agentdock/app.yaml
-    subPath: app.yaml
-  - name: worker-config
-    mountPath: /etc/agentdock/worker.yaml
-    subPath: worker.yaml
-args:
-  - "app"
-  - "-c"
-  - "/etc/agentdock/app.yaml"
-  - "--worker-config"
-  - "/etc/agentdock/worker.yaml"
-```
-
-Redis 模式下 worker deployment：
+Worker deployment：
 
 ```yaml
 args: ["worker", "-c", "/etc/agentdock/worker.yaml"]
 ```
+
+> v2.1 起 inmem transport 被移除，app pod 不再需要同時掛載 `worker.yaml`，worker 一律獨立 deployment。詳見下面 〈v2.0 → v2.2 後續變更〉。
 
 ## Worker 機（本地啟動）
 
@@ -121,6 +105,74 @@ agentdock worker               # 預設讀 ~/.config/agentdock/worker.yaml
 ## 常見問題
 
 - **Q：啟動報 `config file not found: ~/.config/agentdock/app.yaml`** → 執行 `agentdock init app -i` 重建。
-- **Q：`unsupported queue.transport`** → v2.1 起 inmem mode 被移除，`queue.transport` 只接受 `redis`。把兩邊 config 的 `queue.transport` 都改成 `redis` 並填 `redis.addr`。
 - **Q：worker 啟動時 preflight 報 `secret_key 與 app 不匹配`** → `secret_key` 值跟 app 不一樣。從 app pod 拿 secret_key 貼到 worker.yaml。
 - **Q：看到 `未知設定鍵 key=worker.count`** → schema 扁平化，把 `worker.count` 改成 `count`、`worker.prompt.extra_rules` 改成 `prompt.extra_rules`。
+
+## v2.0 → v2.2 後續變更
+
+v2.0 是 config 拆檔的大改版。之後的 2.x 小版本大多是加法，只有一件真正的 breaking：
+
+### v2.0 → v2.1：inmem transport 移除（**breaking**）
+
+v2.0 還支援 `queue.transport: inmem`（app 和 worker 跑在同一個 process）。v2.1 整段砍掉，只剩 `redis`。升級步驟：
+
+1. 兩邊（`app.yaml` / `worker.yaml`）都把 `queue.transport` 改成 `redis`。
+2. 兩邊都填 `redis.addr`、`secret_key`（同一把）。
+3. Worker 改成獨立 deployment / 獨立 process 啟動。
+
+啟動時若還留著 `queue.transport: inmem` 會跳 `unsupported queue.transport`。
+
+其他變更（additive，舊 yaml 照跑）：
+
+- `nickname_pool`（worker.yaml）— 隨機暱稱池。
+- `worker.github.token` 變成可選 — app 透過 `secrets["GH_TOKEN"]` 發給 worker 就夠。
+
+### v2.1 → v2.2：無 breaking
+
+新增 `github-pr-review` skill 和 `agentdock pr-review-helper` subcommand，但 PR Review workflow 要另外用 `pr_review.enabled: true` 才會啟用（見下一段）。
+
+### v2.2 + workflow-types（PR #124）：prompt schema 重組 + PR Review feature flag
+
+三個動詞（`issue` / `ask` / `review`）+ 各自 prompt。改動都是 additive，舊 app.yaml 不改也能跑，但建議遷移。
+
+1. **Prompt 改成 per-workflow nested**：
+
+   舊（flat，還支援但視為 legacy alias）：
+
+   ```yaml
+   prompt:
+     goal: "Use the /triage-issue skill ..."
+     output_rules: [...]
+   ```
+
+   新：
+
+   ```yaml
+   prompt:
+     language: 繁體中文
+     allow_worker_rules: true
+     issue:
+       goal: "..."
+       output_rules: []
+     ask:
+       goal: "..."
+       output_rules: [...]
+     pr_review:
+       goal: "..."
+       output_rules: [...]
+   ```
+
+   載入時 `prompt.goal` / `prompt.output_rules`（flat）會被拷到 `prompt.issue.*`（前提是 `prompt.issue.*` 沒設）。每個 workflow 任何欄位留空都會 fallback 到 `app/config/defaults.go` 的 hardcoded 預設，所以整個 `prompt:` 區塊留空也 OK。
+
+2. **PR Review feature flag（預設停用）**：
+
+   ```yaml
+   pr_review:
+     enabled: false
+   ```
+
+   打開前先確認 worker 那側有 `github-pr-review` skill 可用、`agentdock pr-review-helper` subcommand 可執行、`secrets.GH_TOKEN` 有在目標 PR 留 review 的權限。
+
+3. **Slack `/triage` slash command 變成 fallback**：實際觸發改成 `@bot <verb>`（`issue` / `ask` / `review`）。舊的 `/triage` 仍註冊，被呼叫會回一條提示叫使用者改用 `@bot`。不需要改 Manifest 就能繼續運作，但建議把 slash command 的 `description` 更新成 legacy 說明。
+
+欄位完整說明：[configuration-app.md](configuration-app.md#workflow-specific-prompts)、[configuration-app.md](configuration-app.md#pr-review-啟用)。

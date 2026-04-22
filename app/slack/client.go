@@ -211,6 +211,29 @@ func (c *Client) PostMessage(channelID, text, threadTS string) error {
 	return err
 }
 
+// UploadFile uploads a text/markdown file into the given thread with an
+// initial comment. Used for answer bodies that exceed Slack's comfortable
+// read length — the file preview renders the content and users can expand
+// or download it. threadTS must be non-empty; the file is posted as a
+// thread reply.
+func (c *Client) UploadFile(channelID, threadTS, filename, title, content, initialComment string) error {
+	start := time.Now()
+	_, err := c.api.UploadFile(slack.UploadFileParameters{
+		Channel:         channelID,
+		ThreadTimestamp: threadTS,
+		Filename:        filename,
+		Title:           title,
+		Content:         content,
+		InitialComment:  initialComment,
+	})
+	metrics.ExternalDuration.WithLabelValues("slack", "upload_file").Observe(time.Since(start).Seconds())
+	if err != nil {
+		metrics.ExternalErrorsTotal.WithLabelValues("slack", "upload_file").Inc()
+		return fmt.Errorf("upload file: %w", err)
+	}
+	return nil
+}
+
 // PostMessageWithTS posts a message and returns its timestamp so callers can
 // later UpdateMessage/UpdateMessageWithButton to edit it in place.
 func (c *Client) PostMessageWithTS(channelID, text, threadTS string) (string, error) {
@@ -241,14 +264,21 @@ func (c *Client) GetChannelName(channelID string) string {
 
 // PostSelector sends a message with clickable buttons.
 // If threadTS is non-empty, posts in that thread.
+// labels[i] is the button text; values[i] is the payload returned as
+// action.Value on click. When values is nil/short, the label doubles as
+// the value (legacy behaviour).
 // Returns the message timestamp.
-func (c *Client) PostSelector(channelID, prompt, actionPrefix string, options []string, threadTS string) (string, error) {
+func (c *Client) PostSelector(channelID, prompt, actionPrefix string, labels, values []string, threadTS string) (string, error) {
 	var buttons []slack.BlockElement
-	for i, opt := range options {
+	for i, label := range labels {
+		val := label
+		if i < len(values) {
+			val = values[i]
+		}
 		buttons = append(buttons, slack.NewButtonBlockElement(
 			fmt.Sprintf("%s_%d", actionPrefix, i),
-			opt,
-			slack.NewTextBlockObject(slack.PlainTextType, opt, false, false),
+			val,
+			slack.NewTextBlockObject(slack.PlainTextType, label, false, false),
 		))
 	}
 
@@ -276,16 +306,20 @@ func (c *Client) PostSelector(channelID, prompt, actionPrefix string, options []
 // uses default button style.
 func (c *Client) PostSelectorWithBack(
 	channelID, prompt, actionPrefix string,
-	options []string,
+	labels, values []string,
 	threadTS string,
 	backActionID, backLabel string,
 ) (string, error) {
 	var buttons []slack.BlockElement
-	for i, opt := range options {
+	for i, label := range labels {
+		val := label
+		if i < len(values) {
+			val = values[i]
+		}
 		buttons = append(buttons, slack.NewButtonBlockElement(
 			fmt.Sprintf("%s_%d", actionPrefix, i),
-			opt,
-			slack.NewTextBlockObject(slack.PlainTextType, opt, false, false),
+			val,
+			slack.NewTextBlockObject(slack.PlainTextType, label, false, false),
 		))
 	}
 	if backActionID != "" {
@@ -315,8 +349,10 @@ func (c *Client) PostSelectorWithBack(
 }
 
 // PostExternalSelector sends a message with a type-ahead searchable dropdown.
-// Returns the message timestamp.
-func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS string) (string, error) {
+// When cancelActionID and cancelLabel are non-empty, adds a cancel button
+// alongside the dropdown so users can bail out of the selection. Returns the
+// message timestamp.
+func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS, cancelActionID, cancelLabel string) (string, error) {
 	section := slack.NewSectionBlock(
 		slack.NewTextBlockObject(slack.MarkdownType, prompt, false, false),
 		nil, nil,
@@ -330,7 +366,16 @@ func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, 
 	extSelect.MinQueryLength = new(int) // 0 = show options immediately
 	*extSelect.MinQueryLength = 0
 
-	actions := slack.NewActionBlock(actionID+"_block", extSelect)
+	elements := []slack.BlockElement{extSelect}
+	if cancelActionID != "" && cancelLabel != "" {
+		cancelBtn := slack.NewButtonBlockElement(
+			cancelActionID,
+			cancelLabel,
+			slack.NewTextBlockObject(slack.PlainTextType, cancelLabel, false, false),
+		)
+		elements = append(elements, cancelBtn)
+	}
+	actions := slack.NewActionBlock(actionID+"_block", elements...)
 
 	opts := []slack.MsgOption{slack.MsgOptionBlocks(section, actions)}
 	if threadTS != "" {
@@ -344,37 +389,43 @@ func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, 
 	return ts, nil
 }
 
-// OpenDescriptionModal opens a modal with a text input for extra description.
-// selectorMsgTS is stored as private_metadata so we can find the pending issue on submit.
-func (c *Client) OpenDescriptionModal(triggerID, selectorMsgTS string) error {
+// OpenTextInputModal opens a modal with a single multiline text input.
+// metadata is stored in the view's private_metadata so the submit handler
+// can resolve the originating pending entry.
+func (c *Client) OpenTextInputModal(triggerID, title, label, inputName, metadata string) error {
 	textInput := slack.NewPlainTextInputBlockElement(
-		slack.NewTextBlockObject(slack.PlainTextType, "輸入補充說明...", false, false),
-		"description_input",
+		slack.NewTextBlockObject(slack.PlainTextType, "請輸入...", false, false),
+		inputName,
 	)
 	textInput.Multiline = true
 
 	inputBlock := slack.NewInputBlock(
-		"description_block",
-		slack.NewTextBlockObject(slack.PlainTextType, "補充說明", false, false),
-		nil,
-		textInput,
+		inputName+"_block",
+		slack.NewTextBlockObject(slack.PlainTextType, label, false, false),
+		nil, textInput,
 	)
-	inputBlock.Optional = true
+	inputBlock.Optional = false
 
 	modalView := slack.ModalViewRequest{
 		Type:            slack.VTModal,
-		Title:           slack.NewTextBlockObject(slack.PlainTextType, "補充說明", false, false),
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, title, false, false),
 		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "送出", false, false),
-		Close:           slack.NewTextBlockObject(slack.PlainTextType, "跳過", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "取消", false, false),
 		Blocks:          slack.Blocks{BlockSet: []slack.Block{inputBlock}},
-		PrivateMetadata: selectorMsgTS,
+		PrivateMetadata: metadata,
 	}
-
 	_, err := c.api.OpenView(triggerID, modalView)
 	if err != nil {
-		return fmt.Errorf("open modal: %w", err)
+		return fmt.Errorf("open text input modal: %w", err)
 	}
 	return nil
+}
+
+// OpenDescriptionModal opens the description modal by delegating to
+// OpenTextInputModal. The optional-empty flavour from the pre-Phase-6
+// implementation is intentionally dropped (spec §modal-generalisation).
+func (c *Client) OpenDescriptionModal(triggerID, selectorMsgTS string) error {
+	return c.OpenTextInputModal(triggerID, "補充說明", "補充說明", "description_input", selectorMsgTS)
 }
 
 // PostMessageWithButton sends a message with a single action button in the thread.
@@ -493,9 +544,11 @@ func (c *Client) FetchThreadContext(channelID, threadTS, triggerTS, botUserID, b
 // external bots) and drops our own bot's posts (identified by botUserID
 // or botID). Bot messages get their text reconstructed from blocks or
 // attachments when m.Text is empty; messages whose reconstructed text is
-// also empty are dropped entirely. Bot display names are prefixed with
-// "bot:" in the User field so downstream prompts can tell them apart
-// from humans.
+// also empty are dropped entirely. User messages whose content is only a
+// @bot mention of us (no other text) are also dropped — those are triggers
+// the user sent that got deduped, so they carry no signal for the agent.
+// Bot display names are prefixed with "bot:" in the User field so
+// downstream prompts can tell them apart from humans.
 func filterThreadMessages(messages []slack.Message, triggerTS, botUserID, botID string) []ThreadRawMessage {
 	var result []ThreadRawMessage
 	for _, m := range messages {
@@ -513,6 +566,10 @@ func filterThreadMessages(messages []slack.Message, triggerTS, botUserID, botID 
 			// Pure interactive / reaction-only bot message — no signal for triage.
 			continue
 		}
+		if botUserID != "" && isOnlySelfMention(text, botUserID) {
+			// User message that's just "<@bot>" with no actual question — prompt noise.
+			continue
+		}
 		user := m.User
 		if m.BotID != "" {
 			if name := resolveBotDisplayName(m); name != "" {
@@ -527,6 +584,19 @@ func filterThreadMessages(messages []slack.Message, triggerTS, botUserID, botID 
 		})
 	}
 	return result
+}
+
+// isOnlySelfMention reports whether text contains nothing but zero or more
+// "<@botUserID>" mentions (and whitespace). Strips every occurrence and
+// checks what remains — "<@bot>" / " <@bot> " / "<@bot> <@bot>" all count
+// as noise; "<@bot> hello" / "<@otherbot>" do not.
+func isOnlySelfMention(text, botUserID string) bool {
+	if text == "" {
+		return false
+	}
+	mention := "<@" + botUserID + ">"
+	stripped := strings.TrimSpace(strings.ReplaceAll(text, mention, ""))
+	return stripped == ""
 }
 
 // AttachmentDownload is the result of downloading a single attachment.

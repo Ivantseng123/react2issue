@@ -35,6 +35,7 @@ type Job struct {
 	Attachments      []AttachmentMeta         `json:"attachments"`
 	StatusMsgTS      string                   `json:"status_msg_ts,omitempty"`
 	TaskType         string                   `json:"task_type,omitempty"`
+	WorkflowArgs     map[string]string        `json:"workflow_args,omitempty"`
 	RetryCount       int                      `json:"retry_count,omitempty"`
 	RetryOfJobID     string                   `json:"retry_of_job_id,omitempty"`
 	PromptContext    *PromptContext           `json:"prompt_context,omitempty"`
@@ -61,6 +62,7 @@ type PromptContext struct {
 	ExtraDescription string          `json:"extra_description,omitempty"`
 	Channel          string          `json:"channel"`
 	Reporter         string          `json:"reporter"`
+	BotName          string          `json:"bot_name,omitempty"` // Slack handle the agent should refer to itself by
 	Branch           string          `json:"branch,omitempty"`
 	Language         string          `json:"language"`
 	Goal             string          `json:"goal"`
@@ -71,13 +73,6 @@ type PromptContext struct {
 type JobResult struct {
 	JobID          string    `json:"job_id"`
 	Status         string    `json:"status"`
-	Title          string    `json:"title"`
-	Body           string    `json:"body"`
-	Labels         []string  `json:"labels"`
-	Confidence     string    `json:"confidence"`
-	FilesFound     int       `json:"files_found"`
-	Questions      int       `json:"open_questions"`
-	Message        string    `json:"message,omitempty"`
 	RawOutput      string    `json:"raw_output"`
 	Error          string    `json:"error"`
 	StartedAt      time.Time `json:"started_at"`

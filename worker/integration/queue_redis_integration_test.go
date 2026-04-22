@@ -83,9 +83,7 @@ func TestRedisFullFlow_SubmitToResult(t *testing.T) {
 		if !strings.Contains(result.RawOutput, "Test issue") {
 			t.Errorf("RawOutput missing expected title fragment; got %q", result.RawOutput)
 		}
-		if result.Title != "" {
-			t.Errorf("worker must not populate Title; got %q", result.Title)
-		}
+		// Title is no longer a JobResult field — parsing is app-side.
 	case <-ctx.Done():
 		t.Fatal("timeout waiting for result")
 	}

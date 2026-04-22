@@ -217,7 +217,9 @@ func (p *Pool) executeWithTracking(ctx context.Context, workerIndex int, job *qu
 		close(stopReporter)
 	}
 
-	// Clean up this job's worktree.
+	// Clean up this job's workdir. RemoveWorktree handles both the repo-clone
+	// path and the EmptyDirProvider path because it falls back to os.RemoveAll
+	// when `git worktree remove` fails on a non-git directory (see shared/github/repo.go).
 	if result.RepoPath != "" {
 		if err := p.cfg.RepoCache.RemoveWorktree(result.RepoPath); err != nil {
 			logger.Warn("Worktree 清理失敗", "phase", "失敗", "path", result.RepoPath, "error", err)

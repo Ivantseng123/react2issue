@@ -6,7 +6,7 @@ Overview, architecture, build/run, tests, and release flow live in `README.md` a
 
 ## Landmines
 
-- **Binary is `agentdock`, not `bot`.** Entry is `cmd/agentdock/`, and it requires a subcommand (`app`, `worker`, `init`, ...). Any instruction saying `./bot -config ...` is pre-v1 and wrong; see `docs/MIGRATION-v1.md`.
+- **Binary is `agentdock`, not `bot`.** Entry is `cmd/agentdock/`, and it requires a subcommand (`app`, `worker`, `init`, ...). Any instruction saying `./bot -config ...` is pre-v1 and wrong.
 - **App, worker, and shared are separate Go modules.** `app/`, `worker/`, and `shared/` each have their own `go.mod`. `internal/` no longer exists — do not recreate it. Any advice referencing `internal/<anything>` is pre-v2 and stale.
 - **Import direction is enforced by `test/import_direction_test.go`**: `app ✗ worker`, `worker ✗ app`, `shared ✗ app|worker`. Only the root module (cmd/, test/) may import all three. The test fails the CI Test job on any violation.
 - **Config is split into `app.yaml` and `worker.yaml`.** There is no migration tool. Users rebuild via `agentdock init app` and `agentdock init worker`. See `docs/MIGRATION-v2.md`.
@@ -24,6 +24,5 @@ This is a **structuring tool, not a diagnosis tool.** The core value is turning 
 ## Routing
 
 - Logging conventions (component/phase taxonomy, attribute names, Chinese message format): `shared/logging/GUIDE.md`
-- v1 migration (binary rename, subcommands, config path): `docs/MIGRATION-v1.md`
-- v2 migration (app/worker module split, config rebuild): `docs/MIGRATION-v2.md`
+- v2 migration (app/worker module split, config rebuild, v2.0→v2.2 follow-ups): `docs/MIGRATION-v2.md`
 - Historical specs and plans: `docs/superpowers/`

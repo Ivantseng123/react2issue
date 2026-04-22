@@ -2,6 +2,7 @@ package queue
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -76,6 +77,24 @@ func TestPromptContext_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestJobResult_NoIssueSpecificFields asserts that JobResult does NOT carry
+// Issue-specific fields (Title, Body, Labels, Confidence, FilesFound,
+// Questions, Message). These are now owned by workflow-local types (e.g.
+// TriageResult) and must not appear on the wire type.
+func TestJobResult_NoIssueSpecificFields(t *testing.T) {
+	r := JobResult{}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	s := string(data)
+	for _, banned := range []string{"title", "body", "labels", "confidence", "files_found", "open_questions", "message"} {
+		if strings.Contains(s, `"`+banned+`"`) {
+			t.Errorf("JobResult JSON must not contain field %q; got %s", banned, s)
+		}
+	}
+}
+
 func TestJob_PromptContextField_JSONRoundTrip(t *testing.T) {
 	job := Job{
 		ID: "test-1",
@@ -98,5 +117,35 @@ func TestJob_PromptContextField_JSONRoundTrip(t *testing.T) {
 	}
 	if got.PromptContext.Goal != "triage" {
 		t.Errorf("Goal = %q, want triage", got.PromptContext.Goal)
+	}
+}
+
+func TestJob_WorkflowArgsRoundTrips(t *testing.T) {
+	j := &Job{
+		ID:       "j1",
+		TaskType: "pr_review",
+		WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/7", "pr_number": "7"},
+	}
+	buf, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Job
+	if err := json.Unmarshal(buf, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.WorkflowArgs["pr_url"] != "https://github.com/foo/bar/pull/7" {
+		t.Errorf("WorkflowArgs[pr_url] = %q", got.WorkflowArgs["pr_url"])
+	}
+	if got.WorkflowArgs["pr_number"] != "7" {
+		t.Errorf("WorkflowArgs[pr_number] = %q", got.WorkflowArgs["pr_number"])
+	}
+}
+
+func TestJob_WorkflowArgsOmitEmpty(t *testing.T) {
+	j := &Job{ID: "j1", TaskType: "issue"}
+	buf, _ := json.Marshal(j)
+	if strings.Contains(string(buf), "workflow_args") {
+		t.Errorf("empty WorkflowArgs should be omitted: %s", buf)
 	}
 }
