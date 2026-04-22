@@ -59,6 +59,9 @@ func ApplyDefaults(cfg *Config) {
 	if cfg.Queue.StatusInterval <= 0 {
 		cfg.Queue.StatusInterval = 5 * time.Second
 	}
+	if cfg.Availability.AvgJobDuration <= 0 {
+		cfg.Availability.AvgJobDuration = 3 * time.Minute
+	}
 	if cfg.RepoCache.Dir == "" {
 		if cacheDir, err := os.UserCacheDir(); err == nil {
 			cfg.RepoCache.Dir = filepath.Join(cacheDir, "agentdock", "repos")
