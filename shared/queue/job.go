@@ -114,6 +114,7 @@ type WorkerInfo struct {
 	Nickname    string   `json:"nickname,omitempty"`
 	Agents      []string `json:"agents"`
 	Tags        []string `json:"tags"`
+	Slots       int      `json:"slots,omitempty"` // concurrent jobs this worker handles; 0 normalised to 1 by consumers
 	ConnectedAt time.Time
 }
 
