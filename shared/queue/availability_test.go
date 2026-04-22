@@ -97,3 +97,39 @@ func TestAvailability_BusyEnqueueOK_WithQueueDepth(t *testing.T) {
 		t.Errorf("EstimatedWait = %v, want %v", v.EstimatedWait, wantETA)
 	}
 }
+
+func TestAvailability_MultiSlotWorker(t *testing.T) {
+	q, store, a := newAvail(t)
+	ctx := context.Background()
+
+	// One worker with 3 slots, two running jobs → 1 spare slot → OK.
+	q.Register(ctx, queue.WorkerInfo{WorkerID: "w1", Slots: 3})
+	store.Put(&queue.Job{ID: "j1"})
+	store.UpdateStatus("j1", queue.JobRunning)
+	store.Put(&queue.Job{ID: "j2"})
+	store.UpdateStatus("j2", queue.JobRunning)
+
+	v := a.CheckHard(ctx)
+	if v.Kind != queue.VerdictOK {
+		t.Errorf("Kind = %q, want %q (3 slots, 2 active)", v.Kind, queue.VerdictOK)
+	}
+	if v.TotalSlots != 3 {
+		t.Errorf("TotalSlots = %d, want 3", v.TotalSlots)
+	}
+}
+
+func TestAvailability_ZeroSlotsNormalisedToOne(t *testing.T) {
+	q, _, a := newAvail(t)
+	ctx := context.Background()
+
+	// Slots=0 (e.g. older worker that didn't set the field) → treated as 1.
+	q.Register(ctx, queue.WorkerInfo{WorkerID: "old", Slots: 0})
+
+	v := a.CheckHard(ctx)
+	if v.TotalSlots != 1 {
+		t.Errorf("TotalSlots = %d, want 1 (normalised)", v.TotalSlots)
+	}
+	if v.Kind != queue.VerdictOK {
+		t.Errorf("Kind = %q, want %q", v.Kind, queue.VerdictOK)
+	}
+}
