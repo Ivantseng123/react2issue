@@ -167,7 +167,19 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 	reg.Register(prReviewWorkflow)
 	dispatcher := workflow.NewDispatcher(reg, slackPort, appLogger)
 
-	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger, nil)
+	availability := queue.NewWorkerAvailability(coordinator, jobStore, queue.AvailabilityConfig{
+		AvgJobDuration: cfg.Availability.AvgJobDuration,
+	},
+		queue.WithVerdictHook(func(kind, stage string, d time.Duration) {
+			metrics.WorkerAvailabilityVerdictTotal.WithLabelValues(kind, stage).Inc()
+			metrics.WorkerAvailabilityCheckDuration.Observe(d.Seconds())
+		}),
+		queue.WithDepErrorHook(func(dep string) {
+			metrics.WorkerAvailabilityCheckErrors.WithLabelValues(dep).Inc()
+		}),
+	)
+
+	wf := bot.NewWorkflow(cfg, dispatcher, slackPort, repoDiscovery, appLogger, availability)
 
 	handler := slackclient.NewHandler(slackclient.HandlerConfig{
 		DedupTTL:        5 * time.Minute,
@@ -201,6 +213,11 @@ func Run(cfg *config.Config, identity bot.Identity) (*Handle, error) {
 				handler.ClearThreadDedup(p.ChannelID, p.ThreadTS)
 			}
 			return
+		}
+
+		// Append worker-availability busy hint if the pre-submit check set one.
+		if p.BusyHint != "" {
+			statusText += " " + p.BusyHint
 		}
 
 		// Post lifecycle status message.
