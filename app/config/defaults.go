@@ -99,15 +99,15 @@ func DefaultsMap() map[string]any {
 // Hardcoded per-workflow defaults. Operator yaml wins over these.
 const (
 	defaultIssueGoal    = "Use the /triage-issue skill to investigate and produce a triage result."
-	defaultAskGoal      = "Answer the user's question using the thread, and (if a codebase is attached) the repo. Output ===ASK_RESULT=== followed by JSON {\"answer\": \"<markdown>\"}."
+	defaultAskGoal      = "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules. Output ===ASK_RESULT=== followed by JSON {\"answer\": \"<markdown>\"}."
 	defaultPRReviewGoal = "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper. Output ===REVIEW_RESULT=== with status (POSTED|SKIPPED|ERROR) + summary + severity_summary."
 )
 
 var (
 	defaultAskOutputRules = []string{
-		"Slack-friendly markdown, ≤30000 chars",
-		"No title / labels",
-		"Use fenced code blocks for code references",
+		"Format the answer in Slack mrkdwn — NOT GitHub markdown. Use *text* (single asterisk) for bold, _text_ for italic, ~text~ for strikethrough, <url|label> for links. Do not use # / ## / ### headings; use *bold* as section labels. Triple-backtick fenced code blocks and single-backtick inline code both render correctly.",
+		"No title, no labels — output the answer content only. Keep it ≤30000 chars.",
+		"When referring to yourself, use the exact Slack handle from the <bot> tag in <issue_context> (e.g. 'ai_trigger_issue_bot') verbatim. Do NOT invent shorthand like '@bot ask', 'Ask 助理', 'AI 助理', '程式碼助手'. If a sentence doesn't need self-reference, just answer without name-dropping.",
 	}
 	defaultPRReviewOutputRules = []string{
 		"Focus on correctness, security, style",
