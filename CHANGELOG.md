@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/Ivantseng123/agentdock/compare/v2.2.0...v2.3.0) (2026-04-22)
+
+
+### Features
+
+* **workflow+skill:** Ask branch/cancel UX, modal-first fix, mention filter, ask-assistant skill + bot identity plumbing ([#124](https://github.com/Ivantseng123/agentdock/issues/124)) ([b6e2fca](https://github.com/Ivantseng123/agentdock/commit/b6e2fcaf5c7b7e1f00ad8bd06d9670883dc5b483))
+
 ## [2.2.0](https://github.com/Ivantseng123/agentdock/compare/v2.1.3...v2.2.0) (2026-04-22)
 
 
