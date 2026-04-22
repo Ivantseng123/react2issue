@@ -245,6 +245,7 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 			WorkerID:    fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i),
 			Name:        p.cfg.Hostname,
 			Nickname:    p.nicknameForIndex(i),
+			Slots:       1, // hardcoded; future work: read from worker.yaml when concurrent execution lands
 			ConnectedAt: now,
 		}
 		if err := p.cfg.Queue.Register(ctx, info); err != nil {
@@ -263,6 +264,7 @@ func (p *Pool) workerHeartbeat(ctx context.Context) {
 					WorkerID:    fmt.Sprintf("%s/worker-%d", p.cfg.Hostname, i),
 					Name:        p.cfg.Hostname,
 					Nickname:    p.nicknameForIndex(i),
+					Slots:       1, // see initial-registration comment above
 					ConnectedAt: now,
 				}
 				p.cfg.Queue.Register(ctx, info)
