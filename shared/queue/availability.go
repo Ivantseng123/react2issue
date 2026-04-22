@@ -32,10 +32,10 @@ type AvailabilityConfig struct {
 }
 
 type availability struct {
-	queue   JobQueue
-	store   JobStore
-	avgJob  time.Duration
-	logger  *slog.Logger
+	queue  JobQueue
+	store  JobStore
+	avgJob time.Duration
+	logger *slog.Logger
 }
 
 func NewWorkerAvailability(q JobQueue, store JobStore, cfg AvailabilityConfig) WorkerAvailability {
@@ -57,12 +57,15 @@ func (a *availability) CheckHard(ctx context.Context) Verdict { return a.compute
 func (a *availability) compute(ctx context.Context) Verdict {
 	workers, err := a.queue.ListWorkers(ctx)
 	if err != nil {
-		a.logger.Warn("availability: ListWorkers failed", "error", err)
+		a.logger.Warn("可用性檢查: 列舉 worker 失敗", "phase", "失敗", "error", err)
 		return Verdict{Kind: VerdictOK}
 	}
 	totalSlots := 0
 	for _, w := range workers {
 		totalSlots += normaliseSlots(w.Slots)
+	}
+	if len(workers) == 0 {
+		return Verdict{Kind: VerdictNoWorkers}
 	}
 	return Verdict{
 		Kind:        VerdictOK,

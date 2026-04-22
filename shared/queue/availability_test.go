@@ -36,3 +36,15 @@ func TestAvailability_HealthyOK(t *testing.T) {
 		t.Errorf("TotalSlots = %d, want 2", v.TotalSlots)
 	}
 }
+
+func TestAvailability_NoWorkers(t *testing.T) {
+	_, _, a := newAvail(t)
+
+	v := a.CheckHard(context.Background())
+	if v.Kind != queue.VerdictNoWorkers {
+		t.Errorf("Kind = %q, want %q", v.Kind, queue.VerdictNoWorkers)
+	}
+	if v.WorkerCount != 0 {
+		t.Errorf("WorkerCount = %d, want 0", v.WorkerCount)
+	}
+}
