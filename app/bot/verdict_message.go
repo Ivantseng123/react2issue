@@ -7,14 +7,28 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
-// RenderSoftWarn produces the trigger-time soft warning. Currently only the
-// NoWorkers verdict is rendered; other verdicts return "" (caller should not
-// post empty messages).
+// RenderSoftWarn produces the trigger-time soft warning. Returns "" when the
+// verdict doesn't warrant user-facing notice (OK, or BusyEnqueueOK with no
+// ETA).
+//
+// Two cases are rendered:
+//   - NoWorkers: no worker online, submit may fail
+//   - BusyEnqueueOK with ETA: all workers are busy — warn early so the user
+//     knows clicking through the selectors will end in a queued submit, not
+//     an immediate handoff
 func RenderSoftWarn(v queue.Verdict) string {
-	if v.Kind != queue.VerdictNoWorkers {
+	switch v.Kind {
+	case queue.VerdictNoWorkers:
+		return ":warning: 目前沒有 worker 在線，你仍可繼續選擇，送出時會再確認一次。"
+	case queue.VerdictBusyEnqueueOK:
+		if v.EstimatedWait <= 0 {
+			return ""
+		}
+		mins := int(v.EstimatedWait.Round(time.Minute).Minutes())
+		return fmt.Sprintf(":hourglass_flowing_sand: 目前所有 worker 都在忙，送出後預估等候 ~%dm。你仍可繼續選擇。", mins)
+	default:
 		return ""
 	}
-	return ":warning: 目前沒有 worker 在線，你仍可繼續選擇，送出時會再確認一次。"
 }
 
 // RenderHardReject produces the submit-time rejection message.

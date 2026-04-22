@@ -18,6 +18,36 @@ func TestRenderSoftWarn_NoWorkers(t *testing.T) {
 	}
 }
 
+func TestRenderSoftWarn_BusyWithETA(t *testing.T) {
+	v := queue.Verdict{
+		Kind:          queue.VerdictBusyEnqueueOK,
+		EstimatedWait: 6 * time.Minute,
+	}
+	got := RenderSoftWarn(v)
+	if got == "" {
+		t.Fatal("expected non-empty warning for BusyEnqueueOK with ETA")
+	}
+	if !strings.Contains(got, "都在忙") {
+		t.Errorf("missing key phrase '都在忙'; got %q", got)
+	}
+	if !strings.Contains(got, "6m") {
+		t.Errorf("missing ETA '6m'; got %q", got)
+	}
+}
+
+func TestRenderSoftWarn_BusyZeroETA_ReturnsEmpty(t *testing.T) {
+	v := queue.Verdict{Kind: queue.VerdictBusyEnqueueOK, EstimatedWait: 0}
+	if got := RenderSoftWarn(v); got != "" {
+		t.Errorf("expected empty for zero-ETA busy; got %q", got)
+	}
+}
+
+func TestRenderSoftWarn_OK_ReturnsEmpty(t *testing.T) {
+	if got := RenderSoftWarn(queue.Verdict{Kind: queue.VerdictOK}); got != "" {
+		t.Errorf("expected empty for OK verdict; got %q", got)
+	}
+}
+
 func TestRenderHardReject_NoWorkers(t *testing.T) {
 	got := RenderHardReject(queue.Verdict{Kind: queue.VerdictNoWorkers})
 	if !strings.Contains(got, ":x:") {

@@ -104,9 +104,8 @@ func (w *Workflow) HandleTrigger(event slackclient.TriggerEvent) {
 	// The hard check inside submit() gates actual queue submission.
 	if w.availability != nil {
 		verdict := w.availability.CheckSoft(context.Background())
-		if verdict.Kind == queue.VerdictNoWorkers {
-			_ = w.slack.PostMessage(event.ChannelID,
-				RenderSoftWarn(verdict), event.ThreadTS)
+		if msg := RenderSoftWarn(verdict); msg != "" {
+			_ = w.slack.PostMessage(event.ChannelID, msg, event.ThreadTS)
 		}
 	}
 
