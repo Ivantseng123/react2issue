@@ -1,0 +1,50 @@
+package bot
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Ivantseng123/agentdock/shared/queue"
+)
+
+func TestRenderSoftWarn_NoWorkers(t *testing.T) {
+	got := RenderSoftWarn(queue.Verdict{Kind: queue.VerdictNoWorkers})
+	if !strings.Contains(got, ":warning:") {
+		t.Errorf("missing :warning: prefix; got %q", got)
+	}
+	if !strings.Contains(got, "沒有 worker") {
+		t.Errorf("missing key phrase '沒有 worker'; got %q", got)
+	}
+}
+
+func TestRenderHardReject_NoWorkers(t *testing.T) {
+	got := RenderHardReject(queue.Verdict{Kind: queue.VerdictNoWorkers})
+	if !strings.Contains(got, ":x:") {
+		t.Errorf("missing :x: prefix; got %q", got)
+	}
+	if !strings.Contains(got, "無法處理") {
+		t.Errorf("missing '無法處理'; got %q", got)
+	}
+}
+
+func TestRenderBusyHint_WithETA(t *testing.T) {
+	v := queue.Verdict{
+		Kind:          queue.VerdictBusyEnqueueOK,
+		EstimatedWait: 9 * time.Minute,
+	}
+	got := RenderBusyHint(v)
+	if !strings.Contains(got, "預估等候") {
+		t.Errorf("missing '預估等候'; got %q", got)
+	}
+	if !strings.Contains(got, "9m") {
+		t.Errorf("expected '9m' in output; got %q", got)
+	}
+}
+
+func TestRenderBusyHint_ZeroETA_ReturnsEmpty(t *testing.T) {
+	v := queue.Verdict{Kind: queue.VerdictBusyEnqueueOK, EstimatedWait: 0}
+	if got := RenderBusyHint(v); got != "" {
+		t.Errorf("expected empty string for zero ETA; got %q", got)
+	}
+}
