@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.0](https://github.com/Ivantseng123/agentdock/compare/v2.3.1...v2.4.0) (2026-04-23)
+
+
+### Features
+
+* **prompt:** add response_schema default for issue workflow ([#132](https://github.com/Ivantseng123/agentdock/issues/132)) ([97707e0](https://github.com/Ivantseng123/agentdock/commit/97707e0a903889b904e249336c49db0b2aa49d6d))
+* **prompt:** split response_schema from goal; render unescaped ([#130](https://github.com/Ivantseng123/agentdock/issues/130)) ([c7e4276](https://github.com/Ivantseng123/agentdock/commit/c7e427639ffb75ef5897c12e911cd742323101dc))
+
 ## [2.3.1](https://github.com/Ivantseng123/agentdock/compare/v2.3.0...v2.3.1) (2026-04-22)
 
 
