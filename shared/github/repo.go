@@ -193,6 +193,13 @@ func (rc *RepoCache) Checkout(repoPath, branch string) error {
 // avoids locking the branch so concurrent jobs on the same branch coexist and
 // a prior crash's orphan admin record can't block new adds. Prunes first to
 // clear any orphan <bare>/worktrees/NAME records left by past crashes.
+//
+// If the first add fails (typically: ref unknown to the local cache because
+// the branch was deleted on origin or the SHA was never fetched — e.g. PR
+// merged + branch deleted, or squash-merged PR head SHA), AddWorktree fetches
+// the ref directly from origin and retries once. GitHub enables
+// uploadpack.allowReachableSHA1InWant, so a direct fetch-by-SHA works even
+// when no remote ref still points at the SHA.
 func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
 	pruneCmd := exec.Command("git", "-C", barePath, "worktree", "prune")
 	_, _ = pruneCmd.CombinedOutput() // best-effort
@@ -201,9 +208,33 @@ func (rc *RepoCache) AddWorktree(barePath, branch, worktreePath string) error {
 	if branch != "" {
 		ref = branch
 	}
+
+	addErr := tryAddWorktree(barePath, worktreePath, ref)
+	if addErr == nil {
+		return nil
+	}
+
+	fetchCmd := exec.Command("git", "-C", barePath, "fetch", "origin", ref)
+	fetchOut, fetchErr := fetchCmd.CombinedOutput()
+	if fetchErr != nil {
+		return fmt.Errorf("git worktree add failed: %w; git fetch origin %s also failed: %v\n%s",
+			addErr, ref, fetchErr, fetchOut)
+	}
+
+	if retryErr := tryAddWorktree(barePath, worktreePath, ref); retryErr != nil {
+		return fmt.Errorf("git worktree add failed even after fetch retry: %w", retryErr)
+	}
+	return nil
+}
+
+// tryAddWorktree runs `git worktree add --detach` once and returns nil on
+// success or a wrapped error containing git's stderr on failure. Extracted
+// from AddWorktree so the retry path can call it without duplicating the
+// command construction.
+func tryAddWorktree(barePath, worktreePath, ref string) error {
 	cmd := exec.Command("git", "-C", barePath, "worktree", "add", "--detach", worktreePath, ref)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git worktree add: %w\n%s", err, out)
+		return fmt.Errorf("%w\n%s", err, out)
 	}
 	return nil
 }

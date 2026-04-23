@@ -234,6 +234,112 @@ func TestRepoCache_AddWorktree_PrunesStaleAdminRecord(t *testing.T) {
 	}
 }
 
+func TestRepoCache_AddWorktree_RetriesAfterFetchOnUnknownRef(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	// Source: bare repo with a "feature" branch + main. The feature commit's
+	// SHA is what we'll later try to worktree-add after the branch is gone.
+	sourceDir := t.TempDir()
+	run(t, sourceDir, "git", "init", "--bare")
+	// Allow fetch-by-SHA against this remote; mirrors GitHub's
+	// uploadpack.allowReachableSHA1InWant behaviour.
+	run(t, sourceDir, "git", "config", "uploadpack.allowAnySHA1InWant", "true")
+
+	workDir := t.TempDir()
+	run(t, workDir, "git", "clone", sourceDir, ".")
+	os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main"), 0644)
+	run(t, workDir, "git", "add", ".")
+	run(t, workDir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init")
+	run(t, workDir, "git", "push")
+	run(t, workDir, "git", "checkout", "-b", "feature")
+	os.WriteFile(filepath.Join(workDir, "feature.go"), []byte("package main"), 0644)
+	run(t, workDir, "git", "add", ".")
+	run(t, workDir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "add feature")
+	run(t, workDir, "git", "push", "-u", "origin", "feature")
+
+	// Capture feature SHA, then delete the feature branch from source. The
+	// commit object stays reachable on the source server because Git keeps
+	// objects until gc; allowAnySHA1InWant lets clients fetch them.
+	shaOut, err := exec.Command("git", "-C", workDir, "rev-parse", "feature").Output()
+	if err != nil {
+		t.Fatalf("rev-parse feature: %v", err)
+	}
+	featureSHA := strings.TrimSpace(string(shaOut))
+	run(t, sourceDir, "git", "update-ref", "-d", "refs/heads/feature")
+
+	// Fresh cache: EnsureRepo only pulls refs reachable from refs/heads/*,
+	// so the deleted feature branch's commit is NOT in the cache.
+	cacheDir := t.TempDir()
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
+	barePath, err := cache.EnsureRepo("file://"+sourceDir, "")
+	if err != nil {
+		t.Fatalf("EnsureRepo failed: %v", err)
+	}
+
+	// Sanity-check: SHA is unreachable locally before AddWorktree.
+	if out, err := exec.Command("git", "-C", barePath, "cat-file", "-t", featureSHA).CombinedOutput(); err == nil {
+		t.Fatalf("test setup invariant broken: feature SHA %s already reachable in cache (%s)", featureSHA, out)
+	}
+
+	// AddWorktree by SHA should fetch-retry and succeed.
+	wt := filepath.Join(t.TempDir(), "wt")
+	if err := cache.AddWorktree(barePath, featureSHA, wt); err != nil {
+		t.Fatalf("AddWorktree(%s) failed: %v", featureSHA, err)
+	}
+
+	// Worktree HEAD should be the feature SHA.
+	headOut, err := exec.Command("git", "-C", wt, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD in worktree: %v", err)
+	}
+	if got := strings.TrimSpace(string(headOut)); got != featureSHA {
+		t.Errorf("worktree HEAD = %s, want %s", got, featureSHA)
+	}
+}
+
+func TestRepoCache_AddWorktree_PropagatesErrorWhenFetchAlsoFails(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found")
+	}
+
+	// Source: bare repo with main only. Set allowAnySHA1InWant so the fetch
+	// attempt is well-formed; failure must come from the SHA not existing
+	// on the server, not from server-side policy.
+	sourceDir := t.TempDir()
+	run(t, sourceDir, "git", "init", "--bare")
+	run(t, sourceDir, "git", "config", "uploadpack.allowAnySHA1InWant", "true")
+
+	workDir := t.TempDir()
+	run(t, workDir, "git", "clone", sourceDir, ".")
+	os.WriteFile(filepath.Join(workDir, "main.go"), []byte("package main"), 0644)
+	run(t, workDir, "git", "add", ".")
+	run(t, workDir, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init")
+	run(t, workDir, "git", "push")
+
+	cacheDir := t.TempDir()
+	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
+	barePath, err := cache.EnsureRepo("file://"+sourceDir, "")
+	if err != nil {
+		t.Fatalf("EnsureRepo failed: %v", err)
+	}
+
+	bogusSHA := "deadbeef00000000000000000000000000000beef"
+	wt := filepath.Join(t.TempDir(), "wt")
+	err = cache.AddWorktree(barePath, bogusSHA, wt)
+	if err == nil {
+		t.Fatal("expected error when ref is unknown to both cache and remote, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "worktree add") {
+		t.Errorf("error should mention worktree add: %q", msg)
+	}
+	if !strings.Contains(msg, "fetch") {
+		t.Errorf("error should mention fetch fallback failure: %q", msg)
+	}
+}
+
 func TestRepoCache_CleanAll(t *testing.T) {
 	cacheDir := t.TempDir()
 	cache := NewRepoCache(cacheDir, time.Hour, "", slog.Default())
