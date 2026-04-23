@@ -42,10 +42,6 @@ func NewRunnerFromConfig(cfg *config.Config) *Runner {
 				slog.Warn("Provider 未找到", "phase", "失敗", "name", name)
 			}
 		}
-	} else if cfg.ActiveAgent != "" {
-		if agent, ok := cfg.Agents[cfg.ActiveAgent]; ok {
-			chain = append(chain, agent)
-		}
 	}
 	runner := NewRunner(chain)
 	runner.githubToken = cfg.GitHub.Token
