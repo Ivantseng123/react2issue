@@ -17,11 +17,34 @@ import (
 
 // ── fake SlackPort for shim tests ──────────────────────────────────────────
 
+// shimSlack guards its slices with a mutex because the pending-timeout
+// goroutine can call Post/Update/Delete concurrently with the test body's
+// reads. Without the lock the race detector flags every timeout test.
 type shimSlack struct {
-	posted []string
+	mu      sync.Mutex
+	posted  []string
+	deleted []string
+}
+
+// snapshotPosted returns a defensive copy of posted — use this in tests
+// instead of reading sl.posted directly when a goroutine might still be
+// writing.
+func (s *shimSlack) snapshotPosted() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.posted...)
+}
+
+// snapshotDeleted returns a defensive copy of deleted.
+func (s *shimSlack) snapshotDeleted() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.deleted...)
 }
 
 func (s *shimSlack) PostMessage(ch, text, ts string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.posted = append(s.posted, text)
 	return nil
 }
@@ -29,16 +52,19 @@ func (s *shimSlack) PostMessageWithTS(ch, text, ts string) (string, error) { ret
 func (s *shimSlack) PostMessageWithButton(ch, text, ts, aid, bt, val string) (string, error) {
 	return "ts", nil
 }
-func (s *shimSlack) UpdateMessage(ch, mts, text string) error                         { return nil }
+func (s *shimSlack) UpdateMessage(ch, mts, text string) error { return nil }
+func (s *shimSlack) DeleteMessage(ch, mts string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deleted = append(s.deleted, mts)
+	return nil
+}
 func (s *shimSlack) UpdateMessageWithButton(ch, mts, text, aid, bt, val string) error { return nil }
-func (s *shimSlack) PostSelector(ch, prompt, prefix string, labels, values []string, ts string) (string, error) {
+func (s *shimSlack) PostSmartSelector(ch, ts string, spec workflow.SelectorSpec) (string, error) {
+	if spec.Searchable {
+		return "ext-ts", nil
+	}
 	return "sel-ts", nil
-}
-func (s *shimSlack) PostSelectorWithBack(ch, prompt, prefix string, labels, values []string, ts, back, bl string) (string, error) {
-	return "sel-ts", nil
-}
-func (s *shimSlack) PostExternalSelector(ch, prompt, aid, ph, ts, cancelAID, cancelLabel string) (string, error) {
-	return "ext-ts", nil
 }
 func (s *shimSlack) OpenTextInputModal(tid, title, label, name, metadata string) error { return nil }
 func (s *shimSlack) ResolveUser(uid string) string                                     { return uid }
@@ -616,10 +642,13 @@ func TestExecuteStep_InvalidatedPending_DoesNotPostSelector(t *testing.T) {
 	p.Invalidate()
 
 	step := workflow.NextStep{
-		Kind:            workflow.NextStepPostSelector,
-		SelectorPrompt:  "pick",
-		SelectorActions: []workflow.SelectorAction{{ActionID: "a", Label: "L", Value: "V"}},
-		Pending:         p,
+		Kind: workflow.NextStepSelector,
+		Selector: &workflow.SelectorSpec{
+			Prompt:   "pick",
+			ActionID: "a",
+			Options:  []workflow.SelectorOption{{Label: "L", Value: "V"}},
+		},
+		Pending: p,
 	}
 	wf.executeStep(context.Background(), p, step, "")
 
@@ -669,10 +698,13 @@ func TestHandleBackToRepo_InvalidatesOldPending(t *testing.T) {
 	fake := &countingSelectionWorkflow{
 		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
 			return workflow.NextStep{
-				Kind:            workflow.NextStepPostSelector,
-				SelectorPrompt:  "pick a repo",
-				SelectorActions: []workflow.SelectorAction{{ActionID: "a", Label: "foo/bar", Value: "foo/bar"}},
-				Pending:         p,
+				Kind: workflow.NextStepSelector,
+				Selector: &workflow.SelectorSpec{
+					Prompt:   "pick a repo",
+					ActionID: "a",
+					Options:  []workflow.SelectorOption{{Label: "foo/bar", Value: "foo/bar"}},
+				},
+				Pending: p,
 			}
 		},
 	}
@@ -763,5 +795,372 @@ func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
 		if strings.Contains(m, "沒有 worker") {
 			t.Errorf("OK verdict should not post soft warn; got %q", m)
 		}
+	}
+}
+
+// TestStorePending_Timeout_CondensesThreadKeepingDSelectorAck guards the
+// "selection timed out" cleanup: after pendingTimeout fires, every session
+// message the bot posted should be deleted except the D-selector ack
+// (":white_check_mark: 📝 建 Issue" / 問問題 / Review PR). The thread ends
+// up as: one breadcrumb + the timeout notice — not 5+ abandoned steps.
+func TestStorePending_Timeout_CondensesThreadKeepingDSelectorAck(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	// Per-instance timeout override — no package-level state touched so
+	// parallel tests can't race on it.
+	wf.pendingTimeout = 40 * time.Millisecond
+
+	const dsAckTS = "ds-ack-1"
+	const step1TS = "step1-ts"
+	const step2TS = "step2-ts"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1", TaskType: "issue", RequestID: "req-timeout",
+		DSelectorAckTS: dsAckTS,
+		SessionMsgTSs:  []string{step1TS}, // pre-existing trail from earlier steps
+	}
+
+	wf.storePending(step2TS, p)
+
+	// Wait past the timeout window + a buffer for the goroutine's Slack calls.
+	time.Sleep(150 * time.Millisecond)
+
+	// Snapshot under the shim's lock so the race detector stays happy even
+	// if a stray goroutine is still writing (shouldn't be, but defensive).
+	deletedList := sl.snapshotDeleted()
+	postedList := sl.snapshotPosted()
+
+	deleted := map[string]bool{}
+	for _, d := range deletedList {
+		deleted[d] = true
+	}
+	if deleted[dsAckTS] {
+		t.Errorf("D-selector ack %q must not be deleted on timeout", dsAckTS)
+	}
+	if !deleted[step1TS] {
+		t.Errorf("expected step1 ack %q deleted; got deleted=%v", step1TS, deletedList)
+	}
+	if !deleted[step2TS] {
+		t.Errorf("expected current selector %q deleted; got deleted=%v", step2TS, deletedList)
+	}
+
+	// Verify the single timeout notice was posted.
+	sawTimeoutNotice := false
+	for _, m := range postedList {
+		if strings.Contains(m, "選擇已超時") {
+			sawTimeoutNotice = true
+		}
+	}
+	if !sawTimeoutNotice {
+		t.Errorf("expected timeout notice posted; got posted=%v", postedList)
+	}
+}
+
+// TestHandleBackToRepo_DeletesStaleRepoAck guards the "thread doesn't grow
+// forever" UX: when the user picks a repo and then clicks 重新選 repo, the
+// rejected "✅ owner/repo" line must be deleted so the thread keeps only
+// the "已返回 repo 選擇" breadcrumb + the fresh repo picker.
+func TestHandleBackToRepo_DeletesStaleRepoAck(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	fake := &countingSelectionWorkflow{
+		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
+			return workflow.NextStep{
+				Kind: workflow.NextStepSelector,
+				Selector: &workflow.SelectorSpec{
+					Prompt:   "pick a repo",
+					ActionID: "repo_select",
+					Options:  []workflow.SelectorOption{{Label: "foo/bar", Value: "foo/bar"}},
+				},
+				Pending: p,
+			}
+		},
+	}
+	reg.Register(fake)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	const branchTS = "branch-sel-1"
+	const repoAckTS = "repo-ack-1"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1", TaskType: "issue",
+		Phase: "branch", SelectorTS: branchTS, RequestID: "req-back",
+		RepoAckTS: repoAckTS,
+	}
+	wf.mu.Lock()
+	wf.pending[branchTS] = p
+	wf.mu.Unlock()
+
+	wf.HandleBackToRepo("C1", branchTS)
+
+	found := false
+	for _, d := range sl.deleted {
+		if d == repoAckTS {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected DeleteMessage(%q); got deleted=%v", repoAckTS, sl.deleted)
+	}
+}
+
+// TestHandleModalClosed_DescriptionPhase_RewindsWithoutSubmit is the guard
+// for: user clicks "補充說明" → modal opens → user clicks ✕ → user clicks
+// "補充說明" again → should re-open modal, not submit with junk.
+//
+// Before the fix, ViewClosed went through HandleDescriptionSubmit which
+// deleted the pending and triggered the workflow's `*_description_modal`
+// phase branch with value="" → NextStepSubmit. The second button click
+// either found no pending (delete won) or fed "補充說明" into the modal
+// branch as the submitted description.
+func TestHandleModalClosed_DescriptionPhase_RewindsWithoutSubmit(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	submitted := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) { submitted = true })
+
+	const selectorTS = "desc-sel-789"
+	cases := []struct {
+		name      string
+		phase     string
+		wantPhase string
+	}{
+		{"issue description modal", "description_modal", "description"},
+		{"ask description modal", "ask_description_modal", "ask_description_prompt"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &workflow.Pending{
+				ChannelID: "C1", ThreadTS: "T1",
+				TaskType: "issue", Phase: tc.phase, SelectorTS: selectorTS,
+			}
+			wf.mu.Lock()
+			wf.pending[selectorTS] = p
+			wf.mu.Unlock()
+
+			submitted = false
+			wf.HandleModalClosed(selectorTS)
+
+			if submitted {
+				t.Error("closing the description modal must not trigger submit")
+			}
+			wf.mu.Lock()
+			still, ok := wf.pending[selectorTS]
+			wf.mu.Unlock()
+			if !ok || still != p {
+				t.Error("pending must stay in the map so the user can re-click the selector button")
+			}
+			if p.Phase != tc.wantPhase {
+				t.Errorf("phase = %q, want %q (rewind so the next click re-enters the prompt)", p.Phase, tc.wantPhase)
+			}
+
+			// Cleanup for next sub-test.
+			wf.mu.Lock()
+			delete(wf.pending, selectorTS)
+			wf.mu.Unlock()
+		})
+	}
+}
+
+// TestHandleDescriptionAction_PhaseStuckInModal_RewindsBeforeDispatch
+// guards the real production scenario: Slack does not reliably deliver
+// ViewClosed when a user dismisses the modal (✕ button, escape key, click
+// outside). The phase stays at *_modal, and the next click on the still-
+// visible "補充說明" / "跳過" selector buttons would feed the button label
+// into the workflow's modal branch and submit.
+//
+// This is a stronger guard than HandleModalClosed — it doesn't depend on
+// Slack sending the event at all.
+func TestHandleDescriptionAction_PhaseStuckInModal_RewindsBeforeDispatch(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+
+	// Record what value the workflow's Selection received and in what phase
+	// — if rewind happens, phase should be the prompt, not the modal.
+	var gotPhase, gotValue string
+	fake := &countingSelectionWorkflow{
+		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
+			gotPhase = p.Phase
+			gotValue = value
+			// Simulate the workflow's prompt branch: user clicked 補充說明
+			// → OpenModal with phase flipped back to *_modal.
+			p.Phase = "ask_description_modal"
+			return workflow.NextStep{
+				Kind:           workflow.NextStepOpenModal,
+				ModalTitle:     "補充說明",
+				ModalLabel:     "補充你想讓 agent 做什麼",
+				ModalInputName: "description",
+				ModalMetadata:  p.SelectorTS,
+				Pending:        p,
+			}
+		},
+	}
+	reg.Register(fake)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	submitted := false
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) { submitted = true })
+
+	const selectorTS = "desc-sel-stuck"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1",
+		TaskType:   "issue",
+		Phase:      "ask_description_modal", // stuck here because Slack never sent ViewClosed
+		SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	wf.HandleDescriptionAction("C1", "補充說明", selectorTS, "trigger-xyz")
+
+	if submitted {
+		t.Error("second click on 補充說明 must not trigger submit")
+	}
+	if gotPhase != "ask_description_prompt" {
+		t.Errorf("Selection saw phase=%q, want ask_description_prompt (rewound before dispatch)", gotPhase)
+	}
+	if gotValue != "補充說明" {
+		t.Errorf("Selection value = %q, want 補充說明", gotValue)
+	}
+}
+
+// TestHandleDescriptionAction_SkipWhileStuckInModal_RewindsBeforeDispatch
+// mirrors the test above for the 跳過 path. Without the rewind, 跳過 would
+// be appended to the description as the modal's submitted text.
+func TestHandleDescriptionAction_SkipWhileStuckInModal_RewindsBeforeDispatch(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+
+	var gotPhase, gotValue string
+	fake := &countingSelectionWorkflow{
+		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
+			gotPhase = p.Phase
+			gotValue = value
+			return workflow.NextStep{Kind: workflow.NextStepSubmit, Pending: p}
+		},
+	}
+	reg.Register(fake)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {})
+
+	const selectorTS = "desc-sel-skip-stuck"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1",
+		TaskType:   "issue",
+		Phase:      "description_modal",
+		SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	wf.HandleDescriptionAction("C1", "跳過", selectorTS, "")
+
+	if gotPhase != "description" {
+		t.Errorf("Selection saw phase=%q, want description (rewound before dispatch)", gotPhase)
+	}
+	if gotValue != "跳過" {
+		t.Errorf("Selection value = %q, want 跳過", gotValue)
+	}
+}
+
+// TestHandleModalClosed_PRReviewModal_PostsCancelAndClearsDedup covers the
+// PR Review URL modal: closing it can't rewind to a prior selector (the
+// modal was the entry point), so we cancel cleanly — drop pending, post a
+// confirmation, clear dedup — rather than treating it as an empty submit
+// that surfaces a confusing "請貼完整 PR URL" error.
+func TestHandleModalClosed_PRReviewModal_PostsCancelAndClearsDedup(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	reg.Register(&fakeIssueWorkflow{})
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	wf.SetSubmitHook(func(ctx context.Context, p *workflow.Pending) {
+		t.Error("cancelled PR Review modal must not trigger submit")
+	})
+
+	const metaKey = "modal-req-pr"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1",
+		TaskType: "pr_review", Phase: "pr_review_modal", SelectorTS: metaKey,
+	}
+	wf.mu.Lock()
+	wf.pending[metaKey] = p
+	wf.mu.Unlock()
+
+	wf.HandleModalClosed(metaKey)
+
+	wf.mu.Lock()
+	_, stillPending := wf.pending[metaKey]
+	wf.mu.Unlock()
+	if stillPending {
+		t.Error("pending must be dropped after PR Review modal cancel")
+	}
+	sawCancelMsg := false
+	for _, m := range sl.posted {
+		if strings.Contains(m, "已取消 PR Review") {
+			sawCancelMsg = true
+		}
+	}
+	if !sawCancelMsg {
+		t.Errorf("expected cancel acknowledgement posted; got %v", sl.posted)
+	}
+}
+
+// TestHandleModalClosed_IrreversiblePhase_FallsThroughToSubmit covers an
+// unknown modal phase — falls through to HandleDescriptionSubmit("") so
+// future workflows that add modals don't silently break while we catch up
+// on the explicit branches above.
+func TestHandleModalClosed_IrreversiblePhase_FallsThroughToSubmit(t *testing.T) {
+	sl := &shimSlack{}
+	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
+	reg := workflow.NewRegistry()
+	// Workflow that records what Selection received so we can assert the
+	// fall-through path actually ran.
+	received := ""
+	fake := &countingSelectionWorkflow{
+		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
+			received = value
+			return workflow.NextStep{Kind: workflow.NextStepError, ErrorText: "empty", Pending: p}
+		},
+	}
+	reg.Register(fake)
+	disp := workflow.NewDispatcher(reg, sl, nil)
+	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+
+	const selectorTS = "unknown-modal-1"
+	p := &workflow.Pending{
+		ChannelID: "C1", ThreadTS: "T1",
+		TaskType: "issue", Phase: "some_future_modal", SelectorTS: selectorTS,
+	}
+	wf.mu.Lock()
+	wf.pending[selectorTS] = p
+	wf.mu.Unlock()
+
+	wf.HandleModalClosed(selectorTS)
+
+	if received != "" {
+		t.Errorf("expected workflow.Selection to receive empty value, got %q", received)
+	}
+	wf.mu.Lock()
+	_, stillPending := wf.pending[selectorTS]
+	wf.mu.Unlock()
+	if stillPending {
+		t.Error("fall-through path must consume pending (old HandleDescriptionSubmit semantics)")
 	}
 }

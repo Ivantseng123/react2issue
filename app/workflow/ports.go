@@ -15,10 +15,9 @@ type SlackPort interface {
 	PostMessageWithTS(channelID, text, threadTS string) (string, error)
 	PostMessageWithButton(channelID, text, threadTS, actionID, buttonText, value string) (string, error)
 	UpdateMessage(channelID, messageTS, text string) error
+	DeleteMessage(channelID, messageTS string) error
 	UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value string) error
-	PostSelector(channelID, prompt, actionPrefix string, labels, values []string, threadTS string) (string, error)
-	PostSelectorWithBack(channelID, prompt, actionPrefix string, labels, values []string, threadTS, backActionID, backLabel string) (string, error)
-	PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS, cancelActionID, cancelLabel string) (string, error)
+	PostSmartSelector(channelID, threadTS string, spec SelectorSpec) (string, error)
 	OpenTextInputModal(triggerID, title, label, inputName, metadata string) error
 	ResolveUser(userID string) string
 	GetChannelName(channelID string) string

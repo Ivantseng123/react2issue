@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -51,17 +52,20 @@ func TestIssueWorkflow_Trigger_NoRepoSingleConfigured(t *testing.T) {
 	if step.Kind == NextStepError {
 		t.Fatalf("unexpected error step: %q", step.ErrorText)
 	}
-	// The description prompt IS a PostSelector, so we cannot assert "not
-	// NextStepPostSelector". Instead assert it doesn't look like a repo picker:
+	// The description prompt IS also a NextStepSelector, so we cannot assert
+	// on Kind. Instead assert it doesn't look like a repo picker:
 	// — it must not list the configured repo as a selector option, and
 	// — its prompt must not contain "Which repo".
-	for _, a := range step.SelectorActions {
-		if a.Value == "foo/bar" {
-			t.Errorf("single-repo channel should skip repo selector, but got repo %q as option", a.Value)
+	if step.Selector == nil {
+		t.Fatal("expected Selector spec")
+	}
+	for _, o := range step.Selector.Options {
+		if o.Value == "foo/bar" {
+			t.Errorf("single-repo channel should skip repo selector, but got repo %q as option", o.Value)
 		}
 	}
-	if strings.Contains(step.SelectorPrompt, "Which repo") {
-		t.Errorf("single-repo channel should not show repo picker, got prompt: %q", step.SelectorPrompt)
+	if strings.Contains(step.Selector.Prompt, "Which repo") {
+		t.Errorf("single-repo channel should not show repo picker, got prompt: %q", step.Selector.Prompt)
 	}
 }
 
@@ -73,11 +77,11 @@ func TestIssueWorkflow_Trigger_MultiRepoShowsSelector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector, got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector, got %v", step.Kind)
 	}
-	if len(step.SelectorActions) != 2 {
-		t.Errorf("expected 2 selector options, got %d", len(step.SelectorActions))
+	if len(step.Selector.Options) != 2 {
+		t.Errorf("expected 2 selector options, got %d", len(step.Selector.Options))
 	}
 }
 
@@ -94,8 +98,8 @@ func TestIssueWorkflow_Selection_RepoPhase_TransitionsToBranchOrDescription(t *t
 	if step.Kind == NextStepError {
 		t.Errorf("unexpected error: %q", step.ErrorText)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector (description prompt), got %v", step.Kind)
 	}
 	if step.Pending == nil || step.Pending.Phase != "description" {
 		phase := "<nil pending>"
@@ -148,16 +152,16 @@ func TestIssueWorkflow_Trigger_NoChannelRepos_UsesExternalSelector(t *testing.T)
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	if step.Kind != NextStepPostExternalSelector {
-		t.Errorf("expected NextStepPostExternalSelector, got %v", step.Kind)
+	if step.Kind != NextStepSelector /* external */ {
+		t.Errorf("expected NextStepSelector /* external */, got %v", step.Kind)
 	}
-	if step.SelectorPrompt == "" {
+	if step.Selector.Prompt == "" {
 		t.Error("SelectorPrompt should carry the external-search placeholder text")
 	}
-	if step.SelectorActionID != "repo_search" {
-		t.Errorf("SelectorActionID = %q, want repo_search", step.SelectorActionID)
+	if step.Selector.ActionID != "repo_search" {
+		t.Errorf("SelectorActionID = %q, want repo_search", step.Selector.ActionID)
 	}
-	if step.SelectorPlaceholder == "" {
+	if step.Selector.Placeholder == "" {
 		t.Error("SelectorPlaceholder should be non-empty")
 	}
 	if step.Pending == nil || step.Pending.Phase != "repo_search" {
@@ -422,6 +426,49 @@ func TestIssueWorkflow_BuildJob_AcceptsNonEmptyRepo(t *testing.T) {
 	}
 	if job == nil {
 		t.Fatal("expected non-nil job")
+	}
+}
+
+// TestIssueWorkflow_Selection_ManyBranches_EmitsFullSelectorSpec is the
+// regression guard for "無法顯示選單，請重試" on repos with >24 branches. The
+// workflow must pack every branch into the SelectorSpec; the adapter picks
+// static_select when the count exceeds the actions-block button cap so
+// nothing is dropped upstream.
+func TestIssueWorkflow_Selection_ManyBranches_EmitsFullSelectorSpec(t *testing.T) {
+	trueVal := true
+	branches := make([]string, 30) // well past the 25-button Slack cap
+	for i := range branches {
+		branches[i] = fmt.Sprintf("feature/%02d", i)
+	}
+	w, _, _ := newTestIssueWorkflow(t, func(c *config.Config) {
+		c.ChannelDefaults.Repos = []string{"foo/bar"}
+		c.ChannelDefaults.BranchSelect = &trueVal
+		c.ChannelDefaults.Branches = branches
+	})
+
+	p := &Pending{
+		Phase:     "repo",
+		State:     &issueState{RepoWasPicked: true},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "foo/bar")
+	if err != nil {
+		t.Fatalf("Selection: %v", err)
+	}
+	if step.Kind != NextStepSelector {
+		t.Fatalf("Kind = %v, want NextStepSelector", step.Kind)
+	}
+	if step.Selector == nil {
+		t.Fatal("expected SelectorSpec for branch picker")
+	}
+	if step.Selector.ActionID != "branch_select" {
+		t.Errorf("ActionID = %q, want branch_select", step.Selector.ActionID)
+	}
+	if got := len(step.Selector.Options); got != len(branches) {
+		t.Errorf("Options count = %d, want %d — all branches must reach the adapter", got, len(branches))
+	}
+	if step.Selector.BackActionID != "back_to_repo" {
+		t.Errorf("BackActionID = %q, want back_to_repo", step.Selector.BackActionID)
 	}
 }
 

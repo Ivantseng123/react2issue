@@ -112,11 +112,14 @@ func (w *IssueWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args strin
 		// External-search: no repos configured for this channel.
 		p.Phase = "repo_search"
 		return NextStep{
-			Kind:                NextStepPostExternalSelector,
-			SelectorPrompt:      ":point_right: Search and select a repo:",
-			SelectorActionID:    "repo_search",
-			SelectorPlaceholder: "Type to search repos...",
-			Pending:             p,
+			Kind: NextStepSelector,
+			Selector: &SelectorSpec{
+				Prompt:      ":point_right: Search and select a repo:",
+				ActionID:    "repo_search",
+				Searchable:  true,
+				Placeholder: "Type to search repos...",
+			},
+			Pending: p,
 		}, nil
 
 	case 1:
@@ -124,14 +127,16 @@ func (w *IssueWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args strin
 		return w.afterRepoSelected(p, channelCfg), nil
 
 	default:
-		// Multi-repo: show button selector.
+		// Multi-repo: show selector (button for ≤24, static_select above).
 		p.Phase = "repo"
-		actions := reposToActions(repos)
 		return NextStep{
-			Kind:            NextStepPostSelector,
-			SelectorPrompt:  ":point_right: Which repo should this issue go to?",
-			SelectorActions: actions,
-			Pending:         p,
+			Kind: NextStepSelector,
+			Selector: &SelectorSpec{
+				Prompt:   ":point_right: Which repo should this issue go to?",
+				ActionID: "repo_select",
+				Options:  reposToOptions(repos),
+			},
+			Pending: p,
 		}, nil
 	}
 }
@@ -519,19 +524,26 @@ func (w *IssueWorkflow) afterRepoSelected(p *Pending, channelCfg config.ChannelC
 		return w.descriptionPromptStep(p)
 	}
 
-	// Multi-branch: show selector.
+	// Multi-branch: show selector. The adapter picks button-row vs
+	// static_select based on len(branches) — repos with >24 branches used
+	// to hit Slack's actions-block cap and surface as ":x: 無法顯示選單".
 	p.Phase = "branch"
-	backAction := ""
+	backAction, backLabel := "", ""
 	if st.RepoWasPicked {
 		backAction = "back_to_repo"
+		backLabel = "← 重新選 repo"
 	}
-	actions := labelsToActions("branch_select", branches)
 	return NextStep{
-		Kind:            NextStepPostSelector,
-		SelectorPrompt:  fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
-		SelectorActions: actions,
-		SelectorBack:    backAction,
-		Pending:         p,
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:       fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
+			ActionID:     "branch_select",
+			Options:      labelsToOptions(branches),
+			Placeholder:  "選擇 branch...",
+			BackActionID: backAction,
+			BackLabel:    backLabel,
+		},
+		Pending: p,
 	}
 }
 
@@ -540,20 +552,25 @@ func (w *IssueWorkflow) descriptionPromptStep(p *Pending) NextStep {
 	st := p.State.(*issueState)
 	p.Phase = "description"
 
-	backAction := ""
+	backAction, backLabel := "", ""
 	if st.RepoWasPicked {
 		backAction = "back_to_repo"
+		backLabel = "← 重新選 repo"
 	}
 
 	return NextStep{
-		Kind:           NextStepPostSelector,
-		SelectorPrompt: ":memo: 需要補充說明嗎？（補充後可讓分析更精準）",
-		SelectorActions: []SelectorAction{
-			{ActionID: "description_action", Label: "補充說明", Value: "補充說明"},
-			{ActionID: "description_action", Label: "跳過", Value: "跳過"},
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   ":memo: 需要補充說明嗎？（補充後可讓分析更精準）",
+			ActionID: "description_action",
+			Options: []SelectorOption{
+				{Label: "補充說明", Value: "補充說明"},
+				{Label: "跳過", Value: "跳過"},
+			},
+			BackActionID: backAction,
+			BackLabel:    backLabel,
 		},
-		SelectorBack: backAction,
-		Pending:      p,
+		Pending: p,
 	}
 }
 
@@ -581,21 +598,26 @@ func (w *IssueWorkflow) handleBackToRepo(p *Pending, st *issueState) NextStep {
 	if len(repos) == 0 {
 		p.Phase = "repo_search"
 		return NextStep{
-			Kind:                NextStepPostExternalSelector,
-			SelectorPrompt:      ":point_right: Search and select a repo:",
-			SelectorActionID:    "repo_search",
-			SelectorPlaceholder: "Type to search repos...",
-			Pending:             p,
+			Kind: NextStepSelector,
+			Selector: &SelectorSpec{
+				Prompt:      ":point_right: Search and select a repo:",
+				ActionID:    "repo_search",
+				Searchable:  true,
+				Placeholder: "Type to search repos...",
+			},
+			Pending: p,
 		}
 	}
 
 	p.Phase = "repo"
-	actions := reposToActions(repos)
 	return NextStep{
-		Kind:            NextStepPostSelector,
-		SelectorPrompt:  ":point_right: Which repo should this issue go to?",
-		SelectorActions: actions,
-		Pending:         p,
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   ":point_right: Which repo should this issue go to?",
+			ActionID: "repo_select",
+			Options:  reposToOptions(repos),
+		},
+		Pending: p,
 	}
 }
 
@@ -613,33 +635,24 @@ func (w *IssueWorkflow) channelPriority(channelID string) int {
 	return 50
 }
 
-// reposToActions converts a slice of repo strings to SelectorActions for a
-// repo picker. Each action uses "repo_select" as the ActionID (matches the
-// old PostSelector "repo_select" prefix used in app/bot/workflow.go).
-func reposToActions(repos []string) []SelectorAction {
-	actions := make([]SelectorAction, len(repos))
+// reposToOptions converts a slice of repo strings to SelectorOptions for the
+// repo picker (label and value both equal to the repo path).
+func reposToOptions(repos []string) []SelectorOption {
+	opts := make([]SelectorOption, len(repos))
 	for i, r := range repos {
-		actions[i] = SelectorAction{
-			ActionID: "repo_select",
-			Label:    r,
-			Value:    r,
-		}
+		opts[i] = SelectorOption{Label: r, Value: r}
 	}
-	return actions
+	return opts
 }
 
-// labelsToActions converts string labels to SelectorActions using the given
-// actionID prefix for all entries.
-func labelsToActions(actionID string, labels []string) []SelectorAction {
-	actions := make([]SelectorAction, len(labels))
+// labelsToOptions converts a slice of strings to SelectorOptions, using each
+// string as both the label and the value.
+func labelsToOptions(labels []string) []SelectorOption {
+	opts := make([]SelectorOption, len(labels))
 	for i, l := range labels {
-		actions[i] = SelectorAction{
-			ActionID: actionID,
-			Label:    l,
-			Value:    l,
-		}
+		opts[i] = SelectorOption{Label: l, Value: l}
 	}
-	return actions
+	return opts
 }
 
 // cleanCloneURL normalises a repo reference to a full HTTPS clone URL. Raw
