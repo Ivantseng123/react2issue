@@ -13,10 +13,11 @@ import (
 	"github.com/Ivantseng123/agentdock/shared/queue"
 )
 
-// pendingTimeout is the idle window before a wizard pending is evicted and
-// the thread is condensed to the "selection timed out" breadcrumb. Declared
-// var so tests can shorten it.
-var pendingTimeout = 1 * time.Minute
+// defaultPendingTimeout is the idle window before a wizard pending is
+// evicted and the thread is condensed to the "selection timed out"
+// breadcrumb. Per-Workflow field so tests can shorten it without racing on
+// package state.
+const defaultPendingTimeout = 1 * time.Minute
 
 // Workflow is the thin Slack-side handler. Real triage logic lives in
 // app/workflow workflows reached through the dispatcher.
@@ -32,6 +33,11 @@ type Workflow struct {
 	mu        sync.Mutex
 	pending   map[string]*workflow.Pending
 	autoBound map[string]bool
+
+	// pendingTimeout is how long storePending keeps a pending alive before
+	// the cleanup goroutine condenses the thread. Exposed as a field so
+	// tests can override it without racing on package-level state.
+	pendingTimeout time.Duration
 
 	// onSubmit is called when a workflow returns NextStepSubmit.
 	// Filled by app/app.go via SetSubmitHook.
@@ -49,14 +55,15 @@ func NewWorkflow(
 	availability queue.WorkerAvailability,
 ) *Workflow {
 	return &Workflow{
-		cfg:           cfg,
-		dispatcher:    dispatcher,
-		slack:         slack,
-		repoDiscovery: repoDiscovery,
-		logger:        logger,
-		availability:  availability,
-		pending:       make(map[string]*workflow.Pending),
-		autoBound:     make(map[string]bool),
+		cfg:            cfg,
+		dispatcher:     dispatcher,
+		slack:          slack,
+		repoDiscovery:  repoDiscovery,
+		logger:         logger,
+		availability:   availability,
+		pending:        make(map[string]*workflow.Pending),
+		autoBound:      make(map[string]bool),
+		pendingTimeout: defaultPendingTimeout,
 	}
 }
 
@@ -628,7 +635,7 @@ func (w *Workflow) storePending(selectorTS string, p *workflow.Pending) {
 	w.mu.Unlock()
 
 	go func() {
-		time.Sleep(pendingTimeout)
+		time.Sleep(w.pendingTimeout)
 		w.mu.Lock()
 		_, stillPending := w.pending[selectorTS]
 		var sessionTSs []string

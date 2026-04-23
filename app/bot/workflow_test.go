@@ -17,12 +17,34 @@ import (
 
 // ── fake SlackPort for shim tests ──────────────────────────────────────────
 
+// shimSlack guards its slices with a mutex because the pending-timeout
+// goroutine can call Post/Update/Delete concurrently with the test body's
+// reads. Without the lock the race detector flags every timeout test.
 type shimSlack struct {
+	mu      sync.Mutex
 	posted  []string
 	deleted []string
 }
 
+// snapshotPosted returns a defensive copy of posted — use this in tests
+// instead of reading sl.posted directly when a goroutine might still be
+// writing.
+func (s *shimSlack) snapshotPosted() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.posted...)
+}
+
+// snapshotDeleted returns a defensive copy of deleted.
+func (s *shimSlack) snapshotDeleted() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.deleted...)
+}
+
 func (s *shimSlack) PostMessage(ch, text, ts string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.posted = append(s.posted, text)
 	return nil
 }
@@ -30,8 +52,10 @@ func (s *shimSlack) PostMessageWithTS(ch, text, ts string) (string, error) { ret
 func (s *shimSlack) PostMessageWithButton(ch, text, ts, aid, bt, val string) (string, error) {
 	return "ts", nil
 }
-func (s *shimSlack) UpdateMessage(ch, mts, text string) error                         { return nil }
+func (s *shimSlack) UpdateMessage(ch, mts, text string) error { return nil }
 func (s *shimSlack) DeleteMessage(ch, mts string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.deleted = append(s.deleted, mts)
 	return nil
 }
@@ -780,18 +804,15 @@ func TestHandleTrigger_HealthyOK_NoSoftWarn(t *testing.T) {
 // (":white_check_mark: 📝 建 Issue" / 問問題 / Review PR). The thread ends
 // up as: one breadcrumb + the timeout notice — not 5+ abandoned steps.
 func TestStorePending_Timeout_CondensesThreadKeepingDSelectorAck(t *testing.T) {
-	// Keep the test fast by overriding the package-level timeout; put it
-	// back at the end so later tests don't race against a shorter window.
-	origTimeout := pendingTimeout
-	pendingTimeout = 40 * time.Millisecond
-	defer func() { pendingTimeout = origTimeout }()
-
 	sl := &shimSlack{}
 	cfg := &config.Config{Channels: map[string]config.ChannelConfig{}}
 	reg := workflow.NewRegistry()
 	reg.Register(&fakeIssueWorkflow{})
 	disp := workflow.NewDispatcher(reg, sl, nil)
 	wf := NewWorkflow(cfg, disp, sl, nil, slog.Default(), nil)
+	// Per-instance timeout override — no package-level state touched so
+	// parallel tests can't race on it.
+	wf.pendingTimeout = 40 * time.Millisecond
 
 	const dsAckTS = "ds-ack-1"
 	const step1TS = "step1-ts"
@@ -807,30 +828,34 @@ func TestStorePending_Timeout_CondensesThreadKeepingDSelectorAck(t *testing.T) {
 	// Wait past the timeout window + a buffer for the goroutine's Slack calls.
 	time.Sleep(150 * time.Millisecond)
 
-	// Verify exactly the right set of TSs was deleted.
+	// Snapshot under the shim's lock so the race detector stays happy even
+	// if a stray goroutine is still writing (shouldn't be, but defensive).
+	deletedList := sl.snapshotDeleted()
+	postedList := sl.snapshotPosted()
+
 	deleted := map[string]bool{}
-	for _, d := range sl.deleted {
+	for _, d := range deletedList {
 		deleted[d] = true
 	}
 	if deleted[dsAckTS] {
 		t.Errorf("D-selector ack %q must not be deleted on timeout", dsAckTS)
 	}
 	if !deleted[step1TS] {
-		t.Errorf("expected step1 ack %q deleted; got deleted=%v", step1TS, sl.deleted)
+		t.Errorf("expected step1 ack %q deleted; got deleted=%v", step1TS, deletedList)
 	}
 	if !deleted[step2TS] {
-		t.Errorf("expected current selector %q deleted; got deleted=%v", step2TS, sl.deleted)
+		t.Errorf("expected current selector %q deleted; got deleted=%v", step2TS, deletedList)
 	}
 
 	// Verify the single timeout notice was posted.
 	sawTimeoutNotice := false
-	for _, m := range sl.posted {
+	for _, m := range postedList {
 		if strings.Contains(m, "選擇已超時") {
 			sawTimeoutNotice = true
 		}
 	}
 	if !sawTimeoutNotice {
-		t.Errorf("expected timeout notice posted; got posted=%v", sl.posted)
+		t.Errorf("expected timeout notice posted; got posted=%v", postedList)
 	}
 }
 
