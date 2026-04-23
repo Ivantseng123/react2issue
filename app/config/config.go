@@ -68,9 +68,15 @@ type PromptConfig struct {
 // WorkflowPromptConfig holds one workflow's prompt knobs. All fields are
 // optional at the yaml layer; ApplyDefaults fills gaps with hardcoded
 // defaults so zero-config is valid.
+//
+// ResponseSchema carries the machine-readable output contract (marker + JSON
+// shape). It is rendered verbatim — NOT xml-escaped — so literal `"` and
+// `<` reach the LLM unencoded. Keep the schema text ASCII-safe where
+// possible.
 type WorkflowPromptConfig struct {
-	Goal        string   `yaml:"goal"`
-	OutputRules []string `yaml:"output_rules"`
+	Goal           string   `yaml:"goal"`
+	ResponseSchema string   `yaml:"response_schema"`
+	OutputRules    []string `yaml:"output_rules"`
 }
 
 // IsWorkerRulesAllowed returns whether worker-side ExtraRules should be

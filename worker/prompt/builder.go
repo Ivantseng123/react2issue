@@ -87,6 +87,18 @@ func BuildPrompt(ctx queue.PromptContext, extraRules []string, attachments []Att
 		b.WriteString("</attachments>\n\n")
 	}
 
+	// <response_schema> — machine-readable output contract (marker + JSON
+	// shape). Rendered verbatim: xmlEscape would turn `"` into `&quot;` and
+	// `<markdown>` into `&lt;markdown&gt;`, which weaker LLMs then copy
+	// literally into their output, breaking JSON parsing downstream. The
+	// tradeoff is that this fragment is no longer strict-XML-valid — fine,
+	// since the consumer is an LLM, not a parser.
+	if ctx.ResponseSchema != "" {
+		b.WriteString("<response_schema>\n")
+		b.WriteString(ctx.ResponseSchema)
+		b.WriteString("\n</response_schema>\n\n")
+	}
+
 	// <output_rules> — last, for LLM "what to produce" emphasis.
 	if len(ctx.OutputRules) > 0 {
 		b.WriteString("<output_rules>\n")

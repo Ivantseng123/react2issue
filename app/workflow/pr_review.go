@@ -263,6 +263,7 @@ func (w *PRReviewWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job
 		PromptContext: &queue.PromptContext{
 			Branch:           st.HeadRef,
 			Goal:             w.cfg.Prompt.PRReview.Goal,
+			ResponseSchema:   w.cfg.Prompt.PRReview.ResponseSchema,
 			OutputRules:      w.cfg.Prompt.PRReview.OutputRules,
 			Language:         w.cfg.Prompt.Language,
 			Channel:          p.ChannelName,

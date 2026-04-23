@@ -66,6 +66,7 @@ type PromptContext struct {
 	Branch           string          `json:"branch,omitempty"`
 	Language         string          `json:"language"`
 	Goal             string          `json:"goal"`
+	ResponseSchema   string          `json:"response_schema,omitempty"`
 	OutputRules      []string        `json:"output_rules"`
 	AllowWorkerRules bool            `json:"allow_worker_rules"`
 }

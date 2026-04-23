@@ -51,18 +51,31 @@ prompt:
   language: 繁體中文
   allow_worker_rules: true            # 是否讓 worker 的 extra_rules 生效
 
-  # 每個 workflow 各自一組 goal + output_rules。留空就用內建預設。
+  # 每個 workflow 各自一組 goal + response_schema + output_rules。留空就用內建預設。
   issue:
     goal: "Use the /triage-issue skill to investigate and produce a triage result."
-    output_rules: []                  # issue workflow 的硬規則寫在 app/workflow/issue.go 的 spec 裡，這裡通常留空
+    response_schema: ""               # issue workflow 的輸出契約寫在 spec 裡，這裡通常留空
+    output_rules: []                  # 同上
   ask:
-    goal: "Answer the user's question ... Output ===ASK_RESULT=== followed by JSON ..."
+    goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
+    response_schema: |
+      Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
+
+      ===ASK_RESULT===
+      {"answer": "<your full markdown answer as a single JSON string>"}
+
+      The JSON key MUST be literally "answer". Do NOT use "text", "content", "response" or any synonym.
     output_rules:
       - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
       - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
       - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
   pr_review:
-    goal: "Review the PR. Use the github-pr-review skill ... Output ===REVIEW_RESULT=== ..."
+    goal: "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
+    response_schema: |
+      Your final response MUST end with this exact block:
+
+      ===REVIEW_RESULT===
+      {"status": "POSTED|SKIPPED|ERROR", "summary": "<short markdown>", "severity_summary": "<short text>"}
     output_rules:
       - "Focus on correctness, security, style"
       - "Summary ≤ 2000 chars"
@@ -116,10 +129,11 @@ secrets:
 
 ## Workflow-specific prompts
 
-`prompt.issue` / `prompt.ask` / `prompt.pr_review` 各自一組 `goal` + `output_rules`：
-- `goal` 是給 agent 的任務描述，通常要指名該呼叫哪個 skill（`triage-issue` / `ask-assistant` / `github-pr-review`）以及最終要印哪個 fence marker（`===TRIAGE_RESULT===` / `===ASK_RESULT===` / `===REVIEW_RESULT===`）。
-- `output_rules` 是**硬約束**層級，會直接 render 到 prompt 尾端。Ask 的預設就靠這條強制 agent 用 `<bot>` handle 自稱——skill body 裡的軟指引不夠時，直接升格到這裡。
-- 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。`issue.output_rules` 預設為空——issue workflow 的硬規則寫在 `app/workflow/issue.go` 的 spec 裡。
+`prompt.issue` / `prompt.ask` / `prompt.pr_review` 各自一組 `goal` + `response_schema` + `output_rules`：
+- `goal` 是給 agent 的**任務描述**——做什麼事、該呼叫哪個 skill（`triage-issue` / `ask-assistant` / `github-pr-review`）。不要在 goal 裡寫輸出格式。
+- `response_schema` 是**輸出契約**——機器可讀的 marker + JSON 結構（`===ASK_RESULT===` / `===REVIEW_RESULT===` 等）。此區塊在 prompt builder 裡**不會**被 XML escape，literal `"` 和 `<` 原樣送給 LLM，避免弱模型看到 `&quot;` 後把它複製成字面輸出導致 JSON parse 失敗。
+- `output_rules` 是**格式規則**——Slack mrkdwn 語法、字數限制、自稱 handle 等。會被 xml-escape 後 render 到 prompt 尾端。
+- 任何欄位留空都會由 `app/config/defaults.go` 的 `defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules` 填上。`issue.response_schema` 和 `issue.output_rules` 預設為空——issue workflow 的硬規則寫在 `app/workflow/issue.go` 的 spec 裡。
 
 **Legacy alias**：`prompt.goal` / `prompt.output_rules`（扁平）在載入時會被拷到 `prompt.issue.*`（前提是 `prompt.issue.*` 還沒設）。這只是為了讓 v2.1 之前的 yaml 還能跑；新配置直接寫 `prompt.issue.*`。
 

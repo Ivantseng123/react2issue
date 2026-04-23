@@ -100,10 +100,28 @@ func DefaultsMap() map[string]any {
 }
 
 // Hardcoded per-workflow defaults. Operator yaml wins over these.
+//
+// Goals describe the task; ResponseSchema describes the machine-readable
+// output contract. Splitting them lets weaker models handle each
+// concern without mixing task-framing with exact-string requirements.
 const (
 	defaultIssueGoal    = "Use the /triage-issue skill to investigate and produce a triage result."
-	defaultAskGoal      = "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules. Output ===ASK_RESULT=== followed by JSON {\"answer\": \"<markdown>\"}."
-	defaultPRReviewGoal = "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper. Output ===REVIEW_RESULT=== with status (POSTED|SKIPPED|ERROR) + summary + severity_summary."
+	defaultAskGoal      = "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
+	defaultPRReviewGoal = "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
+
+	defaultAskResponseSchema = `Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
+
+===ASK_RESULT===
+{"answer": "<your full markdown answer as a single JSON string>"}
+
+The JSON key MUST be literally "answer" (six letters: a-n-s-w-e-r). Do NOT use "text", "content", "response", "result", "message", or any synonym. Any other key causes a parse failure.`
+
+	defaultPRReviewResponseSchema = `Your final response MUST end with this exact block:
+
+===REVIEW_RESULT===
+{"status": "POSTED|SKIPPED|ERROR", "summary": "<short markdown>", "severity_summary": "<short text>"}
+
+Use exactly the keys "status", "summary", "severity_summary" — no synonyms.`
 )
 
 var (
@@ -136,6 +154,12 @@ func applyPromptDefaults(p *PromptConfig) {
 	}
 	if p.PRReview.Goal == "" {
 		p.PRReview.Goal = defaultPRReviewGoal
+	}
+	if p.Ask.ResponseSchema == "" {
+		p.Ask.ResponseSchema = defaultAskResponseSchema
+	}
+	if p.PRReview.ResponseSchema == "" {
+		p.PRReview.ResponseSchema = defaultPRReviewResponseSchema
 	}
 	if len(p.Ask.OutputRules) == 0 {
 		p.Ask.OutputRules = defaultAskOutputRules

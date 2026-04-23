@@ -221,6 +221,7 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
 			Goal:             w.cfg.Prompt.Issue.Goal,
+			ResponseSchema:   w.cfg.Prompt.Issue.ResponseSchema,
 			OutputRules:      w.cfg.Prompt.Issue.OutputRules,
 			Language:         w.cfg.Prompt.Language,
 			ExtraDescription: st.ExtraDesc,

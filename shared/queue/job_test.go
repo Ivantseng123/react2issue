@@ -49,6 +49,7 @@ func TestPromptContext_JSONRoundTrip(t *testing.T) {
 		Branch:           "main",
 		Language:         "zh-TW",
 		Goal:             "Use the /triage-issue skill ...",
+		ResponseSchema:   `{"answer": "<markdown>"}`,
 		OutputRules:      []string{"一句話", "< 100 字"},
 		AllowWorkerRules: true,
 	}
@@ -68,6 +69,9 @@ func TestPromptContext_JSONRoundTrip(t *testing.T) {
 	}
 	if got.Goal != orig.Goal {
 		t.Errorf("Goal = %q, want %q", got.Goal, orig.Goal)
+	}
+	if got.ResponseSchema != orig.ResponseSchema {
+		t.Errorf("ResponseSchema = %q, want %q", got.ResponseSchema, orig.ResponseSchema)
 	}
 	if len(got.OutputRules) != 2 {
 		t.Errorf("OutputRules len = %d, want 2", len(got.OutputRules))
