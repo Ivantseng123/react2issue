@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.5.0](https://github.com/Ivantseng123/agentdock/compare/v2.4.3...v2.5.0) (2026-04-23)
+
+
+### Features
+
+* **queue:** add RedisJobStore implementation (part 1/2 of [#123](https://github.com/Ivantseng123/agentdock/issues/123)) ([#147](https://github.com/Ivantseng123/agentdock/issues/147)) ([eaaedd2](https://github.com/Ivantseng123/agentdock/commit/eaaedd239c572d1bd0010f9501e017364646f013))
+* **selector:** unify button/static/external selectors — fixes branch picker crash ([#149](https://github.com/Ivantseng123/agentdock/issues/149)) ([2f9e010](https://github.com/Ivantseng123/agentdock/commit/2f9e010e65c93ffaeecf546f16fd06d44b80dbdb))
+
 ## [2.4.3](https://github.com/Ivantseng123/agentdock/compare/v2.4.2...v2.4.3) (2026-04-23)
 
 
