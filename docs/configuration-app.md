@@ -72,10 +72,10 @@ prompt:
   pr_review:
     goal: "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
     response_schema: |
-      Your final response MUST end with this exact block:
-
-      ===REVIEW_RESULT===
-      {"status": "POSTED|SKIPPED|ERROR", "summary": "<short markdown>", "severity_summary": "<short text>"}
+      Your final response MUST end with ONE of these three shapes after ===REVIEW_RESULT===:
+      POSTED  → {"status":"POSTED","summary":"...","comments_posted":<int>,"comments_skipped":<int>,"severity_summary":"clean|minor|major"}
+      SKIPPED → {"status":"SKIPPED","summary":"...","reason":"lockfile_only|vendored|generated|pure_docs|pure_config"}
+      ERROR   → {"status":"ERROR","error":"<diagnostic>","summary":"<what you would have posted>"}
     output_rules:
       - "Focus on correctness, security, style"
       - "Summary ≤ 2000 chars"

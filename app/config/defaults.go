@@ -116,12 +116,26 @@ const (
 
 The JSON key MUST be literally "answer" (six letters: a-n-s-w-e-r). Do NOT use "text", "content", "response", "result", "message", or any synonym. Any other key causes a parse failure.`
 
+	// Mirrors app/workflow/pr_review_parser.go:ReviewResult and the
+	// github-pr-review skill's "Emit the result marker" section. Keep the
+	// three shapes in sync with that parser; extra fields are ignored but
+	// missing required fields degrade Slack feedback (0 comments / empty
+	// error).
 	defaultPRReviewResponseSchema = `Your final response MUST end with this exact block:
 
 ===REVIEW_RESULT===
-{"status": "POSTED|SKIPPED|ERROR", "summary": "<short markdown>", "severity_summary": "<short text>"}
+<ONE of the three JSON shapes below, chosen by status>
 
-Use exactly the keys "status", "summary", "severity_summary" — no synonyms.`
+POSTED (review landed on the PR):
+{"status": "POSTED", "summary": "<same text posted to GitHub>", "comments_posted": <int>, "comments_skipped": <int>, "severity_summary": "clean|minor|major"}
+
+SKIPPED (short-circuited — e.g. lockfile_only, vendored, generated, pure_docs, pure_config):
+{"status": "SKIPPED", "summary": "<short markdown>", "reason": "<one of: lockfile_only|vendored|generated|pure_docs|pure_config>"}
+
+ERROR (review failed, helper exit != 0):
+{"status": "ERROR", "error": "<diagnostic message operators can act on>", "summary": "<what you would have posted>"}
+
+Use exactly these keys — no synonyms. Do NOT merge shapes (e.g. never emit "reason" when status is POSTED).`
 )
 
 var (

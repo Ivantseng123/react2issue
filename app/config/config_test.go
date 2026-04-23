@@ -160,6 +160,22 @@ func TestPromptConfig_ResponseSchemaDefaults(t *testing.T) {
 	if !strings.Contains(cfg.Prompt.PRReview.ResponseSchema, "===REVIEW_RESULT===") {
 		t.Errorf("PRReview.ResponseSchema missing REVIEW_RESULT marker: %q", cfg.Prompt.PRReview.ResponseSchema)
 	}
+	// Must mention every field the pr_review_parser.ReviewResult cares
+	// about — losing any of these silently degrades Slack output.
+	for _, field := range []string{
+		`"status"`,
+		`"summary"`,
+		`"comments_posted"`,
+		`"comments_skipped"`,
+		`"severity_summary"`,
+		`"reason"`,
+		`"error"`,
+	} {
+		if !strings.Contains(cfg.Prompt.PRReview.ResponseSchema, field) {
+			t.Errorf("PRReview.ResponseSchema missing required field %s; current:\n%s",
+				field, cfg.Prompt.PRReview.ResponseSchema)
+		}
+	}
 }
 
 func TestPromptConfig_GoalDoesNotDuplicateSchema(t *testing.T) {
