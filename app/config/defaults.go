@@ -145,6 +145,14 @@ Use exactly these keys — no synonyms. Do NOT merge shapes (e.g. never emit "re
 	// triage-issue skill's "Output result" section. Three discriminated
 	// shapes by status. Title is required when status is CREATED; missing
 	// title is a hard parse failure in the workflow.
+	//
+	// LOAD-BEARING HEADERS: app/workflow/issue.go:stripTriageSection uses
+	// literal "## Root Cause Analysis" and "## TDD Fix Plan" to trim
+	// low-confidence content in degraded runs (files_found == 0 ||
+	// open_questions >= 5). The schema promises those headers exist in the
+	// body; the triage-issue skill's body template carries their actual
+	// content. Change one and the other must follow — the test
+	// TestPromptConfig_IssueSchemaCarriesStripTriageHeaders enforces it.
 	defaultIssueResponseSchema = `Your final response MUST end with this exact block:
 
 ===TRIAGE_RESULT===
@@ -159,7 +167,12 @@ REJECTED (confidence is low — not related to this repo):
 ERROR (investigation couldn't complete):
 {"status": "ERROR", "message": "<what went wrong>"}
 
-Use exactly these keys — no synonyms. CREATED without a non-empty title is a hard failure. Do NOT run gh issue create yourself — just emit the JSON; the app creates the issue from your output.`
+Use exactly these keys — no synonyms. CREATED without a non-empty title is a hard failure. Do NOT run gh issue create yourself — just emit the JSON; the app creates the issue from your output.
+
+BODY STRUCTURE (load-bearing): When status is CREATED, the "body" JSON string MUST contain these two markdown headers verbatim, spelled exactly as shown:
+  "## Root Cause Analysis"
+  "## TDD Fix Plan"
+The app strips those sections in degraded runs (low files_found / high open_questions). Without them, low-confidence analysis leaks into the published GitHub issue.`
 )
 
 var (

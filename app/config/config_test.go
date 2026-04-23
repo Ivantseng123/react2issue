@@ -158,6 +158,20 @@ func TestPromptConfig_ResponseSchemaDefaults(t *testing.T) {
 				field, cfg.Prompt.Issue.ResponseSchema)
 		}
 	}
+}
+
+func TestPromptConfig_IssueSchemaCarriesStripTriageHeaders(t *testing.T) {
+	// app/workflow/issue.go:stripTriageSection uses these exact header
+	// strings to trim low-confidence content in degraded runs. If the
+	// schema stops promising them, degraded issues will publish full
+	// low-confidence RCA/TDD content to GitHub. Keep both sides in sync.
+	cfg := &Config{}
+	ApplyDefaults(cfg)
+	for _, header := range []string{"## Root Cause Analysis", "## TDD Fix Plan"} {
+		if !strings.Contains(cfg.Prompt.Issue.ResponseSchema, header) {
+			t.Errorf("Issue.ResponseSchema missing stripTriageSection header %q — must stay in sync with app/workflow/issue.go:stripTriageSection", header)
+		}
+	}
 
 	// Ask ResponseSchema — single shape, literal "answer" key required.
 	if cfg.Prompt.Ask.ResponseSchema == "" {
