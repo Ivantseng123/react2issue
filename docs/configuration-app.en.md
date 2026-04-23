@@ -51,18 +51,31 @@ prompt:
   language: English
   allow_worker_rules: true            # whether worker.prompt.extra_rules is rendered
 
-  # One goal + output_rules block per workflow. Unset fields fall back to hardcoded defaults.
+  # One goal + response_schema + output_rules block per workflow. Unset fields fall back to hardcoded defaults.
   issue:
     goal: "Use the /triage-issue skill to investigate and produce a triage result."
-    output_rules: []                  # issue workflow hardcodes its rules in app/workflow/issue.go spec
+    response_schema: ""               # issue workflow's output contract lives in its spec
+    output_rules: []                  # same as above
   ask:
-    goal: "Answer the user's question ... Output ===ASK_RESULT=== followed by JSON ..."
+    goal: "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
+    response_schema: |
+      Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
+
+      ===ASK_RESULT===
+      {"answer": "<your full markdown answer as a single JSON string>"}
+
+      The JSON key MUST be literally "answer". Do NOT use "text", "content", "response" or any synonym.
     output_rules:
       - "Format the answer in Slack mrkdwn — NOT GitHub markdown ..."
       - "No title, no labels — output the answer content only. Keep it ≤30000 chars."
       - "When referring to yourself, use the exact Slack handle from the <bot> tag ..."
   pr_review:
-    goal: "Review the PR. Use the github-pr-review skill ... Output ===REVIEW_RESULT=== ..."
+    goal: "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
+    response_schema: |
+      Your final response MUST end with ONE of these three shapes after ===REVIEW_RESULT===:
+      POSTED  → {"status":"POSTED","summary":"...","comments_posted":<int>,"comments_skipped":<int>,"severity_summary":"clean|minor|major"}
+      SKIPPED → {"status":"SKIPPED","summary":"...","reason":"lockfile_only|vendored|generated|pure_docs|pure_config"}
+      ERROR   → {"status":"ERROR","error":"<diagnostic>","summary":"<what you would have posted>"}
     output_rules:
       - "Focus on correctness, security, style"
       - "Summary ≤ 2000 chars"
@@ -73,7 +86,7 @@ prompt:
   # output_rules: []
 
 pr_review:
-  enabled: false                      # PR Review workflow feature flag; off by default
+  enabled: true                       # PR Review workflow feature flag; on by default — set `false` to opt out
 
 skills_config: /etc/agentdock/skills.yaml   # optional dynamic skill loader config
 
@@ -116,21 +129,22 @@ secrets:
 
 ## Workflow-specific prompts
 
-`prompt.issue` / `prompt.ask` / `prompt.pr_review` each carry their own `goal` + `output_rules`:
-- `goal` describes the agent's task. It usually names the skill to invoke (`triage-issue` / `ask-assistant` / `github-pr-review`) and the fence marker to emit (`===TRIAGE_RESULT===` / `===ASK_RESULT===` / `===REVIEW_RESULT===`).
-- `output_rules` are **hard constraints** rendered at the end of the prompt. Ask's defaults rely on this to force agents to self-identify via the `<bot>` handle — when a skill body's soft guidance isn't enough, promote the rule to `output_rules`.
-- Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`). `issue.output_rules` defaults to empty — issue workflow's hard rules live inline in `app/workflow/issue.go`'s spec.
+`prompt.issue` / `prompt.ask` / `prompt.pr_review` each carry their own `goal` + `response_schema` + `output_rules`:
+- `goal` is the **task description** — what to do, which skill to invoke (`triage-issue` / `ask-assistant` / `github-pr-review`). Keep output format OUT of the goal.
+- `response_schema` is the **machine-readable output contract** — marker + JSON shape (`===ASK_RESULT===` / `===REVIEW_RESULT===`, etc). This section is **NOT** XML-escaped in the rendered prompt — literal `"` and `<` reach the LLM verbatim, so weaker models don't copy `&quot;` into their output and break downstream JSON parsing.
+- `output_rules` are **formatting rules** (Slack mrkdwn, length caps, self-reference handle) rendered at the end of the prompt, XML-escaped.
+- Any unset field is filled from `app/config/defaults.go` (`defaultIssueGoal` / `defaultAskGoal` / `defaultPRReviewGoal` / `defaultAskResponseSchema` / `defaultPRReviewResponseSchema` / `defaultAskOutputRules` / `defaultPRReviewOutputRules`). `issue.response_schema` and `issue.output_rules` default to empty — issue workflow's hard rules live inline in `app/workflow/issue.go`'s spec.
 
 **Legacy alias**: the flat `prompt.goal` / `prompt.output_rules` fields are copied into `prompt.issue.*` at load time, but only if `prompt.issue.*` is empty. This keeps pre-v2.1 yaml valid; new configs should write `prompt.issue.*` directly.
 
-## Enabling PR Review
+## PR Review
 
-`pr_review.enabled` defaults to `false`. Before turning it on, make sure:
+`pr_review.enabled` **defaults to `true`** (the `github-pr-review` skill and `agentdock pr-review-helper` subcommand both ship in the release image, so opt-in was just ceremony). To turn it off, set `pr_review.enabled: false` explicitly.
+
+`@bot review <PR URL>` routes to PRReviewWorkflow; with no URL, the workflow scans the thread and falls back to a modal. Before relying on it, verify:
 1. Workers have the `github-pr-review` skill mounted (their `skills_config` points to `agents/skills/github-pr-review`).
-2. `agentdock pr-review-helper` is available on the worker host (built-in subcommand — keep the binary in sync).
+2. `agentdock pr-review-helper` is available on the worker host (built-in subcommand — keep app/worker binaries on the same version).
 3. `secrets.GH_TOKEN` has enough permission to post review comments on the target PR.
-
-Once enabled, `@bot review <PR URL>` routes to PRReviewWorkflow; with no URL, the workflow scans the thread and falls back to a modal.
 
 ## Log levels
 

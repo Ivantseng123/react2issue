@@ -137,11 +137,90 @@ func TestPromptConfig_DefaultsPopulated(t *testing.T) {
 	}
 }
 
-func TestPRReviewConfig_DefaultDisabled(t *testing.T) {
+func TestPromptConfig_ResponseSchemaDefaults(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
-	if cfg.PRReview.Enabled {
-		t.Error("PRReview.Enabled default should be false (opt-in)")
+
+	// Ask and PRReview must have a ResponseSchema; Issue intentionally does
+	// not (its output contract lives in app/workflow/issue.go as spec
+	// language).
+	if cfg.Prompt.Ask.ResponseSchema == "" {
+		t.Error("Ask.ResponseSchema default is empty")
+	}
+	if !strings.Contains(cfg.Prompt.Ask.ResponseSchema, "===ASK_RESULT===") {
+		t.Errorf("Ask.ResponseSchema missing ASK_RESULT marker: %q", cfg.Prompt.Ask.ResponseSchema)
+	}
+	if !strings.Contains(cfg.Prompt.Ask.ResponseSchema, `"answer"`) {
+		t.Errorf("Ask.ResponseSchema missing literal \"answer\" key: %q", cfg.Prompt.Ask.ResponseSchema)
+	}
+
+	if cfg.Prompt.PRReview.ResponseSchema == "" {
+		t.Error("PRReview.ResponseSchema default is empty")
+	}
+	if !strings.Contains(cfg.Prompt.PRReview.ResponseSchema, "===REVIEW_RESULT===") {
+		t.Errorf("PRReview.ResponseSchema missing REVIEW_RESULT marker: %q", cfg.Prompt.PRReview.ResponseSchema)
+	}
+	// Must mention every field the pr_review_parser.ReviewResult cares
+	// about — losing any of these silently degrades Slack output.
+	for _, field := range []string{
+		`"status"`,
+		`"summary"`,
+		`"comments_posted"`,
+		`"comments_skipped"`,
+		`"severity_summary"`,
+		`"reason"`,
+		`"error"`,
+	} {
+		if !strings.Contains(cfg.Prompt.PRReview.ResponseSchema, field) {
+			t.Errorf("PRReview.ResponseSchema missing required field %s; current:\n%s",
+				field, cfg.Prompt.PRReview.ResponseSchema)
+		}
+	}
+}
+
+func TestPromptConfig_GoalDoesNotDuplicateSchema(t *testing.T) {
+	// Regression: the marker + JSON shape belong in ResponseSchema, not in
+	// Goal. Keeping them separate prevents weak models from mixing task
+	// framing with exact-string requirements.
+	cfg := &Config{}
+	ApplyDefaults(cfg)
+
+	if strings.Contains(cfg.Prompt.Ask.Goal, "===ASK_RESULT===") {
+		t.Errorf("Ask.Goal must NOT contain the ASK_RESULT marker (belongs in ResponseSchema): %q", cfg.Prompt.Ask.Goal)
+	}
+	if strings.Contains(cfg.Prompt.PRReview.Goal, "===REVIEW_RESULT===") {
+		t.Errorf("PRReview.Goal must NOT contain the REVIEW_RESULT marker (belongs in ResponseSchema): %q", cfg.Prompt.PRReview.Goal)
+	}
+}
+
+func TestPromptConfig_OperatorResponseSchemaWins(t *testing.T) {
+	cfg := loadFromString(t, `
+prompt:
+  ask:
+    response_schema: "custom schema"
+`)
+	if cfg.Prompt.Ask.ResponseSchema != "custom schema" {
+		t.Errorf("operator-provided ResponseSchema dropped: got %q", cfg.Prompt.Ask.ResponseSchema)
+	}
+}
+
+func TestPRReviewConfig_DefaultEnabled(t *testing.T) {
+	cfg := &Config{}
+	ApplyDefaults(cfg)
+	if !cfg.PRReview.IsEnabled() {
+		t.Error("PRReview default should be enabled (opt-out, not opt-in)")
+	}
+}
+
+func TestPRReviewConfig_ExplicitFalseWins(t *testing.T) {
+	// ApplyDefaults must not clobber an explicit `enabled: false` — operator
+	// override beats the new default-on behavior.
+	cfg := loadFromString(t, `
+pr_review:
+  enabled: false
+`)
+	if cfg.PRReview.IsEnabled() {
+		t.Error("explicit pr_review.enabled: false should turn the feature off")
 	}
 }
 

@@ -79,6 +79,10 @@ func ApplyDefaults(cfg *Config) {
 		cfg.Attachments.TTL = 30 * time.Minute
 	}
 	applyPromptDefaults(&cfg.Prompt)
+	if cfg.PRReview.Enabled == nil {
+		t := true
+		cfg.PRReview.Enabled = &t
+	}
 	resolveSecrets(cfg)
 }
 
@@ -100,10 +104,42 @@ func DefaultsMap() map[string]any {
 }
 
 // Hardcoded per-workflow defaults. Operator yaml wins over these.
+//
+// Goals describe the task; ResponseSchema describes the machine-readable
+// output contract. Splitting them lets weaker models handle each
+// concern without mixing task-framing with exact-string requirements.
 const (
 	defaultIssueGoal    = "Use the /triage-issue skill to investigate and produce a triage result."
-	defaultAskGoal      = "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules. Output ===ASK_RESULT=== followed by JSON {\"answer\": \"<markdown>\"}."
-	defaultPRReviewGoal = "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper. Output ===REVIEW_RESULT=== with status (POSTED|SKIPPED|ERROR) + summary + severity_summary."
+	defaultAskGoal      = "Answer the user's question using the thread, and (if a codebase is attached) the repo. Follow the ask-assistant skill for scope, boundaries, and punt rules."
+	defaultPRReviewGoal = "Review the PR. Use the github-pr-review skill to analyze the diff and post line-level comments plus a summary review via agentdock pr-review-helper."
+
+	defaultAskResponseSchema = `Your final response MUST end with this exact block (no leading whitespace, no markdown fence around it):
+
+===ASK_RESULT===
+{"answer": "<your full markdown answer as a single JSON string>"}
+
+The JSON key MUST be literally "answer" (six letters: a-n-s-w-e-r). Do NOT use "text", "content", "response", "result", "message", or any synonym. Any other key causes a parse failure.`
+
+	// Mirrors app/workflow/pr_review_parser.go:ReviewResult and the
+	// github-pr-review skill's "Emit the result marker" section. Keep the
+	// three shapes in sync with that parser; extra fields are ignored but
+	// missing required fields degrade Slack feedback (0 comments / empty
+	// error).
+	defaultPRReviewResponseSchema = `Your final response MUST end with this exact block:
+
+===REVIEW_RESULT===
+<ONE of the three JSON shapes below, chosen by status>
+
+POSTED (review landed on the PR):
+{"status": "POSTED", "summary": "<same text posted to GitHub>", "comments_posted": <int>, "comments_skipped": <int>, "severity_summary": "clean|minor|major"}
+
+SKIPPED (short-circuited — e.g. lockfile_only, vendored, generated, pure_docs, pure_config):
+{"status": "SKIPPED", "summary": "<short markdown>", "reason": "<one of: lockfile_only|vendored|generated|pure_docs|pure_config>"}
+
+ERROR (review failed, helper exit != 0):
+{"status": "ERROR", "error": "<diagnostic message operators can act on>", "summary": "<what you would have posted>"}
+
+Use exactly these keys — no synonyms. Do NOT merge shapes (e.g. never emit "reason" when status is POSTED).`
 )
 
 var (
@@ -136,6 +172,12 @@ func applyPromptDefaults(p *PromptConfig) {
 	}
 	if p.PRReview.Goal == "" {
 		p.PRReview.Goal = defaultPRReviewGoal
+	}
+	if p.Ask.ResponseSchema == "" {
+		p.Ask.ResponseSchema = defaultAskResponseSchema
+	}
+	if p.PRReview.ResponseSchema == "" {
+		p.PRReview.ResponseSchema = defaultPRReviewResponseSchema
 	}
 	if len(p.Ask.OutputRules) == 0 {
 		p.Ask.OutputRules = defaultAskOutputRules

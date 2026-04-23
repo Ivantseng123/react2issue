@@ -64,6 +64,66 @@ func TestBuildPrompt_Ordering_GoalFirst_OutputRulesLast(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_ResponseSchema_RenderedVerbatim(t *testing.T) {
+	// The schema body must reach the LLM with literal " and < intact —
+	// xmlEscape would turn {"answer": "<markdown>"} into
+	// {&quot;answer&quot;: &quot;&lt;markdown&gt;&quot;}, which weak models
+	// then copy into their output, breaking JSON parsing downstream.
+	schema := `===ASK_RESULT===
+{"answer": "<your markdown>"}`
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Goal:           "g",
+		ResponseSchema: schema,
+	}
+	got := BuildPrompt(ctx, nil, nil)
+
+	if !strings.Contains(got, "<response_schema>") {
+		t.Fatalf("missing <response_schema> section in:\n%s", got)
+	}
+	if !strings.Contains(got, `{"answer": "<your markdown>"}`) {
+		t.Errorf("schema body was escaped — literal JSON not found in:\n%s", got)
+	}
+	if strings.Contains(got, "&quot;answer&quot;") {
+		t.Errorf("schema body was xml-escaped (saw &quot;) — expected verbatim:\n%s", got)
+	}
+}
+
+func TestBuildPrompt_ResponseSchema_Omitted_WhenEmpty(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Goal:           "g",
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	if strings.Contains(got, "<response_schema>") {
+		t.Errorf("expected no <response_schema> when empty, got:\n%s", got)
+	}
+}
+
+func TestBuildPrompt_ResponseSchema_BeforeOutputRules(t *testing.T) {
+	ctx := queue.PromptContext{
+		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},
+		Channel:        "c",
+		Reporter:       "r",
+		Goal:           "g",
+		ResponseSchema: "schema body",
+		OutputRules:    []string{"rule one"},
+	}
+	got := BuildPrompt(ctx, nil, nil)
+	schemaIdx := strings.Index(got, "<response_schema>")
+	rulesIdx := strings.Index(got, "<output_rules>")
+	if schemaIdx == -1 || rulesIdx == -1 {
+		t.Fatalf("missing sections: schema=%d rules=%d", schemaIdx, rulesIdx)
+	}
+	if schemaIdx > rulesIdx {
+		t.Errorf("expected <response_schema> before <output_rules>, got schema=%d rules=%d", schemaIdx, rulesIdx)
+	}
+}
+
 func TestBuildPrompt_OptionalOmitted_ExtraDescriptionAndBranch(t *testing.T) {
 	ctx := queue.PromptContext{
 		ThreadMessages: []queue.ThreadMessage{{User: "A", Timestamp: "1", Text: "t"}},

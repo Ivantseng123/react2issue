@@ -287,6 +287,7 @@ func (w *AskWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, str
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
 			Goal:             w.cfg.Prompt.Ask.Goal,
+			ResponseSchema:   w.cfg.Prompt.Ask.ResponseSchema,
 			OutputRules:      w.cfg.Prompt.Ask.OutputRules,
 			Language:         w.cfg.Prompt.Language,
 			ExtraDescription: st.Question,

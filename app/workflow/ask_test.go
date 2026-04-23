@@ -383,6 +383,9 @@ func TestAskWorkflow_BuildJob_NoRepo_LeavesCloneURLEmpty(t *testing.T) {
 	if job.PromptContext == nil || job.PromptContext.Goal == "" {
 		t.Error("PromptContext.Goal must be populated (ApplyDefaults)")
 	}
+	if job.PromptContext.ResponseSchema == "" {
+		t.Error("PromptContext.ResponseSchema must be populated (ApplyDefaults)")
+	}
 }
 
 func TestAskWorkflow_BuildJob_WithRepo_PopulatesCloneURL(t *testing.T) {
