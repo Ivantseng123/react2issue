@@ -31,14 +31,11 @@ func (s *shimSlack) PostMessageWithButton(ch, text, ts, aid, bt, val string) (st
 }
 func (s *shimSlack) UpdateMessage(ch, mts, text string) error                         { return nil }
 func (s *shimSlack) UpdateMessageWithButton(ch, mts, text, aid, bt, val string) error { return nil }
-func (s *shimSlack) PostSelector(ch, prompt, prefix string, labels, values []string, ts string) (string, error) {
+func (s *shimSlack) PostSmartSelector(ch, ts string, spec workflow.SelectorSpec) (string, error) {
+	if spec.Searchable {
+		return "ext-ts", nil
+	}
 	return "sel-ts", nil
-}
-func (s *shimSlack) PostSelectorWithBack(ch, prompt, prefix string, labels, values []string, ts, back, bl string) (string, error) {
-	return "sel-ts", nil
-}
-func (s *shimSlack) PostExternalSelector(ch, prompt, aid, ph, ts, cancelAID, cancelLabel string) (string, error) {
-	return "ext-ts", nil
 }
 func (s *shimSlack) OpenTextInputModal(tid, title, label, name, metadata string) error { return nil }
 func (s *shimSlack) ResolveUser(uid string) string                                     { return uid }
@@ -616,10 +613,13 @@ func TestExecuteStep_InvalidatedPending_DoesNotPostSelector(t *testing.T) {
 	p.Invalidate()
 
 	step := workflow.NextStep{
-		Kind:            workflow.NextStepPostSelector,
-		SelectorPrompt:  "pick",
-		SelectorActions: []workflow.SelectorAction{{ActionID: "a", Label: "L", Value: "V"}},
-		Pending:         p,
+		Kind: workflow.NextStepSelector,
+		Selector: &workflow.SelectorSpec{
+			Prompt:   "pick",
+			ActionID: "a",
+			Options:  []workflow.SelectorOption{{Label: "L", Value: "V"}},
+		},
+		Pending: p,
 	}
 	wf.executeStep(context.Background(), p, step, "")
 
@@ -669,10 +669,13 @@ func TestHandleBackToRepo_InvalidatesOldPending(t *testing.T) {
 	fake := &countingSelectionWorkflow{
 		returnFn: func(p *workflow.Pending, value string) workflow.NextStep {
 			return workflow.NextStep{
-				Kind:            workflow.NextStepPostSelector,
-				SelectorPrompt:  "pick a repo",
-				SelectorActions: []workflow.SelectorAction{{ActionID: "a", Label: "foo/bar", Value: "foo/bar"}},
-				Pending:         p,
+				Kind: workflow.NextStepSelector,
+				Selector: &workflow.SelectorSpec{
+					Prompt:   "pick a repo",
+					ActionID: "a",
+					Options:  []workflow.SelectorOption{{Label: "foo/bar", Value: "foo/bar"}},
+				},
+				Pending: p,
 			}
 		},
 	}

@@ -23,11 +23,11 @@ func TestAskWorkflow_Trigger_ReturnsRepoPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector, got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector, got %v", step.Kind)
 	}
-	if len(step.SelectorActions) != 2 {
-		t.Errorf("expected 2 actions (attach/skip), got %d", len(step.SelectorActions))
+	if len(step.Selector.Options) != 2 {
+		t.Errorf("expected 2 actions (attach/skip), got %d", len(step.Selector.Options))
 	}
 	// Identity resolution must populate RequestID on the Pending envelope
 	// so downstream BuildJob can re-use it (matches IssueWorkflow.Trigger).
@@ -51,8 +51,8 @@ func TestAskWorkflow_Selection_SkipRoutesToDescriptionPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector (description prompt), got %v", step.Kind)
 	}
 	if p.Phase != "ask_description_prompt" {
 		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
@@ -61,12 +61,10 @@ func TestAskWorkflow_Selection_SkipRoutesToDescriptionPrompt(t *testing.T) {
 	if st.AttachRepo {
 		t.Error("AttachRepo should be false on skip")
 	}
-	// Action IDs reuse description_action so app.go's existing route
+	// ActionID reuses description_action so app.go's existing route
 	// handles the modal-trigger-id forwarding without a new special case.
-	for _, a := range step.SelectorActions {
-		if a.ActionID != "description_action" {
-			t.Errorf("ActionID = %q, want description_action", a.ActionID)
-		}
+	if step.Selector.ActionID != "description_action" {
+		t.Errorf("ActionID = %q, want description_action", step.Selector.ActionID)
 	}
 }
 
@@ -78,8 +76,8 @@ func TestAskWorkflow_Selection_AttachShowsRepoSelector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector (repo choice), got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector (repo choice), got %v", step.Kind)
 	}
 }
 
@@ -92,8 +90,8 @@ func TestAskWorkflow_Selection_RepoChoiceRoutesToDescriptionPrompt(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector (description prompt), got %v", step.Kind)
 	}
 	if p.Phase != "ask_description_prompt" {
 		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
@@ -114,27 +112,27 @@ func TestAskWorkflow_Selection_RepoChoiceWithBranchesShowsBranchSelector(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector (branch selector), got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector (branch selector), got %v", step.Kind)
 	}
 	if p.Phase != "ask_branch_select" {
 		t.Errorf("Phase = %q, want ask_branch_select", p.Phase)
 	}
 	// 2 branches + 1 cancel button.
-	if len(step.SelectorActions) != 3 {
-		t.Errorf("expected 3 actions (2 branches + 取消), got %d", len(step.SelectorActions))
+	if len(step.Selector.Options) != 3 {
+		t.Errorf("expected 3 actions (2 branches + 取消), got %d", len(step.Selector.Options))
+	}
+	if step.Selector.ActionID != "ask_branch" {
+		t.Errorf("ActionID = %q, want ask_branch", step.Selector.ActionID)
 	}
 	sawCancel := false
-	for _, a := range step.SelectorActions {
-		if a.ActionID != "ask_branch" {
-			t.Errorf("ActionID = %q, want ask_branch", a.ActionID)
-		}
-		if a.Value == "取消" {
+	for _, o := range step.Selector.Options {
+		if o.Value == "取消" {
 			sawCancel = true
 		}
 	}
 	if !sawCancel {
-		t.Error("cancel button missing from branch selector")
+		t.Error("cancel option missing from branch selector")
 	}
 }
 
@@ -183,17 +181,17 @@ func TestAskWorkflow_Selection_AttachWithReposIncludesCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 2 repos + 1 cancel.
-	if len(step.SelectorActions) != 3 {
-		t.Errorf("expected 3 actions (2 repos + 取消), got %d", len(step.SelectorActions))
+	if len(step.Selector.Options) != 3 {
+		t.Errorf("expected 3 actions (2 repos + 取消), got %d", len(step.Selector.Options))
 	}
 	sawCancel := false
-	for _, a := range step.SelectorActions {
-		if a.Value == "取消" {
+	for _, o := range step.Selector.Options {
+		if o.Value == "取消" {
 			sawCancel = true
 		}
 	}
 	if !sawCancel {
-		t.Error("cancel button missing from repo selector")
+		t.Error("cancel option missing from repo selector")
 	}
 }
 
@@ -206,12 +204,12 @@ func TestAskWorkflow_Selection_AttachExternalSearchIncludesCancel(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostExternalSelector {
-		t.Fatalf("expected NextStepPostExternalSelector, got %v", step.Kind)
+	if step.Kind != NextStepSelector /* external */ {
+		t.Fatalf("expected NextStepSelector /* external */, got %v", step.Kind)
 	}
-	if step.SelectorCancelActionID == "" || step.SelectorCancelLabel == "" {
+	if step.Selector.CancelActionID == "" || step.Selector.CancelLabel == "" {
 		t.Errorf("expected cancel info on external selector, got actionID=%q label=%q",
-			step.SelectorCancelActionID, step.SelectorCancelLabel)
+			step.Selector.CancelActionID, step.Selector.CancelLabel)
 	}
 }
 
@@ -222,8 +220,8 @@ func TestAskWorkflow_Selection_BranchPickGoesToDescriptionPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector (description prompt), got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector (description prompt), got %v", step.Kind)
 	}
 	if p.Phase != "ask_description_prompt" {
 		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
@@ -253,7 +251,7 @@ func TestAskWorkflow_Selection_SingleBranchSkipsSelector(t *testing.T) {
 	if st.SelectedBranch != "main" {
 		t.Errorf("SelectedBranch = %q, want main (auto-selected)", st.SelectedBranch)
 	}
-	if step.Kind != NextStepPostSelector {
+	if step.Kind != NextStepSelector {
 		t.Errorf("expected description prompt selector, got %v", step.Kind)
 	}
 }
@@ -327,9 +325,9 @@ func TestAskWorkflow_Selection_DescriptionModalEmptyLeavesQuestion(t *testing.T)
 
 // TestAskWorkflow_Selection_AttachWithNoReposUsesExternalSearch covers the
 // fallback path that fires when ChannelDefaults.Repos and Channels[ID] are
-// both empty. The dispatcher routes NextStepPostExternalSelector to a
+// both empty. The dispatcher routes NextStepSelector /* external */ to a
 // searchable Slack modal rather than a button selector. Regression guard
-// for the Task 5.2 plan-deviation (plan's NextStepPostSelector+empty-actions
+// for the Task 5.2 plan-deviation (plan's NextStepSelector+empty-actions
 // approach was broken — see commit 37bc67b).
 func TestAskWorkflow_Selection_AttachWithNoReposUsesExternalSearch(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
@@ -339,13 +337,13 @@ func TestAskWorkflow_Selection_AttachWithNoReposUsesExternalSearch(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostExternalSelector {
-		t.Errorf("expected NextStepPostExternalSelector, got %v", step.Kind)
+	if step.Kind != NextStepSelector /* external */ {
+		t.Errorf("expected NextStepSelector /* external */, got %v", step.Kind)
 	}
-	if step.SelectorActionID != "ask_repo" {
-		t.Errorf("SelectorActionID = %q, want ask_repo", step.SelectorActionID)
+	if step.Selector.ActionID != "ask_repo" {
+		t.Errorf("SelectorActionID = %q, want ask_repo", step.Selector.ActionID)
 	}
-	if step.SelectorPlaceholder == "" {
+	if step.Selector.Placeholder == "" {
 		t.Error("SelectorPlaceholder should be set for external search")
 	}
 	if p.Phase != "ask_repo_select" {

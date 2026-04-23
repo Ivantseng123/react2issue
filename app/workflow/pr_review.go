@@ -99,11 +99,14 @@ func (w *PRReviewWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args st
 				State:       &prReviewState{URL: url},
 			}
 			return NextStep{
-				Kind:           NextStepPostSelector,
-				SelectorPrompt: fmt.Sprintf(":eyes: 找到 `%s`，review？", url),
-				SelectorActions: []SelectorAction{
-					{ActionID: "pr_review_confirm", Label: "是", Value: url},
-					{ActionID: "pr_review_confirm", Label: "改貼 URL", Value: "manual"},
+				Kind: NextStepSelector,
+				Selector: &SelectorSpec{
+					Prompt:   fmt.Sprintf(":eyes: 找到 `%s`，review？", url),
+					ActionID: "pr_review_confirm",
+					Options: []SelectorOption{
+						{Label: "是", Value: url},
+						{Label: "改貼 URL", Value: "manual"},
+					},
 				},
 				Pending: pending,
 			}, nil

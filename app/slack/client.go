@@ -264,129 +264,237 @@ func (c *Client) GetChannelName(channelID string) string {
 	return "#" + info.Name
 }
 
-// PostSelector sends a message with clickable buttons.
-// If threadTS is non-empty, posts in that thread.
-// labels[i] is the button text; values[i] is the payload returned as
-// action.Value on click. When values is nil/short, the label doubles as
-// the value (legacy behaviour).
-// Returns the message timestamp.
-func (c *Client) PostSelector(channelID, prompt, actionPrefix string, labels, values []string, threadTS string) (string, error) {
-	var buttons []slack.BlockElement
-	for i, label := range labels {
-		val := label
-		if i < len(values) {
-			val = values[i]
-		}
-		buttons = append(buttons, slack.NewButtonBlockElement(
-			fmt.Sprintf("%s_%d", actionPrefix, i),
-			val,
-			slack.NewTextBlockObject(slack.PlainTextType, label, false, false),
-		))
-	}
-
-	section := slack.NewSectionBlock(
-		slack.NewTextBlockObject(slack.MarkdownType, prompt, false, false),
-		nil, nil,
-	)
-	actions := slack.NewActionBlock(actionPrefix, buttons...)
-
-	opts := []slack.MsgOption{slack.MsgOptionBlocks(section, actions)}
-	if threadTS != "" {
-		opts = append(opts, slack.MsgOptionTS(threadTS))
-	}
-
-	_, ts, err := c.api.PostMessage(channelID, opts...)
-	if err != nil {
-		return "", fmt.Errorf("post selector: %w", err)
-	}
-	return ts, nil
+// SmartSelectorOption is one choice in a selector. Value is the payload
+// delivered back to the router when the user picks this option.
+type SmartSelectorOption struct {
+	Label string
+	Value string
 }
 
-// PostSelectorWithBack sends a button selector with an optional trailing back
-// button. If backActionID is empty, behaves identically to PostSelector. The
-// back button is rendered rightmost (farthest from main option buttons) and
-// uses default button style.
-func (c *Client) PostSelectorWithBack(
-	channelID, prompt, actionPrefix string,
-	labels, values []string,
-	threadTS string,
-	backActionID, backLabel string,
-) (string, error) {
-	var buttons []slack.BlockElement
-	for i, label := range labels {
-		val := label
-		if i < len(values) {
-			val = values[i]
-		}
-		buttons = append(buttons, slack.NewButtonBlockElement(
-			fmt.Sprintf("%s_%d", actionPrefix, i),
-			val,
-			slack.NewTextBlockObject(slack.PlainTextType, label, false, false),
-		))
-	}
-	if backActionID != "" {
-		buttons = append(buttons, slack.NewButtonBlockElement(
-			backActionID,
-			backActionID, // value equals actionID so router doesn't need SelectedOption
-			slack.NewTextBlockObject(slack.PlainTextType, backLabel, false, false),
-		))
-	}
+// SmartSelectorSpec is the adapter-level view of workflow.SelectorSpec.
+// Kept as a separate type so the slack package does not import workflow.
+type SmartSelectorSpec struct {
+	Prompt   string
+	ActionID string
+	Options  []SmartSelectorOption
 
-	section := slack.NewSectionBlock(
-		slack.NewTextBlockObject(slack.MarkdownType, prompt, false, false),
-		nil, nil,
-	)
-	actions := slack.NewActionBlock(actionPrefix, buttons...)
+	Searchable  bool
+	Placeholder string
 
-	opts := []slack.MsgOption{slack.MsgOptionBlocks(section, actions)}
-	if threadTS != "" {
-		opts = append(opts, slack.MsgOptionTS(threadTS))
-	}
-
-	_, ts, err := c.api.PostMessage(channelID, opts...)
-	if err != nil {
-		return "", fmt.Errorf("post selector with back: %w", err)
-	}
-	return ts, nil
+	BackActionID   string
+	BackLabel      string
+	CancelActionID string
+	CancelLabel    string
 }
 
-// PostExternalSelector sends a message with a type-ahead searchable dropdown.
-// When cancelActionID and cancelLabel are non-empty, adds a cancel button
-// alongside the dropdown so users can bail out of the selection. Returns the
-// message timestamp.
-func (c *Client) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS, cancelActionID, cancelLabel string) (string, error) {
+// Slack block-kit hard limits. Breaching either produces an `invalid_blocks`
+// 400 at the API boundary — PostSmartSelector dispatches to the right
+// rendering so callers never collide with these.
+const (
+	selectorButtonMax       = 25  // actions block: max 25 interactive elements
+	selectorStaticSelectMax = 100 // static_select: max 100 options
+)
+
+// selectorRenderKind is the concrete Slack rendering picked for a spec.
+// Kept as a distinct type so selectorRenderMode is easy to test without
+// reaching into the Slack API.
+type selectorRenderKind int
+
+const (
+	renderButton          selectorRenderKind = iota // actions block of buttons
+	renderStaticSelect                              // static_select dropdown
+	renderExternalSelect                            // external (type-ahead) select
+	renderStaticTruncated                           // static_select with options capped to selectorStaticSelectMax
+)
+
+// selectorRenderMode decides which Slack rendering fits a spec based on the
+// option count and extras (back/cancel buttons) against the block-kit caps.
+// Pure function — the only Slack-API-free entry point, which is what the
+// threshold tests exercise.
+func selectorRenderMode(spec SmartSelectorSpec) selectorRenderKind {
+	if spec.Searchable {
+		return renderExternalSelect
+	}
+	extras := 0
+	if spec.BackActionID != "" {
+		extras++
+	}
+	if spec.CancelActionID != "" {
+		extras++
+	}
+	if len(spec.Options)+extras <= selectorButtonMax {
+		return renderButton
+	}
+	if len(spec.Options) > selectorStaticSelectMax {
+		return renderStaticTruncated
+	}
+	return renderStaticSelect
+}
+
+// PostSmartSelector renders spec as a message with the appropriate Slack UI
+// (see selectorRenderMode) and returns the posted message's timestamp so
+// executeStep can key pending state under it.
+func (c *Client) PostSmartSelector(channelID, threadTS string, spec SmartSelectorSpec) (string, error) {
+	if !spec.Searchable && len(spec.Options) == 0 {
+		return "", fmt.Errorf("post smart selector: empty options and not searchable")
+	}
+	switch selectorRenderMode(spec) {
+	case renderExternalSelect:
+		return c.postExternalSelectBlock(channelID, threadTS, spec)
+	case renderButton:
+		return c.postButtonSelectorBlock(channelID, threadTS, spec)
+	case renderStaticTruncated:
+		c.logger.Warn("selector options 超過上限，已截斷至前 100 項",
+			"phase", "降級",
+			"action_id", spec.ActionID,
+			"original", len(spec.Options),
+			"capped", selectorStaticSelectMax,
+		)
+		spec.Options = spec.Options[:selectorStaticSelectMax]
+		return c.postStaticSelectBlock(channelID, threadTS, spec)
+	default: // renderStaticSelect
+		return c.postStaticSelectBlock(channelID, threadTS, spec)
+	}
+}
+
+// postButtonSelectorBlock renders spec as an actions block of buttons. All
+// buttons share spec.ActionID — Slack delivers the clicked option's Value
+// via action.Value, and the common ActionID is what app.go's router switches
+// on.
+func (c *Client) postButtonSelectorBlock(channelID, threadTS string, spec SmartSelectorSpec) (string, error) {
+	buttons := make([]slack.BlockElement, 0, len(spec.Options)+2)
+	for _, o := range spec.Options {
+		buttons = append(buttons, slack.NewButtonBlockElement(
+			spec.ActionID,
+			o.Value,
+			slack.NewTextBlockObject(slack.PlainTextType, o.Label, false, false),
+		))
+	}
+	if spec.CancelActionID != "" {
+		buttons = append(buttons, slack.NewButtonBlockElement(
+			spec.CancelActionID,
+			spec.CancelLabel,
+			slack.NewTextBlockObject(slack.PlainTextType, spec.CancelLabel, false, false),
+		))
+	}
+	if spec.BackActionID != "" {
+		buttons = append(buttons, slack.NewButtonBlockElement(
+			spec.BackActionID,
+			spec.BackActionID, // value equals actionID so router doesn't need SelectedOption
+			slack.NewTextBlockObject(slack.PlainTextType, spec.BackLabel, false, false),
+		))
+	}
+
 	section := slack.NewSectionBlock(
-		slack.NewTextBlockObject(slack.MarkdownType, prompt, false, false),
+		slack.NewTextBlockObject(slack.MarkdownType, spec.Prompt, false, false),
 		nil, nil,
 	)
+	actions := slack.NewActionBlock(spec.ActionID, buttons...)
 
+	return c.postBlocks(channelID, threadTS, section, actions, "post button selector")
+}
+
+// postStaticSelectBlock renders spec as a static_select dropdown. Used when
+// the option count exceeds the button row's 25 cap. Optional back/cancel
+// buttons live beside the dropdown in the same actions block.
+func (c *Client) postStaticSelectBlock(channelID, threadTS string, spec SmartSelectorSpec) (string, error) {
+	options := make([]*slack.OptionBlockObject, 0, len(spec.Options))
+	for _, o := range spec.Options {
+		options = append(options, slack.NewOptionBlockObject(
+			o.Value,
+			slack.NewTextBlockObject(slack.PlainTextType, o.Label, false, false),
+			nil,
+		))
+	}
+	placeholder := spec.Placeholder
+	if placeholder == "" {
+		placeholder = "請選擇..."
+	}
+	sel := slack.NewOptionsSelectBlockElement(
+		slack.OptTypeStatic,
+		slack.NewTextBlockObject(slack.PlainTextType, placeholder, false, false),
+		spec.ActionID,
+		options...,
+	)
+
+	elements := []slack.BlockElement{sel}
+	if spec.CancelActionID != "" {
+		elements = append(elements, slack.NewButtonBlockElement(
+			spec.CancelActionID,
+			spec.CancelLabel,
+			slack.NewTextBlockObject(slack.PlainTextType, spec.CancelLabel, false, false),
+		))
+	}
+	if spec.BackActionID != "" {
+		elements = append(elements, slack.NewButtonBlockElement(
+			spec.BackActionID,
+			spec.BackActionID,
+			slack.NewTextBlockObject(slack.PlainTextType, spec.BackLabel, false, false),
+		))
+	}
+
+	section := slack.NewSectionBlock(
+		slack.NewTextBlockObject(slack.MarkdownType, spec.Prompt, false, false),
+		nil, nil,
+	)
+	actions := slack.NewActionBlock(spec.ActionID+"_block", elements...)
+
+	return c.postBlocks(channelID, threadTS, section, actions, "post static select")
+}
+
+// postExternalSelectBlock renders spec as a type-ahead external_select. The
+// user types a query and app.go's BlockSuggestion handler supplies live
+// options (see app.go:531). Back/cancel buttons live beside the dropdown in
+// the same actions block.
+func (c *Client) postExternalSelectBlock(channelID, threadTS string, spec SmartSelectorSpec) (string, error) {
+	placeholder := spec.Placeholder
+	if placeholder == "" {
+		placeholder = "Type to search..."
+	}
 	extSelect := slack.NewOptionsSelectBlockElement(
 		slack.OptTypeExternal,
 		slack.NewTextBlockObject(slack.PlainTextType, placeholder, false, false),
-		actionID,
+		spec.ActionID,
 	)
 	extSelect.MinQueryLength = new(int) // 0 = show options immediately
 	*extSelect.MinQueryLength = 0
 
 	elements := []slack.BlockElement{extSelect}
-	if cancelActionID != "" && cancelLabel != "" {
-		cancelBtn := slack.NewButtonBlockElement(
-			cancelActionID,
-			cancelLabel,
-			slack.NewTextBlockObject(slack.PlainTextType, cancelLabel, false, false),
-		)
-		elements = append(elements, cancelBtn)
+	if spec.CancelActionID != "" && spec.CancelLabel != "" {
+		elements = append(elements, slack.NewButtonBlockElement(
+			spec.CancelActionID,
+			spec.CancelLabel,
+			slack.NewTextBlockObject(slack.PlainTextType, spec.CancelLabel, false, false),
+		))
 	}
-	actions := slack.NewActionBlock(actionID+"_block", elements...)
+	if spec.BackActionID != "" {
+		elements = append(elements, slack.NewButtonBlockElement(
+			spec.BackActionID,
+			spec.BackActionID,
+			slack.NewTextBlockObject(slack.PlainTextType, spec.BackLabel, false, false),
+		))
+	}
 
+	section := slack.NewSectionBlock(
+		slack.NewTextBlockObject(slack.MarkdownType, spec.Prompt, false, false),
+		nil, nil,
+	)
+	actions := slack.NewActionBlock(spec.ActionID+"_block", elements...)
+
+	return c.postBlocks(channelID, threadTS, section, actions, "post external selector")
+}
+
+// postBlocks shares the "post section + actions, thread-scoped if threadTS
+// is set" machinery across the three rendering modes. errLabel is prefixed
+// onto any wrapped error for easier diagnosis.
+func (c *Client) postBlocks(channelID, threadTS string, section *slack.SectionBlock, actions *slack.ActionBlock, errLabel string) (string, error) {
 	opts := []slack.MsgOption{slack.MsgOptionBlocks(section, actions)}
 	if threadTS != "" {
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
-
 	_, ts, err := c.api.PostMessage(channelID, opts...)
 	if err != nil {
-		return "", fmt.Errorf("post external selector: %w", err)
+		return "", fmt.Errorf("%s: %w", errLabel, err)
 	}
 	return ts, nil
 }

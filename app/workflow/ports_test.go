@@ -42,18 +42,8 @@ func (f *fakeSlackPort) UpdateMessageWithButton(ch, mts, text, aid, bt, val stri
 	return nil
 }
 
-func (f *fakeSlackPort) PostSelector(ch, prompt, prefix string, labels, values []string, ts string) (string, error) {
-	f.Selectors = append(f.Selectors, prompt)
-	return "sel-ts", nil
-}
-
-func (f *fakeSlackPort) PostSelectorWithBack(ch, prompt, prefix string, labels, values []string, ts, back, bl string) (string, error) {
-	f.Selectors = append(f.Selectors, prompt)
-	return "sel-ts", nil
-}
-
-func (f *fakeSlackPort) PostExternalSelector(ch, prompt, aid, ph, ts, cancelAID, cancelLabel string) (string, error) {
-	f.Selectors = append(f.Selectors, prompt)
+func (f *fakeSlackPort) PostSmartSelector(ch, ts string, spec SelectorSpec) (string, error) {
+	f.Selectors = append(f.Selectors, spec.Prompt)
 	return "sel-ts", nil
 }
 

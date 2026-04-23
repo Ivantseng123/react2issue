@@ -359,8 +359,7 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 	// Only applies to the "act on the user's flow" steps — Error/Cancel/Noop
 	// still clear dedup and are safe to run.
 	switch step.Kind {
-	case workflow.NextStepPostSelector,
-		workflow.NextStepPostExternalSelector,
+	case workflow.NextStepSelector,
 		workflow.NextStepOpenModal,
 		workflow.NextStepSubmit:
 		if pending.IsInvalidated() {
@@ -369,59 +368,19 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 		}
 	}
 	switch step.Kind {
-	case workflow.NextStepPostSelector:
-		labels := make([]string, len(step.SelectorActions))
-		values := make([]string, len(step.SelectorActions))
-		for i, a := range step.SelectorActions {
-			labels[i] = a.Label
-			values[i] = a.Value
-		}
-		var selectorTS string
-		var err error
-		if step.SelectorBack != "" {
-			selectorTS, err = w.slack.PostSelectorWithBack(
-				pending.ChannelID,
-				step.SelectorPrompt,
-				actionPrefix(step.SelectorActions),
-				labels,
-				values,
-				pending.ThreadTS,
-				step.SelectorBack,
-				"← 重新選 repo",
-			)
-		} else {
-			selectorTS, err = w.slack.PostSelector(
-				pending.ChannelID,
-				step.SelectorPrompt,
-				actionPrefix(step.SelectorActions),
-				labels,
-				values,
-				pending.ThreadTS,
-			)
-		}
-		if err != nil {
-			w.logger.Error("PostSelector failed", "phase", "失敗", "error", err)
-			_ = w.slack.PostMessage(pending.ChannelID, ":x: 無法顯示選單，請重試", pending.ThreadTS)
+	case workflow.NextStepSelector:
+		if step.Selector == nil {
+			w.logger.Error("NextStepSelector missing spec", "phase", "失敗", "request_id", pending.RequestID)
+			_ = w.slack.PostMessage(pending.ChannelID, ":x: 內部錯誤：selector spec 未設置", pending.ThreadTS)
 			if w.handler != nil {
 				w.handler.ClearThreadDedup(pending.ChannelID, pending.ThreadTS)
 			}
 			return
 		}
-		w.storePending(selectorTS, pending)
-
-	case workflow.NextStepPostExternalSelector:
-		selectorTS, err := w.slack.PostExternalSelector(
-			pending.ChannelID,
-			step.SelectorPrompt,
-			step.SelectorActionID,
-			step.SelectorPlaceholder,
-			pending.ThreadTS,
-			step.SelectorCancelActionID,
-			step.SelectorCancelLabel,
-		)
+		selectorTS, err := w.slack.PostSmartSelector(pending.ChannelID, pending.ThreadTS, *step.Selector)
 		if err != nil {
-			w.logger.Error("PostExternalSelector failed", "phase", "失敗", "error", err)
-			_ = w.slack.PostMessage(pending.ChannelID, ":x: 無法顯示搜尋選單，請重試", pending.ThreadTS)
+			w.logger.Error("PostSmartSelector failed", "phase", "失敗", "error", err, "action_id", step.Selector.ActionID)
+			_ = w.slack.PostMessage(pending.ChannelID, ":x: 無法顯示選單，請重試", pending.ThreadTS)
 			if w.handler != nil {
 				w.handler.ClearThreadDedup(pending.ChannelID, pending.ThreadTS)
 			}
@@ -558,11 +517,3 @@ func (w *Workflow) storePending(selectorTS string, p *workflow.Pending) {
 	}()
 }
 
-// actionPrefix returns the ActionID of the first action, used as the Slack
-// action prefix when posting a selector. Returns "" for empty slices.
-func actionPrefix(actions []workflow.SelectorAction) string {
-	if len(actions) == 0 {
-		return ""
-	}
-	return actions[0].ActionID
-}

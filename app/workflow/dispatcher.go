@@ -198,12 +198,15 @@ func (d *Dispatcher) postDSelector(ev TriggerEvent, warning string) (*Pending, N
 		Phase:     "d_selector",
 	}
 	step := NextStep{
-		Kind:           NextStepPostSelector,
-		SelectorPrompt: prompt,
-		SelectorActions: []SelectorAction{
-			{ActionID: "d_selector", Label: "📝 建 Issue", Value: "issue"},
-			{ActionID: "d_selector", Label: "❓ 問問題", Value: "ask"},
-			{ActionID: "d_selector", Label: "🔍 Review PR", Value: "pr_review"},
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   prompt,
+			ActionID: "d_selector",
+			Options: []SelectorOption{
+				{Label: "📝 建 Issue", Value: "issue"},
+				{Label: "❓ 問問題", Value: "ask"},
+				{Label: "🔍 Review PR", Value: "pr_review"},
+			},
 		},
 		Pending: pending,
 	}

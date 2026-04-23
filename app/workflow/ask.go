@@ -64,11 +64,14 @@ func (w *AskWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string)
 		State:       &askState{Question: args},
 	}
 	return NextStep{
-		Kind:           NextStepPostSelector,
-		SelectorPrompt: ":question: 要附加 repo context 嗎？",
-		SelectorActions: []SelectorAction{
-			{ActionID: "ask_attach_repo", Label: "附加", Value: "attach"},
-			{ActionID: "ask_attach_repo", Label: "不用", Value: "skip"},
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   ":question: 要附加 repo context 嗎？",
+			ActionID: "ask_attach_repo",
+			Options: []SelectorOption{
+				{Label: "附加", Value: "attach"},
+				{Label: "不用", Value: "skip"},
+			},
 		},
 		Pending: pending,
 	}, nil
@@ -111,25 +114,31 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 			// No repos configured — fall back to external search. Cancel button
 			// rides along so the user isn't stuck if they change their mind.
 			return NextStep{
-				Kind:                   NextStepPostExternalSelector,
-				SelectorPrompt:         ":point_right: Search and select a repo:",
-				SelectorActionID:       "ask_repo",
-				SelectorPlaceholder:    "Type to search repos...",
-				SelectorCancelActionID: "ask_cancel",
-				SelectorCancelLabel:    "取消",
-				Pending:                p,
+				Kind: NextStepSelector,
+				Selector: &SelectorSpec{
+					Prompt:         ":point_right: Search and select a repo:",
+					ActionID:       "ask_repo",
+					Searchable:     true,
+					Placeholder:    "Type to search repos...",
+					CancelActionID: "ask_cancel",
+					CancelLabel:    "取消",
+				},
+				Pending: p,
 			}, nil
 		}
-		actions := make([]SelectorAction, 0, len(repos)+1)
+		options := make([]SelectorOption, 0, len(repos)+1)
 		for _, r := range repos {
-			actions = append(actions, SelectorAction{ActionID: "ask_repo", Label: r, Value: r})
+			options = append(options, SelectorOption{Label: r, Value: r})
 		}
-		actions = append(actions, SelectorAction{ActionID: "ask_repo", Label: "取消", Value: "取消"})
+		options = append(options, SelectorOption{Label: "取消", Value: "取消"})
 		return NextStep{
-			Kind:            NextStepPostSelector,
-			SelectorPrompt:  ":point_right: Which repo?",
-			SelectorActions: actions,
-			Pending:         p,
+			Kind: NextStepSelector,
+			Selector: &SelectorSpec{
+				Prompt:   ":point_right: Which repo?",
+				ActionID: "ask_repo",
+				Options:  options,
+			},
+			Pending: p,
 		}, nil
 
 	case "ask_repo_select":
@@ -227,16 +236,19 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 	}
 
 	p.Phase = "ask_branch_select"
-	actions := make([]SelectorAction, 0, len(branches)+1)
+	options := make([]SelectorOption, 0, len(branches)+1)
 	for _, b := range branches {
-		actions = append(actions, SelectorAction{ActionID: "ask_branch", Label: b, Value: b})
+		options = append(options, SelectorOption{Label: b, Value: b})
 	}
-	actions = append(actions, SelectorAction{ActionID: "ask_branch", Label: "取消", Value: "取消"})
+	options = append(options, SelectorOption{Label: "取消", Value: "取消"})
 	return NextStep{
-		Kind:            NextStepPostSelector,
-		SelectorPrompt:  fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
-		SelectorActions: actions,
-		Pending:         p,
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
+			ActionID: "ask_branch",
+			Options:  options,
+		},
+		Pending: p,
 	}
 }
 
@@ -246,11 +258,14 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 // its own special case.
 func (w *AskWorkflow) descriptionPromptStep(p *Pending) NextStep {
 	return NextStep{
-		Kind:           NextStepPostSelector,
-		SelectorPrompt: ":pencil2: 要補充說明想讓 agent 做什麼嗎？",
-		SelectorActions: []SelectorAction{
-			{ActionID: "description_action", Label: "補充說明", Value: "補充說明"},
-			{ActionID: "description_action", Label: "跳過", Value: "跳過"},
+		Kind: NextStepSelector,
+		Selector: &SelectorSpec{
+			Prompt:   ":pencil2: 要補充說明想讓 agent 做什麼嗎？",
+			ActionID: "description_action",
+			Options: []SelectorOption{
+				{Label: "補充說明", Value: "補充說明"},
+				{Label: "跳過", Value: "跳過"},
+			},
 		},
 		Pending: p,
 	}

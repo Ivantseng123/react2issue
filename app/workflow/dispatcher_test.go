@@ -81,11 +81,11 @@ func TestDispatcher_UnknownVerb_YieldsDSelectorWithWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if step.Kind != NextStepPostSelector {
-		t.Errorf("expected NextStepPostSelector, got %v", step.Kind)
+	if step.Kind != NextStepSelector {
+		t.Errorf("expected NextStepSelector, got %v", step.Kind)
 	}
-	if !strings.Contains(step.SelectorPrompt, "不認得") {
-		t.Errorf("expected warning text, got %q", step.SelectorPrompt)
+	if !strings.Contains(step.Selector.Prompt, "不認得") {
+		t.Errorf("expected warning text, got %q", step.Selector.Prompt)
 	}
 }
 

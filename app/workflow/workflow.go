@@ -76,13 +76,12 @@ func (p *Pending) IsInvalidated() bool {
 type NextStepKind int
 
 const (
-	NextStepPostSelector NextStepKind = iota
-	NextStepOpenModal
-	NextStepSubmit
-	NextStepError
-	NextStepNoop                 // used when the workflow handled everything in-place (rare)
-	NextStepPostExternalSelector // external searchable selector (no configured repos)
-	NextStepCancel               // user aborted mid-flow; dispatcher clears dedup and stops
+	NextStepSelector  NextStepKind = iota // unified selector (button / static_select / external)
+	NextStepOpenModal                     // open a text-input modal
+	NextStepSubmit                        // submit the completed Pending to the queue
+	NextStepError                         // post an error message
+	NextStepNoop                          // workflow handled everything in-place (rare)
+	NextStepCancel                        // user aborted mid-flow; dispatcher clears dedup and stops
 )
 
 // NextStep is a discriminated union of what the dispatcher should do next.
@@ -90,16 +89,11 @@ const (
 type NextStep struct {
 	Kind NextStepKind
 
-	// PostSelector — Kind == NextStepPostSelector
-	SelectorPrompt  string
-	SelectorActions []SelectorAction
-	SelectorBack    string // optional "back" action ID; empty = no back button
-
-	// PostExternalSelector — Kind == NextStepPostExternalSelector
-	SelectorActionID       string // Slack action_id for the external select
-	SelectorPlaceholder    string // placeholder text shown in the search box
-	SelectorCancelActionID string // optional cancel button action_id; empty = no cancel
-	SelectorCancelLabel    string // cancel button label (e.g. "取消")
+	// Selector — Kind == NextStepSelector. The adapter chooses the Slack
+	// rendering (button row, static_select, external search) based on the
+	// number of options so callers never have to worry about the 25-button
+	// cap on Slack actions blocks.
+	Selector *SelectorSpec
 
 	// OpenModal — Kind == NextStepOpenModal
 	ModalTriggerID string
@@ -119,11 +113,42 @@ type NextStep struct {
 	Pending *Pending
 }
 
-// SelectorAction is one button in a button-selector message.
-type SelectorAction struct {
+// SelectorOption is one choice in a selector.
+type SelectorOption struct {
+	Label string
+	Value string
+}
+
+// SelectorSpec describes what the user should pick from. The adapter decides
+// the concrete Slack rendering:
+//   - Searchable=true                          → external_select (type-ahead)
+//   - Searchable=false, few options            → button row
+//   - Searchable=false, many options           → static_select dropdown
+//
+// ActionID is the Slack action_id shared by every option (the rendered
+// payload delivers the pick via action.Value for buttons or
+// action.SelectedOption.Value for dropdowns — app.go's router already
+// accepts either).
+//
+// BackActionID / CancelActionID describe optional extra buttons (e.g.
+// "← 重新選 repo", "取消") that render alongside the options regardless of
+// the chosen mode.
+type SelectorSpec struct {
+	Prompt   string
 	ActionID string
-	Label    string
-	Value    string
+	Options  []SelectorOption
+
+	// External-search mode. When true, Options may be empty — the user
+	// types a query and app/app.go's BlockSuggestion handler supplies
+	// live results.
+	Searchable  bool
+	Placeholder string
+
+	// Optional back/cancel buttons. Empty ActionID = button not rendered.
+	BackActionID   string
+	BackLabel      string
+	CancelActionID string
+	CancelLabel    string
 }
 
 // Workflow is the polymorphic contract each workflow type implements.

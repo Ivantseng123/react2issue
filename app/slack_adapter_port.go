@@ -5,6 +5,7 @@ import (
 
 	"github.com/Ivantseng123/agentdock/app/bot"
 	slackclient "github.com/Ivantseng123/agentdock/app/slack"
+	"github.com/Ivantseng123/agentdock/app/workflow"
 )
 
 // slackAdapterPort wraps *slackclient.Client to satisfy workflow.SlackPort.
@@ -37,16 +38,30 @@ func (a *slackAdapterPort) UpdateMessageWithButton(channelID, messageTS, text, a
 	return a.client.UpdateMessageWithButton(channelID, messageTS, text, actionID, buttonText, value)
 }
 
-func (a *slackAdapterPort) PostSelector(channelID, prompt, actionPrefix string, labels, values []string, threadTS string) (string, error) {
-	return a.client.PostSelector(channelID, prompt, actionPrefix, labels, values, threadTS)
+func (a *slackAdapterPort) PostSmartSelector(channelID, threadTS string, spec workflow.SelectorSpec) (string, error) {
+	return a.client.PostSmartSelector(channelID, threadTS, toSlackSelectorSpec(spec))
 }
 
-func (a *slackAdapterPort) PostSelectorWithBack(channelID, prompt, actionPrefix string, labels, values []string, threadTS, backActionID, backLabel string) (string, error) {
-	return a.client.PostSelectorWithBack(channelID, prompt, actionPrefix, labels, values, threadTS, backActionID, backLabel)
-}
-
-func (a *slackAdapterPort) PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS, cancelActionID, cancelLabel string) (string, error) {
-	return a.client.PostExternalSelector(channelID, prompt, actionID, placeholder, threadTS, cancelActionID, cancelLabel)
+// toSlackSelectorSpec copies the workflow-layer SelectorSpec into the
+// slack-layer SmartSelectorSpec field-for-field. The two types stay in sync
+// so the workflow package never imports the slack client; this helper is the
+// only translation point.
+func toSlackSelectorSpec(spec workflow.SelectorSpec) slackclient.SmartSelectorSpec {
+	opts := make([]slackclient.SmartSelectorOption, len(spec.Options))
+	for i, o := range spec.Options {
+		opts[i] = slackclient.SmartSelectorOption{Label: o.Label, Value: o.Value}
+	}
+	return slackclient.SmartSelectorSpec{
+		Prompt:         spec.Prompt,
+		ActionID:       spec.ActionID,
+		Options:        opts,
+		Searchable:     spec.Searchable,
+		Placeholder:    spec.Placeholder,
+		BackActionID:   spec.BackActionID,
+		BackLabel:      spec.BackLabel,
+		CancelActionID: spec.CancelActionID,
+		CancelLabel:    spec.CancelLabel,
+	}
 }
 
 func (a *slackAdapterPort) OpenTextInputModal(triggerID, title, label, inputName, metadata string) error {

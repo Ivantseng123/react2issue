@@ -35,7 +35,7 @@ func TestNextStepKinds(t *testing.T) {
 		name string
 		kind NextStepKind
 	}{
-		{"post selector", NextStepPostSelector},
+		{"selector", NextStepSelector},
 		{"open modal", NextStepOpenModal},
 		{"submit", NextStepSubmit},
 		{"error", NextStepError},
