@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.1](https://github.com/Ivantseng123/agentdock/compare/v2.4.0...v2.4.1) (2026-04-23)
+
+
+### Bug Fixes
+
+* PR Review uses head SHA + worker fetch-retries unknown refs ([#135](https://github.com/Ivantseng123/agentdock/issues/135)) ([78e3ce4](https://github.com/Ivantseng123/agentdock/commit/78e3ce4a1cdd93f8245923e2b29a6205be0b77f1))
+* **queue:** log XReadGroup failures + exponential backoff ([#133](https://github.com/Ivantseng123/agentdock/issues/133)) ([226d476](https://github.com/Ivantseng123/agentdock/commit/226d476ea0e9745496ab46697712c4e3cce42241))
+
 ## [2.4.0](https://github.com/Ivantseng123/agentdock/compare/v2.3.1...v2.4.0) (2026-04-23)
 
 
