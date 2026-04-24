@@ -37,6 +37,7 @@ agents:
     args: ["run", "--pure", "{prompt}"]  # --pure skips external plugins (e.g. oh-my-openagent) that spawn async background agents
     timeout: 15m
     skill_dir: .opencode/skills
+    extra_args: ["-m", "opencode/claude-opus-4-7"]  # optional: pin a model without copying the full args
 
 providers: [claude, codex, opencode]  # ordered fallback chain; single-agent mode: providers: [claude]
 
@@ -72,6 +73,42 @@ secret_key: same-hex-as-app           # REQUIRED: copy from app.yaml
 secrets:
   GH_TOKEN: ghp_worker_override       # optional: overrides the app-provided value
 ```
+
+## extra_args — injecting extra flags
+
+`extra_args` lets you add flags to a built-in agent **without copying the entire `args` list**. Every built-in agent's `args` contains an `{extra_args}` token; at runtime the worker splices your `extra_args` slice in at that position.
+
+### Examples
+
+```yaml
+agents:
+  opencode:
+    extra_args: ["-m", "opencode/claude-opus-4-7"]    # pin a model
+
+  claude:
+    extra_args: ["--dangerously-skip-permissions"]     # skip permission prompts (sandboxed env)
+
+  codex:
+    extra_args: ["--sandbox", "off"]                  # disable sandbox
+```
+
+### Injection positions
+
+| Agent      | `{extra_args}` position                          | Reason                                          |
+|------------|--------------------------------------------------|-------------------------------------------------|
+| `claude`   | after `stream-json`, before `-p`                 | claude CLI requires all option flags before `-p` |
+| `codex`    | after fixed flags, before `{prompt}`             | `codex exec` accepts options before the positional |
+| `opencode` | after `--pure`, before `{prompt}`                | `-m`, `--variant` etc. all go before the positional |
+
+### Precedence
+
+If you write both a full `args` override **and** `extra_args`, but the `args` override does not contain an `{extra_args}` token, `extra_args` is silently ignored and a startup warn is logged:
+
+```
+agent has both args override and extra_args; extra_args ignored
+```
+
+Recommendation: **only write `extra_args` — do not copy the full args list.** That way you automatically get upstream args refreshes when built-ins change.
 
 ## Worker Nicknames (optional)
 
