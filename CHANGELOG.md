@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.1](https://github.com/Ivantseng123/agentdock/compare/v2.5.0...v2.5.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* **workflow:** walk marker segments so opencode fence pattern parses ([#165](https://github.com/Ivantseng123/agentdock/issues/165)) ([a5ca976](https://github.com/Ivantseng123/agentdock/commit/a5ca97627f1806db82a91c4d34e3f948bdeb2132))
+
 ## [2.5.0](https://github.com/Ivantseng123/agentdock/compare/v2.4.3...v2.5.0) (2026-04-23)
 
 
