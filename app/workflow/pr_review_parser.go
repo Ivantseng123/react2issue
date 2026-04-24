@@ -23,20 +23,24 @@ type ReviewResult struct {
 
 func ParseReviewOutput(output string) (ReviewResult, error) {
 	output = strings.TrimSpace(output)
-	idx := strings.LastIndex(output, reviewMarker)
-	if idx == -1 {
+	segments := segmentAfterMarker(output, reviewMarker)
+	if len(segments) == 0 {
 		return ReviewResult{}, fmt.Errorf("%s marker not found", reviewMarker)
 	}
-	body := strings.TrimSpace(output[idx+len(reviewMarker):])
-	jsonStr := extractJSON(body)
-	var r ReviewResult
-	if err := json.Unmarshal([]byte(jsonStr), &r); err != nil {
-		return ReviewResult{}, fmt.Errorf("unmarshal: %w", err)
+	var lastErr error
+	for _, seg := range segments {
+		jsonStr := extractJSON(seg)
+		var r ReviewResult
+		if err := json.Unmarshal([]byte(jsonStr), &r); err != nil {
+			lastErr = fmt.Errorf("unmarshal: %w", err)
+			continue
+		}
+		switch r.Status {
+		case "POSTED", "SKIPPED", "ERROR":
+			return r, nil
+		default:
+			lastErr = fmt.Errorf("unknown review status %q", r.Status)
+		}
 	}
-	switch r.Status {
-	case "POSTED", "SKIPPED", "ERROR":
-		return r, nil
-	default:
-		return ReviewResult{}, fmt.Errorf("unknown review status %q", r.Status)
-	}
+	return ReviewResult{}, lastErr
 }

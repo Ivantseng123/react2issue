@@ -47,3 +47,21 @@ func TestParseReviewOutput_UnknownStatus(t *testing.T) {
 		t.Error("unknown status must error")
 	}
 }
+
+// TestParseReviewOutput_FenceMarkers guards the opencode fence pattern:
+// opencode wraps the JSON payload between an opening and closing marker,
+// which made LastIndex-only parsing see an empty body after the final
+// marker and fail with "unexpected end of JSON input". Payload is copied
+// from the 2026-04-24 prod failure on softleader/jasmine-policy#2925.
+func TestParseReviewOutput_FenceMarkers(t *testing.T) {
+	out := "===REVIEW_RESULT===\n" +
+		`{"status": "POSTED", "summary": "new field ok; unrelated version rollback detected", "comments_posted": 1, "comments_skipped": 3, "severity_summary": "major"}` +
+		"\n===REVIEW_RESULT==="
+	r, err := ParseReviewOutput(out)
+	if err != nil {
+		t.Fatalf("fence pattern must parse: %v", err)
+	}
+	if r.Status != "POSTED" || r.CommentsPosted != 1 || r.CommentsSkipped != 3 || r.Severity != "major" {
+		t.Errorf("got %+v", r)
+	}
+}
