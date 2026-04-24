@@ -16,6 +16,10 @@ import (
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
+// extraArgsToken is the placeholder that substitutePlaceholders splices out
+// and replaces with AgentConfig.ExtraArgs elements.
+const extraArgsToken = "{extra_args}"
+
 // RunOptions provides per-call callbacks for agent execution.
 type RunOptions struct {
 	OnStarted func(pid int, command string)
@@ -82,7 +86,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	if len(agent.Args) > 0 && len(agent.ExtraArgs) > 0 {
 		hasExtraArgsToken := false
 		for _, a := range agent.Args {
-			if a == "{extra_args}" {
+			if a == extraArgsToken {
 				hasExtraArgsToken = true
 				break
 			}
@@ -128,7 +132,7 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 			if strings.Contains(a, "{prompt}") {
 				continue
 			}
-			if a == "{extra_args}" {
+			if a == extraArgsToken {
 				args = append(args, agent.ExtraArgs...)
 				continue
 			}
@@ -253,7 +257,7 @@ func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queu
 
 // substitutePlaceholders expands placeholders in args.
 //
-// The "{extra_args}" token is treated as a splice point: if extraArgs is
+// The extraArgsToken slot is treated as a splice point: if extraArgs is
 // non-empty the token slot is replaced with each element as a separate arg; if
 // extraArgs is nil or empty the slot is dropped entirely (no empty-string arg
 // is emitted). All other {key} tokens in values are replaced via
@@ -261,7 +265,7 @@ func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queu
 func substitutePlaceholders(args []string, extraArgs []string, values map[string]string) []string {
 	result := make([]string, 0, len(args)+len(extraArgs))
 	for _, a := range args {
-		if a == "{extra_args}" {
+		if a == extraArgsToken {
 			result = append(result, extraArgs...)
 			continue
 		}
