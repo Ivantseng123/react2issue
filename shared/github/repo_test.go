@@ -525,16 +525,10 @@ func TestRepoCache_EnsureRepo_HealsLegacyTokenInConfig(t *testing.T) {
 	cacheDir := t.TempDir()
 	cache := NewRepoCache(cacheDir, 0, "", slog.Default())
 
-	// First EnsureRepo creates the bare clone with a clean URL.
-	barePath, err := cache.EnsureRepo("owner/repo", "")
-	// Network-less test: the clone will fail (owner/repo doesn't resolve) —
-	// skip this scenario by using file:// instead and simulating the pollution.
-	_ = err
-	_ = barePath
-
 	// Simulate a pre-fix clone: create a bare repo from file://, then manually
-	// rewrite its remote URL to embed a fake token.
-	barePath, err = cache.EnsureRepo("file://"+sourceDir, "")
+	// rewrite its remote URL to embed a fake token (as a pre-#179 binary would
+	// have done when it embedded the PAT directly in .git/config).
+	barePath, err := cache.EnsureRepo("file://"+sourceDir, "")
 	if err != nil {
 		t.Fatalf("EnsureRepo: %v", err)
 	}
