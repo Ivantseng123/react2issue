@@ -81,6 +81,26 @@ func TestIsBotAnswerMessage_MinLengthEdge(t *testing.T) {
 	}
 }
 
+// TestIsBotAnswerMessage_ShortButSubstantive guards the post-#151 threshold
+// drop. Production traces showed Niuma regularly emits useful 20–40-rune
+// answers (e.g. a sentence like "要設 GH_TOKEN 和 SLACK_TOKEN 才會動。") that
+// the pre-fix threshold (50) was silently filtering out. The opt-in button
+// never surfaced as a result. This test fails if someone re-raises the
+// threshold without also re-checking the Niuma case.
+func TestIsBotAnswerMessage_ShortButSubstantive(t *testing.T) {
+	cases := []string{
+		"要設 GH_TOKEN 和 SLACK_TOKEN 才會動。", // 22 runes
+		"看 app/workflow/ask.go:47",       // 24 runes
+		"這個行為目前是由 config 控制的",              // 14 runes
+	}
+	for _, text := range cases {
+		if !isBotAnswerMessage(text) {
+			t.Errorf("expected substantive short answer %q (%d runes) to qualify; threshold too strict?",
+				text, runeLen(text))
+		}
+	}
+}
+
 func TestFilterPriorBotAnswers_ReturnsOnlySelfBotPosts(t *testing.T) {
 	long := strings.Repeat("a", botAnswerMinChars+10)
 	messages := []slack.Message{

@@ -151,6 +151,7 @@ func executeJob(ctx context.Context, job *queue.Job, deps executionDeps, opts ag
 		return classifyResult(job, startedAt, err, repoPath, ctx, deps.store)
 	}
 	logger.Info("Agent 執行完成", "phase", "完成", "output_len", len(output))
+	logger.Debug("Agent output 內容", "phase", "完成", "output", output)
 
 	// Ship the raw agent output to the app. Parsing and REJECTED/ERROR/parse-failed
 	// classification live in the app-side result listener — worker has no
