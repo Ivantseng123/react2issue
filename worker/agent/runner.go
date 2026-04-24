@@ -128,12 +128,18 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	cmd.WaitDelay = 10 * time.Second
 
 	// Inject secrets as environment variables.
+	// Filter by the agent's RequiredSecrets whitelist before injection.
+	// Nil RequiredSecrets (absent from yaml) falls back to ["GH_TOKEN"] for
+	// back-compat; an explicit empty list means zero secrets forwarded.
+	secrets := filterSecrets(opts.Secrets, agent.RequiredSecrets)
 	env := os.Environ()
-	if len(opts.Secrets) > 0 {
-		for k, v := range opts.Secrets {
+	if len(secrets) > 0 {
+		for k, v := range secrets {
 			env = append(env, fmt.Sprintf("%s=%s", k, v))
 		}
-	} else if r.githubToken != "" {
+	} else if r.githubToken != "" && agent.RequiredSecrets == nil {
+		// Legacy fallback: no secrets map at all and RequiredSecrets not
+		// declared — inject GH_TOKEN from the runner's static field.
 		env = append(env, fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
 	}
 	cmd.Env = env
@@ -238,4 +244,29 @@ func substitutePlaceholders(args []string, values map[string]string) []string {
 		result = append(result, a)
 	}
 	return result
+}
+
+// filterSecrets returns the subset of all that matches the keys in whitelist.
+//
+// Semantics:
+//   - whitelist == nil  → default to ["GH_TOKEN"] for back-compat (custom
+//     agents in worker.yaml that predate this field keep their prior behavior)
+//   - whitelist == []   → return empty map (zero-trust provider)
+//   - otherwise         → return only keys in whitelist that exist in all
+func filterSecrets(all map[string]string, whitelist []string) map[string]string {
+	if whitelist == nil {
+		// Back-compat default: treat as if the user wrote required_secrets: [GH_TOKEN].
+		whitelist = []string{"GH_TOKEN"}
+	}
+	// Explicit empty list → zero secrets.
+	if len(whitelist) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(whitelist))
+	for _, k := range whitelist {
+		if v, ok := all[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }

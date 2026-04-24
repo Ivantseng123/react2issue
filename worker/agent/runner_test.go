@@ -115,8 +115,14 @@ env | grep TOKEN | sort
 echo "padding padding padding padding padding padding padding"
 `), 0755)
 
+	// RequiredSecrets explicitly lists both keys so both are forwarded.
 	runner := NewRunner([]config.AgentConfig{
-		{Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second},
+		{
+			Command:         script,
+			Args:            []string{"{prompt}"},
+			Timeout:         5 * time.Second,
+			RequiredSecrets: []string{"GH_TOKEN", "K8S_TOKEN"},
+		},
 	})
 
 	secrets := map[string]string{
@@ -132,6 +138,118 @@ echo "padding padding padding padding padding padding padding"
 	}
 	if !strings.Contains(output, "K8S_TOKEN=k8s_val") {
 		t.Errorf("K8S_TOKEN not injected: %q", output)
+	}
+}
+
+// TestRunner_SecretWhitelist_FiltersToRequired verifies that when RequiredSecrets
+// names only one key, the child env receives only that key, not the others.
+func TestRunner_SecretWhitelist_FiltersToRequired(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "env-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+env | grep -E 'GH_TOKEN|K8S_TOKEN|JIRA_TOKEN' | sort
+echo "padding padding padding padding padding padding padding"
+`), 0755)
+
+	// Provider only needs GH_TOKEN.
+	runner := NewRunner([]config.AgentConfig{
+		{
+			Command:         script,
+			Args:            []string{"{prompt}"},
+			Timeout:         5 * time.Second,
+			RequiredSecrets: []string{"GH_TOKEN"},
+		},
+	})
+
+	secrets := map[string]string{
+		"GH_TOKEN":   "ghp_only",
+		"K8S_TOKEN":  "k8s_secret",
+		"JIRA_TOKEN": "jira_secret",
+	}
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{Secrets: secrets})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !strings.Contains(output, "GH_TOKEN=ghp_only") {
+		t.Errorf("GH_TOKEN should be injected: %q", output)
+	}
+	if strings.Contains(output, "K8S_TOKEN") {
+		t.Errorf("K8S_TOKEN must not be injected (not in whitelist): %q", output)
+	}
+	if strings.Contains(output, "JIRA_TOKEN") {
+		t.Errorf("JIRA_TOKEN must not be injected (not in whitelist): %q", output)
+	}
+}
+
+// TestRunner_SecretWhitelist_EmptyListMeansZeroSecrets verifies zero-trust
+// provider: required_secrets: [] forwards no secrets at all.
+func TestRunner_SecretWhitelist_EmptyListMeansZeroSecrets(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "env-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+env | grep -E 'GH_TOKEN|K8S_TOKEN' | sort
+echo "padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{
+		{
+			Command:         script,
+			Args:            []string{"{prompt}"},
+			Timeout:         5 * time.Second,
+			RequiredSecrets: []string{}, // explicit empty → zero secrets
+		},
+	})
+
+	secrets := map[string]string{
+		"GH_TOKEN":  "ghp_should_not_appear",
+		"K8S_TOKEN": "k8s_should_not_appear",
+	}
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{Secrets: secrets})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if strings.Contains(output, "GH_TOKEN") {
+		t.Errorf("GH_TOKEN must not be injected for zero-trust provider: %q", output)
+	}
+	if strings.Contains(output, "K8S_TOKEN") {
+		t.Errorf("K8S_TOKEN must not be injected for zero-trust provider: %q", output)
+	}
+}
+
+// TestRunner_SecretWhitelist_NilFallsBackToGHToken verifies that a provider
+// with RequiredSecrets == nil (not declared in yaml) defaults to GH_TOKEN only
+// for back-compat, and does NOT forward other secrets.
+func TestRunner_SecretWhitelist_NilFallsBackToGHToken(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "env-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+env | grep -E 'GH_TOKEN|K8S_TOKEN' | sort
+echo "padding padding padding padding padding padding padding"
+`), 0755)
+
+	// RequiredSecrets is nil (not set).
+	runner := NewRunner([]config.AgentConfig{
+		{
+			Command: script,
+			Args:    []string{"{prompt}"},
+			Timeout: 5 * time.Second,
+			// RequiredSecrets intentionally absent (nil)
+		},
+	})
+
+	secrets := map[string]string{
+		"GH_TOKEN":  "ghp_backcompat",
+		"K8S_TOKEN": "k8s_should_not_appear",
+	}
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{Secrets: secrets})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !strings.Contains(output, "GH_TOKEN=ghp_backcompat") {
+		t.Errorf("GH_TOKEN should be injected for nil whitelist (back-compat): %q", output)
+	}
+	if strings.Contains(output, "K8S_TOKEN") {
+		t.Errorf("K8S_TOKEN must not be injected when whitelist is nil (default=GH_TOKEN only): %q", output)
 	}
 }
 
@@ -240,6 +358,56 @@ func TestNewRunnerFromConfig_SingleProvider(t *testing.T) {
 	}
 	if !strings.Contains(output, "single provider") {
 		t.Errorf("unexpected output: %q", output)
+	}
+}
+
+// ── filterSecrets unit tests ─────────────────────────────────────────────────
+
+func TestFilterSecrets_NilWhitelistDefaultsToGHToken(t *testing.T) {
+	all := map[string]string{"GH_TOKEN": "ghp_x", "K8S": "k8s_x"}
+	got := filterSecrets(all, nil)
+	if got["GH_TOKEN"] != "ghp_x" {
+		t.Errorf("GH_TOKEN = %q, want %q", got["GH_TOKEN"], "ghp_x")
+	}
+	if _, ok := got["K8S"]; ok {
+		t.Error("K8S must not appear when whitelist is nil (defaults to GH_TOKEN only)")
+	}
+}
+
+func TestFilterSecrets_EmptyWhitelistReturnsEmpty(t *testing.T) {
+	all := map[string]string{"GH_TOKEN": "ghp_x", "K8S": "k8s_x"}
+	got := filterSecrets(all, []string{})
+	if len(got) != 0 {
+		t.Errorf("expected empty map, got %v", got)
+	}
+}
+
+func TestFilterSecrets_ExplicitWhitelistFilters(t *testing.T) {
+	all := map[string]string{
+		"GH_TOKEN":   "ghp_x",
+		"K8S_TOKEN":  "k8s_x",
+		"JIRA_TOKEN": "jira_x",
+	}
+	got := filterSecrets(all, []string{"GH_TOKEN", "JIRA_TOKEN"})
+	if got["GH_TOKEN"] != "ghp_x" {
+		t.Errorf("GH_TOKEN = %q", got["GH_TOKEN"])
+	}
+	if got["JIRA_TOKEN"] != "jira_x" {
+		t.Errorf("JIRA_TOKEN = %q", got["JIRA_TOKEN"])
+	}
+	if _, ok := got["K8S_TOKEN"]; ok {
+		t.Error("K8S_TOKEN must not appear — not in whitelist")
+	}
+}
+
+func TestFilterSecrets_MissingKeyInAllIsSkipped(t *testing.T) {
+	all := map[string]string{"GH_TOKEN": "ghp_x"}
+	got := filterSecrets(all, []string{"GH_TOKEN", "ABSENT_KEY"})
+	if got["GH_TOKEN"] != "ghp_x" {
+		t.Errorf("GH_TOKEN = %q", got["GH_TOKEN"])
+	}
+	if _, ok := got["ABSENT_KEY"]; ok {
+		t.Error("ABSENT_KEY must not appear when it's missing from all")
 	}
 }
 
