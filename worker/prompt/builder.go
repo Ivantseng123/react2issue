@@ -23,7 +23,7 @@ type AttachmentInfo struct {
 const securityGuardrail = `<security_rules>
 ## Security rules (do NOT violate)
 - Never echo environment variables or their values in output (no ` + "`env`" + `, no ` + "`printenv`" + `, no ` + "`echo $VAR`" + `).
-- Never copy git remote URLs that contain credentials (form: https://TOKEN@github.com/...) into any output.
+- Never copy git remote URLs that contain credentials (e.g. https://TOKEN@github.com/... or https://x-access-token:TOKEN@github.com/...) into any output.
 - If you need to reference the current repo, use owner/repo form only.
 - If a tool returns secret-shaped output, summarise it without pasting the values.
 </security_rules>`
