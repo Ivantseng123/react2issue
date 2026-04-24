@@ -20,24 +20,19 @@ logging:
 github:
   token: ghp-...                      # REQUIRED: used by agent clone / push
 
-agents:
-  claude:
-    command: claude
-    args: ["--print", "--output-format", "stream-json", "-p", "{prompt}"]
-    timeout: 15m
-    skill_dir: .claude/skills
-    stream: true                      # enable real-time event tracking
-  codex:
-    command: codex
-    args: ["exec", "--skip-git-repo-check", "--color", "never", "{prompt}"]
-    timeout: 15m
-    skill_dir: .agents/skills         # Codex discovers skills in .agents/skills, not .codex/skills
-  opencode:
-    command: opencode
-    args: ["run", "--pure", "{prompt}"]  # --pure skips external plugins (e.g. oh-my-openagent) that spawn async background agents
-    timeout: 15m
-    skill_dir: .opencode/skills
-    extra_args: ["-m", "opencode/claude-opus-4-7"]  # optional: pin a model without copying the full args
+# agents: block is optional. When omitted, the worker fills claude / codex /
+# opencode from BuiltinAgents at startup — always using the current binary's
+# defaults. Add entries here only to override specific fields.
+# To pick up updated built-in defaults after a binary upgrade, delete (or omit)
+# your agents: block and restart.
+#
+# agents:
+#   opencode:
+#     timeout: 30m    # example: extend timeout for one agent only
+#     extra_args: ["-m", "opencode/claude-opus-4-7"]
+#     # example: inject flags (e.g. model) via extra_args; the {extra_args}
+#     # token inside the builtin args is expanded with these tokens, so you
+#     # don't have to copy the full args array just to add one flag.
 
 providers: [claude, codex, opencode]  # ordered fallback chain; single-agent mode: providers: [claude]
 
@@ -127,6 +122,28 @@ Slack status messages use a playful template regardless of whether a nickname is
 - Stats: `Alice 已經敲了 15 次工具、翻了 8 份檔`
 
 (Text is Chinese because this is a zh-first product; the template applies to every worker uniformly.)
+
+## Agent overrides (optional)
+
+Omitting the `agents:` block is recommended — `mergeBuiltinAgents` fills the built-in defaults at startup. Add entries only when you need to override a specific field:
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string | Executable name or path |
+| `args` | []string | CLI arguments; `{prompt}` is substituted with the job prompt |
+| `timeout` | duration | Per-job wall-clock limit (e.g. `30m`) |
+| `skill_dir` | string | Repo-relative directory where skill files are written |
+| `stream` | bool | Enable real-time JSON event parsing (claude only) |
+
+You only need to specify the fields you want to override; unset fields inherit from `BuiltinAgents`. Example:
+
+```yaml
+agents:
+  opencode:
+    timeout: 30m    # extend timeout; command/args/skill_dir stay at built-in values
+  claude:
+    skill_dir: .claude/custom-skills
+```
 
 ## Agent streaming
 

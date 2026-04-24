@@ -30,7 +30,7 @@ Interactive mode prompts for Slack bot + app tokens, GitHub token, Redis address
 agentdock init worker -c ~/.config/agentdock/worker.yaml -i
 ```
 
-Interactive mode prompts for GitHub token, Redis address, secret_key (must match the app's), and providers. Built-in agents (claude / codex / opencode) are pre-populated under `agents:`.
+Interactive mode prompts for GitHub token, Redis address, secret_key (must match the app's), and providers. Built-in agents (claude / codex / opencode) are filled at startup by `mergeBuiltinAgents` — they are no longer frozen into the `agents:` block (see the v2.6 → v2.7 section below).
 
 ## Field mapping
 
@@ -176,3 +176,50 @@ Three verbs (`issue` / `ask` / `review`) each with their own prompt. All changes
 3. **Slack `/triage` slash command is now a fallback**: real triggers are `@bot <verb>` (`issue` / `ask` / `review`). The old `/triage` command is still registered — when invoked, the bot replies with a hint to switch to `@bot`. No manifest change is required for this to keep working, but updating the slash-command `description` to mark it legacy is recommended.
 
 Full field reference: [configuration-app.en.md](configuration-app.en.md#workflow-specific-prompts) and [configuration-app.en.md](configuration-app.en.md#enabling-pr-review).
+
+### v2.5 → v2.6: `queue.store` field added (**defaults to `redis` — upgrade changes behaviour**)
+
+v2.6 wires `RedisJobStore` (#145 / PR #147) into the app (#146) and defaults `queue.store` to `redis` so production deployments get the #123 fix (in-flight jobs resuming after app restart) without having to opt in.
+
+**⚠️ Upgrade impact (when existing yaml doesn't set `queue.store`)**
+
+- **Behaviour change**: app restart switches from "all in-flight state lost (`:hourglass:` stuck forever)" to "state rehydrated from Redis, Slack threads complete correctly". For production, this means the bug is fixed.
+- **Extra Redis load**: ~0.6 × N QPS per active worker (from ResultListener / StatusListener `store.Get` + occasional `UpdateStatus` per StatusReport cycle). Size Redis accordingly; negligible for typical deployments.
+- **TTL defaults to 1h**: refreshed on every write. If a job runs longer than the TTL, records risk eviction mid-run — set `queue.store_ttl` comfortably larger than your longest expected job runtime.
+
+**To keep v2.5's in-process behaviour** (local dev / single-pod tests that don't want Redis persistence), set `mem` explicitly in `app.yaml`:
+
+```yaml
+queue:
+  # ... other fields unchanged ...
+  store: mem            # explicit opt-out, reverts to v2.5 behaviour: in-flight state is lost on restart
+```
+
+App-only change; `worker.yaml` stays as is (workers don't read JobStore — they only publish JobResult / StatusReport).
+
+**Startup behaviour**: on the `redis` path the app calls `ListAll()` once and logs `rehydrated in-flight jobs from previous instance` with the count of non-terminal records. Terminal-state records are left to TTL — the app never deletes them proactively.
+
+Background: [#123](https://github.com/Ivantseng123/agentdock/issues/123) — on app restart, in-flight Slack threads were orphaned (the `:hourglass:` status never cleared) because even when the worker published the final result, the app's fresh MemJobStore had no record to correlate against.
+
+### v2.6 → v2.7: `init worker` no longer freezes a BuiltinAgents snapshot
+
+**Behavior change**: `agentdock init worker` no longer writes an `agents:` block into the generated `worker.yaml`. Instead, `mergeBuiltinAgents` fills all built-in entries (claude / codex / opencode) from the current binary at every startup.
+
+**Existing users with an `agents:` block (non-breaking)**: your yaml keeps working unchanged. `mergeBuiltinAgents` only fills missing entries — it never overwrites entries that already exist. If your yaml contains a stale opencode entry (e.g. missing `--pure`), the worker will continue using that stale config after upgrade.
+
+**To pick up refreshed built-in defaults**:
+
+```bash
+# Delete the agents: block (or the specific agent entry you want refreshed)
+# and restart the worker. No other steps required.
+```
+
+Concrete example: PR #108 added `--pure` to opencode's args. Operators who ran `init` before that PR and who still have `agents.opencode` in their yaml will not get `--pure` automatically — they need to delete that entry (or the whole `agents:` block) to have `mergeBuiltinAgents` fill in the latest value.
+
+**Overriding specific fields**: write only the fields you want to change; unspecified fields are filled from BuiltinAgents:
+
+```yaml
+agents:
+  opencode:
+    timeout: 30m  # override timeout only; command/args/skill_dir come from built-ins
+```
