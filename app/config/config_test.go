@@ -137,6 +137,35 @@ func TestPromptConfig_DefaultsPopulated(t *testing.T) {
 	}
 }
 
+// TestPromptConfig_CwdOnlyRuleInAllWorkflows pins the sandbox guard to all
+// three workflows. Removing it from any workflow re-opens the silent-failure
+// class where the LLM redirects bash output to /tmp/* in a worktree-cwd job
+// and headless `opencode run` cascade-collapses the session. See defaults.go
+// cwdOnlySandboxRule and worker/agent/runner.go for the post-mortem context.
+func TestPromptConfig_CwdOnlyRuleInAllWorkflows(t *testing.T) {
+	cfg := &Config{}
+	ApplyDefaults(cfg)
+
+	cases := map[string][]string{
+		"Issue":    cfg.Prompt.Issue.OutputRules,
+		"Ask":      cfg.Prompt.Ask.OutputRules,
+		"PRReview": cfg.Prompt.PRReview.OutputRules,
+	}
+	for name, rules := range cases {
+		var found bool
+		for _, r := range rules {
+			if strings.Contains(r, "outside cwd") && strings.Contains(r, "/tmp/") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s.OutputRules missing cwdOnlySandboxRule (got %d rules, none mention 'outside cwd' + '/tmp/')",
+				name, len(rules))
+		}
+	}
+}
+
 func TestPromptConfig_ResponseSchemaDefaults(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)
