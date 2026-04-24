@@ -106,7 +106,7 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis                    # 擴充點；目前僅支援 redis
-  store: mem                          # JobStore backend：mem（預設）/ redis
+  store: redis                        # JobStore backend：redis（預設）/ mem
   store_ttl: 1h                       # store=redis 時每筆紀錄的 TTL（store=mem 忽略）
   job_timeout: 20m                    # watchdog：job 生命週期上限
   agent_idle_timeout: 5m              # stream-json 無事件多久視為卡住
@@ -139,8 +139,8 @@ App 用 `JobStore` 追蹤每個 Job 的 lifecycle（Pending → Running → Comp
 
 | 值 | 說明 | 建議場景 |
 |---|---|---|
-| `mem`（預設） | 在 app process 記憶體。app 重啟就全掉。 | Unit test、單 pod 小型部署 |
-| `redis` | 持久化到 Redis（`jobstore:*` key）。app 重啟仍可 resume in-flight job。 | 生產環境 |
+| `redis`（預設） | 持久化到 Redis（`jobstore:*` key）。app 重啟仍可 resume in-flight job。 | 生產環境、多數部署 |
+| `mem` | 在 app process 記憶體。app 重啟就全掉。 | Unit test、單 pod local dev（無 Redis 持久化需求時） |
 
 `queue.store_ttl`（預設 `1h`）是 `redis` 模式每筆紀錄的 TTL，每次 Put / UpdateStatus / SetWorker / SetAgentStatus 會 refresh。Terminal-state 的 job 不主動刪除，讓 TTL 自己 evict。TTL 要設得比**最長預期 job 執行時間**明顯還大，否則長時間 job 可能在執行中被 TTL 砍掉 state。`mem` 模式忽略這個欄位（MemJobStore 自己跑 1h cleanup）。
 

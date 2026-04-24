@@ -61,13 +61,26 @@ func TestApplyDefaults_Timeouts(t *testing.T) {
 }
 
 func TestApplyDefaults_QueueStore(t *testing.T) {
-	// Empty yaml → default "mem" + 1h TTL (back-compat, #146).
+	// Empty yaml → default "redis" + 1h TTL. Redis-backed persistence is the
+	// default so production deployments don't need to opt into the #123 fix;
+	// local dev / single-pod tests set queue.store: mem explicitly.
 	cfg := loadFromString(t, ``)
-	if cfg.Queue.Store != "mem" {
-		t.Errorf("default queue.store = %q, want mem", cfg.Queue.Store)
+	if cfg.Queue.Store != "redis" {
+		t.Errorf("default queue.store = %q, want redis", cfg.Queue.Store)
 	}
 	if cfg.Queue.StoreTTL != time.Hour {
 		t.Errorf("default queue.store_ttl = %v, want 1h", cfg.Queue.StoreTTL)
+	}
+}
+
+func TestLoadConfig_QueueStoreMem(t *testing.T) {
+	// Opt-out path for local dev: explicit mem overrides the redis default.
+	cfg := loadFromString(t, `
+queue:
+  store: mem
+`)
+	if cfg.Queue.Store != "mem" {
+		t.Errorf("queue.store = %q, want mem", cfg.Queue.Store)
 	}
 }
 

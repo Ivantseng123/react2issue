@@ -177,21 +177,26 @@ Three verbs (`issue` / `ask` / `review`) each with their own prompt. All changes
 
 Full field reference: [configuration-app.en.md](configuration-app.en.md#workflow-specific-prompts) and [configuration-app.en.md](configuration-app.en.md#enabling-pr-review).
 
-### v2.5 → v2.6: `queue.store` field added (additive, defaults to `mem` for back-compat)
+### v2.5 → v2.6: `queue.store` field added (**defaults to `redis` — upgrade changes behaviour**)
 
-v2.6 wires `RedisJobStore` (#145 / PR #147) into the app (#146). Existing yaml keeps working unchanged — `queue.store` defaults to `mem`, preserving the pre-v2.6 behaviour (in-flight job state is lost on app restart).
+v2.6 wires `RedisJobStore` (#145 / PR #147) into the app (#146) and defaults `queue.store` to `redis` so production deployments get the #123 fix (in-flight jobs resuming after app restart) without having to opt in.
 
-To enable redis-backed persistence (recommended for production), add two lines to `app.yaml`:
+**⚠️ Upgrade impact (when existing yaml doesn't set `queue.store`)**
+
+- **Behaviour change**: app restart switches from "all in-flight state lost (`:hourglass:` stuck forever)" to "state rehydrated from Redis, Slack threads complete correctly". For production, this means the bug is fixed.
+- **Extra Redis load**: ~0.6 × N QPS per active worker (from ResultListener / StatusListener `store.Get` + occasional `UpdateStatus` per StatusReport cycle). Size Redis accordingly; negligible for typical deployments.
+- **TTL defaults to 1h**: refreshed on every write. If a job runs longer than the TTL, records risk eviction mid-run — set `queue.store_ttl` comfortably larger than your longest expected job runtime.
+
+**To keep v2.5's in-process behaviour** (local dev / single-pod tests that don't want Redis persistence), set `mem` explicitly in `app.yaml`:
 
 ```yaml
 queue:
   # ... other fields unchanged ...
-  store: redis          # default is mem; with redis the app resumes in-flight jobs across restarts
-  store_ttl: 1h         # per-record TTL, refreshed on every write; keep larger than your longest job runtime
+  store: mem            # explicit opt-out, reverts to v2.5 behaviour: in-flight state is lost on restart
 ```
 
-`queue.store: redis` does not affect `queue.transport` or anything on the worker side — only the app changes. Workers do not read JobStore (they only publish JobResult / StatusReport), so `worker.yaml` stays as is.
+App-only change; `worker.yaml` stays as is (workers don't read JobStore — they only publish JobResult / StatusReport).
 
-Restart behaviour: on startup with `store=redis`, the app calls `ListAll()` once and logs `rehydrated in-flight jobs from previous instance` with the count of non-terminal records. Terminal-state records are left to TTL — the app never deletes them proactively.
+**Startup behaviour**: on the `redis` path the app calls `ListAll()` once and logs `rehydrated in-flight jobs from previous instance` with the count of non-terminal records. Terminal-state records are left to TTL — the app never deletes them proactively.
 
-Background: [#123](https://github.com/Ivantseng123/agentdock/issues/123) — on app restart, in-flight Slack threads were orphaned (the :hourglass: status never cleared) because even when the worker published the final result, the app's fresh MemJobStore had no record to correlate against.
+Background: [#123](https://github.com/Ivantseng123/agentdock/issues/123) — on app restart, in-flight Slack threads were orphaned (the `:hourglass:` status never cleared) because even when the worker published the final result, the app's fresh MemJobStore had no record to correlate against.

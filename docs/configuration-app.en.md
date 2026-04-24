@@ -106,7 +106,7 @@ repo_cache:
 queue:
   capacity: 50
   transport: redis                    # extension point; only redis is supported today
-  store: mem                          # JobStore backend: mem (default) / redis
+  store: redis                        # JobStore backend: redis (default) / mem
   store_ttl: 1h                       # per-record TTL when store=redis (ignored when store=mem)
   job_timeout: 20m                    # watchdog: max job lifecycle
   agent_idle_timeout: 5m              # stream-json: no-event timeout
@@ -139,8 +139,8 @@ The app tracks each Job's lifecycle (Pending → Running → Completed/Failed/Ca
 
 | Value | Behaviour | Recommended for |
 |---|---|---|
-| `mem` (default) | In-process memory. All state is lost when the app restarts. | Unit tests, single-pod small deployments |
-| `redis` | Persisted to Redis (`jobstore:*` keys). In-flight jobs survive app restarts. | Production |
+| `redis` (default) | Persisted to Redis (`jobstore:*` keys). In-flight jobs survive app restarts. | Production, most deployments |
+| `mem` | In-process memory. All state is lost when the app restarts. | Unit tests, single-pod local dev (when Redis persistence isn't needed) |
 
 `queue.store_ttl` (default `1h`) is the per-record TTL applied by `RedisJobStore` on every Put / UpdateStatus / SetWorker / SetAgentStatus. Terminal-state jobs are not deleted proactively — TTL evicts them. Set the TTL comfortably larger than your **longest expected job runtime**; otherwise a slow job risks having its state evicted mid-run. Ignored when `store=mem` (MemJobStore runs its own 1h cleanup).
 
