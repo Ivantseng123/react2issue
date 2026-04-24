@@ -139,6 +139,9 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	} else if r.githubToken != "" && agent.RequiredSecrets == nil {
 		// Legacy fallback: no secrets map at all and RequiredSecrets not
 		// declared — inject GH_TOKEN from the runner's static field.
+		// Coupling: the `RequiredSecrets == nil` check here must stay in sync
+		// with filterSecrets' own nil-semantic (nil → default ["GH_TOKEN"],
+		// empty slice → zero-trust). If that contract changes, update both.
 		env = append(env, fmt.Sprintf("GH_TOKEN=%s", r.githubToken))
 	}
 	cmd.Env = env

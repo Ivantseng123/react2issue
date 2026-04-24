@@ -208,11 +208,15 @@ echo "padding padding padding padding padding padding padding"
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	if strings.Contains(output, "GH_TOKEN") {
-		t.Errorf("GH_TOKEN must not be injected for zero-trust provider: %q", output)
+	// Assert on the specific secret VALUES rather than the variable names: a
+	// host/CI env with its own GH_TOKEN set would otherwise inherit through
+	// os.Environ() and produce a false failure even though filterSecrets
+	// correctly skipped injection.
+	if strings.Contains(output, "ghp_should_not_appear") {
+		t.Errorf("GH_TOKEN value must not be forwarded for zero-trust provider: %q", output)
 	}
-	if strings.Contains(output, "K8S_TOKEN") {
-		t.Errorf("K8S_TOKEN must not be injected for zero-trust provider: %q", output)
+	if strings.Contains(output, "k8s_should_not_appear") {
+		t.Errorf("K8S_TOKEN value must not be forwarded for zero-trust provider: %q", output)
 	}
 }
 
