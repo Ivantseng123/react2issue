@@ -146,6 +146,8 @@ App 用 `JobStore` 追蹤每個 Job 的 lifecycle（Pending → Running → Comp
 
 重啟時若走 `redis`，app 會 `ListAll()` 一次並 log `rehydrated in-flight jobs from previous instance`（數量 = 非 terminal 狀態筆數）。不會把 state 塞回任何 in-memory index——`ResultListener` 查 `store.Get` 直接打 Redis。
 
+**Redis 負載預期**：切到 `store=redis` 後，每次 worker StatusReport（預設 `worker.status_interval: 5s`）會觸發 ~2 次 `store.Get` + 視狀態轉換觸發 1 次 `UpdateStatus`（WATCH/MULTI/EXEC 往返）。N 個 active worker × 3 ops / 5s ≈ `0.6N` QPS 的額外 Redis 流量。Sizing 時納入考量，但對一般 Redis 規模可忽略。
+
 背景 / incident：[#123](https://github.com/Ivantseng123/agentdock/issues/123)（app 重啟後 Slack 端 in-flight job orphan）、[#146](https://github.com/Ivantseng123/agentdock/issues/146)（wire-up PR）。
 
 ## Workflow-specific prompts

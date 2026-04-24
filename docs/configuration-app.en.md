@@ -146,6 +146,8 @@ The app tracks each Job's lifecycle (Pending → Running → Completed/Failed/Ca
 
 On startup with `store=redis`, the app calls `ListAll()` once and logs `rehydrated in-flight jobs from previous instance` with the count of non-terminal records. No in-memory index is rebuilt — `ResultListener` resolves jobs via `store.Get` directly against Redis.
 
+**Expected Redis load**: switching to `store=redis` adds ~2 `store.Get` calls per worker StatusReport (default `worker.status_interval: 5s`) plus 1 `UpdateStatus` (WATCH/MULTI/EXEC round-trip) on state transitions. Roughly `0.6 × N` QPS per active worker — size your Redis accordingly; negligible for typical deployments.
+
 Background / incident: [#123](https://github.com/Ivantseng123/agentdock/issues/123) (in-flight Slack jobs orphaned on app restart), [#146](https://github.com/Ivantseng123/agentdock/issues/146) (wire-up PR).
 
 ## Workflow-specific prompts

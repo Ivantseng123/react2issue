@@ -96,6 +96,18 @@ queue:
 	}
 }
 
+func TestValidate_QueueStoreRedisRequiresTTL(t *testing.T) {
+	cfg := loadFromString(t, `
+queue:
+  store: redis
+  store_ttl: 0s
+`)
+	err := Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "queue.store_ttl") {
+		t.Errorf("expected validation error for redis store with zero TTL, got %v", err)
+	}
+}
+
 func TestApplyDefaults_PromptGoal(t *testing.T) {
 	cfg := loadFromString(t, ``)
 	if cfg.Prompt.Issue.Goal != defaultIssueGoal {
