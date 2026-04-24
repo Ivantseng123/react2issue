@@ -20,23 +20,13 @@ logging:
 github:
   token: ghp-...                      # REQUIRED：agent clone / push 時使用
 
-agents:
-  claude:
-    command: claude
-    args: ["--print", "--output-format", "stream-json", "-p", "{prompt}"]
-    timeout: 15m
-    skill_dir: .claude/skills
-    stream: true                      # 啟用即時事件追蹤
-  codex:
-    command: codex
-    args: ["exec", "--skip-git-repo-check", "--color", "never", "{prompt}"]
-    timeout: 15m
-    skill_dir: .agents/skills         # Codex 讀 .agents/skills，不是 .codex/skills
-  opencode:
-    command: opencode
-    args: ["run", "--pure", "{prompt}"]  # --pure 跳過 external plugins（例如 oh-my-openagent）避免 async 背景 agent
-    timeout: 15m
-    skill_dir: .opencode/skills
+# agents: block 可省略。省略時 worker 啟動自動以當下 binary 的 BuiltinAgents
+# 填入 claude / codex / opencode 預設值。只有要覆寫特定欄位時才需要寫。
+# 升級 binary 後，刪掉（或不寫）agents: block 即可取得最新內建預設值。
+#
+# agents:
+#   opencode:
+#     timeout: 30m    # 範例：只覆寫 timeout，其餘欄位沿用內建預設
 
 providers: [claude, codex, opencode]  # fallback chain（依序嘗試）；單一 agent 模式：providers: [claude]
 
@@ -90,6 +80,28 @@ Slack 狀態訊息會從冷冰冰的 `:gear: 準備中 · worker-0` 改為擬人
 - 統計行：`小明 已經敲了 15 次工具、翻了 8 份檔`
 
 沒設暱稱時 `worker-N` 還是會套用同樣的句型（robot-worker 人設）。
+
+## Agent 覆寫（選用）
+
+建議省略 `agents:` 區塊 — 啟動時 `mergeBuiltinAgents` 自動填入內建預設值。只有在需要覆寫特定欄位時才需要寫：
+
+| 欄位 | 型別 | 說明 |
+|---|---|---|
+| `command` | string | 執行檔名稱或路徑 |
+| `args` | []string | CLI 引數；`{prompt}` 會被替換為 job 的 prompt 內容 |
+| `timeout` | duration | 單一 job 的 wall-clock 上限（例如 `30m`） |
+| `skill_dir` | string | Repo 內寫入 skill 檔的相對目錄 |
+| `stream` | bool | 啟用即時 JSON 事件解析（僅 claude 支援） |
+
+只需寫要覆寫的欄位；其他欄位沿用 `BuiltinAgents`。範例：
+
+```yaml
+agents:
+  opencode:
+    timeout: 30m    # 只改 timeout，command/args/skill_dir 沿用內建
+  claude:
+    skill_dir: .claude/custom-skills
+```
 
 ## Agent Stream
 

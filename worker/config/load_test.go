@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -83,6 +84,42 @@ func TestMergeBuiltinAgents_FillsMissing(t *testing.T) {
 	for _, name := range []string{"claude", "codex", "opencode"} {
 		if _, ok := cfg.Agents[name]; !ok {
 			t.Errorf("BuiltinAgents missing %q after merge", name)
+		}
+	}
+}
+
+func TestMergeBuiltinAgents_EmptyAgentsBlock(t *testing.T) {
+	clearWorkerEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.yaml")
+	// A yaml that omits the agents: block entirely — mirrors what
+	// `agentdock init worker` now generates.
+	body := `
+count: 1
+providers: [claude]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cmd := newTestCmd(t)
+	if err := cmd.ParseFlags(nil); err != nil {
+		t.Fatalf("ParseFlags: %v", err)
+	}
+	cfg, _, _, _, err := BuildKoanf(cmd, path)
+	if err != nil {
+		t.Fatalf("BuildKoanf: %v", err)
+	}
+	for name := range BuiltinAgents {
+		got, ok := cfg.Agents[name]
+		if !ok {
+			t.Errorf("mergeBuiltinAgents did not fill %q", name)
+			continue
+		}
+		want := BuiltinAgents[name]
+		// Validate the full struct — Args especially, since stale Args were the
+		// root cause of the --pure incident that motivated this PR.
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("agent %q: got %+v, want %+v", name, got, want)
 		}
 	}
 }

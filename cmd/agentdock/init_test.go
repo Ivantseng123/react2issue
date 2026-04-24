@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	workerconfig "github.com/Ivantseng123/agentdock/worker/config"
+	"gopkg.in/yaml.v3"
 )
 
 func TestInitApp_YAML(t *testing.T) {
@@ -89,7 +92,7 @@ func TestInitApp_InteractiveRejectsNonTTY(t *testing.T) {
 	}
 }
 
-func TestInitWorker_YAML_IncludesAgents(t *testing.T) {
+func TestInitWorker_YAML_NoBuiltinSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.yaml")
 	if err := runInitWorker(path, false, false); err != nil {
@@ -97,10 +100,24 @@ func TestInitWorker_YAML_IncludesAgents(t *testing.T) {
 	}
 	data, _ := os.ReadFile(path)
 	content := string(data)
-	for _, name := range []string{"claude:", "codex:", "opencode:"} {
-		if !strings.Contains(content, name) {
-			t.Errorf("worker.yaml missing agent %q block", name)
+	// Built-in agents must NOT be frozen into the generated yaml; they are
+	// filled at runtime by mergeBuiltinAgents so operators pick up new defaults
+	// automatically on binary upgrade. Parse the yaml and inspect the agents
+	// map directly — a string-contains check would have to track yaml.Marshal's
+	// indent style and silently miss regressions when upstream changes it.
+	var parsed map[string]any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("parse generated yaml: %v", err)
+	}
+	agents, _ := parsed["agents"].(map[string]any)
+	for name := range workerconfig.BuiltinAgents {
+		if _, ok := agents[name]; ok {
+			t.Errorf("worker.yaml should not snapshot built-in agent %q", name)
 		}
+	}
+	// Guidance comment for the agents: block should be present.
+	if !strings.Contains(content, "# agents:") {
+		t.Error("worker.yaml should include guidance comment for agents: block")
 	}
 	if !strings.Contains(content, "# REQUIRED") {
 		t.Error("worker.yaml should include # REQUIRED hints")
