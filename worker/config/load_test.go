@@ -87,6 +87,40 @@ func TestMergeBuiltinAgents_FillsMissing(t *testing.T) {
 	}
 }
 
+func TestMergeBuiltinAgents_EmptyAgentsBlock(t *testing.T) {
+	clearWorkerEnv(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.yaml")
+	// A yaml that omits the agents: block entirely — mirrors what
+	// `agentdock init worker` now generates.
+	body := `
+count: 1
+providers: [claude]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cmd := newTestCmd(t)
+	if err := cmd.ParseFlags(nil); err != nil {
+		t.Fatalf("ParseFlags: %v", err)
+	}
+	cfg, _, _, _, err := BuildKoanf(cmd, path)
+	if err != nil {
+		t.Fatalf("BuildKoanf: %v", err)
+	}
+	for name := range BuiltinAgents {
+		got, ok := cfg.Agents[name]
+		if !ok {
+			t.Errorf("mergeBuiltinAgents did not fill %q", name)
+			continue
+		}
+		want := BuiltinAgents[name]
+		if got.Command != want.Command {
+			t.Errorf("agent %q: Command = %q, want %q", name, got.Command, want.Command)
+		}
+	}
+}
+
 func TestValidate_FlagSetsWorkerCount(t *testing.T) {
 	cfg := &Config{}
 	ApplyDefaults(cfg)

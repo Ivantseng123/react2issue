@@ -63,8 +63,9 @@ func BuildKoanf(cmd *cobra.Command, configPath string) (*Config, *koanf.Koanf, *
 }
 
 // mergeBuiltinAgents fills in any built-in agent entries the user didn't
-// override. Runtime fallback only — `agentdock init worker` writes explicit
-// entries and doesn't rely on this path.
+// override. This is the primary source of agent defaults: `agentdock init
+// worker` no longer snapshots BuiltinAgents, so every startup picks up the
+// latest values from the current binary. User-defined entries take precedence.
 func mergeBuiltinAgents(cfg *Config) {
 	if cfg.Agents == nil {
 		cfg.Agents = map[string]AgentConfig{}

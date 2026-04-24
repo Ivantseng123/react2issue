@@ -89,7 +89,7 @@ func TestInitApp_InteractiveRejectsNonTTY(t *testing.T) {
 	}
 }
 
-func TestInitWorker_YAML_IncludesAgents(t *testing.T) {
+func TestInitWorker_YAML_NoBuiltinSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "worker.yaml")
 	if err := runInitWorker(path, false, false); err != nil {
@@ -97,10 +97,23 @@ func TestInitWorker_YAML_IncludesAgents(t *testing.T) {
 	}
 	data, _ := os.ReadFile(path)
 	content := string(data)
-	for _, name := range []string{"claude:", "codex:", "opencode:"} {
-		if !strings.Contains(content, name) {
-			t.Errorf("worker.yaml missing agent %q block", name)
+	// Built-in agents must NOT be frozen into the generated yaml; they are
+	// filled at runtime by mergeBuiltinAgents so operators pick up new defaults
+	// automatically on binary upgrade.
+	//
+	// We check for the yaml-serialized form "  <name>:\n" (two leading spaces,
+	// no leading #) which is what yaml.Marshal emits for map entries under
+	// "agents:". Commented guidance lines use "#  <name>:" (hash prefix) and
+	// must not be flagged.
+	for _, name := range []string{"claude", "codex", "opencode"} {
+		literal := "\n  " + name + ":\n"
+		if strings.Contains(content, literal) {
+			t.Errorf("worker.yaml should not contain literal built-in agent entry %q", literal)
 		}
+	}
+	// Guidance comment for the agents: block should be present.
+	if !strings.Contains(content, "# agents:") {
+		t.Error("worker.yaml should include guidance comment for agents: block")
 	}
 	if !strings.Contains(content, "# REQUIRED") {
 		t.Error("worker.yaml should include # REQUIRED hints")
