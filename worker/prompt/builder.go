@@ -15,11 +15,10 @@ type AttachmentInfo struct {
 	Type string // "image", "text", "document", or other mime-type
 }
 
-// securityGuardrail is the system-level security block injected near the top
-// of every prompt, regardless of workflow type (issue / ask / pr_review).
+// securityGuardrail is injected into every prompt unconditionally.
 // English is used intentionally: LLM instruction-following is more consistent
 // in English than in mixed-language prompts.
-// This is a soft defense; hard defenses (log redaction, issue-body redaction,
+// Soft defense only; hard defenses (log redaction, issue-body redaction,
 // env whitelist) live in #178/#180/#181.
 const securityGuardrail = `<security_rules>
 ## Security rules (do NOT violate)

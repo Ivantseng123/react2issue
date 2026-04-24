@@ -382,11 +382,8 @@ func TestBuildPrompt_PriorAnswer_XMLEscaping(t *testing.T) {
 	}
 }
 
-// TestBuildPrompt_SecurityGuardrail_PresentInAllWorkflows verifies that the
-// security guardrail block is emitted for all three workflow types
-// (issue / ask / pr_review).  The block is injected unconditionally, so a
-// single minimal context is enough to cover the always-on path; the three
-// sub-tests mirror the real call sites to make the coverage intent explicit.
+// TestBuildPrompt_SecurityGuardrail_PresentInAllWorkflows checks that the
+// guardrail block appears in all three workflow types (issue / ask / pr_review).
 func TestBuildPrompt_SecurityGuardrail_PresentInAllWorkflows(t *testing.T) {
 	guardrailFragments := []string{
 		"<security_rules>",
