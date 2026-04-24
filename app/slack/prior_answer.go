@@ -11,9 +11,14 @@ import (
 
 // botAnswerMinChars is the minimum text length (in runes) for a bot post
 // to be treated as a substantive answer. Shorter messages are typically
-// acks, status lines, or one-liners that add no signal to multi-turn
-// continuity. 50 is a judgment call — tune via feedback.
-const botAnswerMinChars = 50
+// pure acks ("好"/"收到") that add no signal to multi-turn continuity.
+//
+// Initially set to 50 on the theory that real answers are sentences, but
+// production traces (issue #151 follow-up) showed Niuma routinely emits
+// useful 20–40-rune answers that were being filtered out — so the opt-in
+// button never surfaced. Dropped to 10: still excludes one/two-character
+// acks while letting terse but substantive replies through.
+const botAnswerMinChars = 10
 
 // botNonAnswerEmojiPrefixes is the blocklist of leading Slack emoji codes
 // that identify bot posts as UI scaffolding rather than substantive
