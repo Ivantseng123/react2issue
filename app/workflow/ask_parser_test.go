@@ -50,3 +50,18 @@ func TestParseAskOutput_MultipleMarkers_LastWins(t *testing.T) {
 		t.Errorf("expected last marker to win, got %q", r.Answer)
 	}
 }
+
+// TestParseAskOutput_FenceMarkers guards the opencode fence pattern where
+// the payload sits between an opening and closing marker. Without the
+// fence-aware walk the last marker's segment is empty and parsing errors
+// out before reaching the real payload.
+func TestParseAskOutput_FenceMarkers(t *testing.T) {
+	output := "===ASK_RESULT===\n" + `{"answer":"real answer","confidence":"high"}` + "\n===ASK_RESULT==="
+	r, err := ParseAskOutput(output)
+	if err != nil {
+		t.Fatalf("fence pattern must parse: %v", err)
+	}
+	if r.Answer != "real answer" || r.Confidence != "high" {
+		t.Errorf("got %+v", r)
+	}
+}

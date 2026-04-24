@@ -127,6 +127,31 @@ func markerPositions(s, marker string) []int {
 	}
 }
 
+// segmentAfterMarker returns non-empty trimmed segments following each
+// occurrence of marker in output, ordered last-marker-first. The final
+// marker's segment comes first so callers that expect the real answer to
+// follow the last marker hit it immediately; empty segments fall through
+// to earlier markers, which is how the opencode "fence" pattern — where
+// payload is wrapped between an opening and closing marker — is recovered.
+func segmentAfterMarker(output, marker string) []string {
+	positions := markerPositions(output, marker)
+	if len(positions) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(positions))
+	for i := len(positions) - 1; i >= 0; i-- {
+		start := positions[i] + len(marker)
+		end := len(output)
+		if i+1 < len(positions) {
+			end = positions[i+1]
+		}
+		if seg := strings.TrimSpace(output[start:end]); seg != "" {
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
 // parseResultSegment tries JSON first, then the legacy CREATED:/REJECTED:/ERROR:
 // prefixes. Returns (result, titleErr, matched):
 //   - matched=true, titleErr=nil → caller returns (result, nil).
