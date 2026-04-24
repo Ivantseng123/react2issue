@@ -117,15 +117,19 @@ func TestAskHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 	}
 }
 
+// cfgWithSecretPRReview is like cfgWithSecret but also enables PRReview.
+func cfgWithSecretPRReview(secret string) *config.Config {
+	cfg := cfgWithSecret(secret)
+	tp := true
+	cfg.PRReview.Enabled = &tp
+	return cfg
+}
+
 // ── PRReviewWorkflow ──────────────────────────────────────────────────────────
 
 func TestPRReviewHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 	const fakeSecret = "supersecret-pr-review-qwe456"
-	cfg := &config.Config{}
-	config.ApplyDefaults(cfg)
-	tp := true
-	cfg.PRReview.Enabled = &tp
-	cfg.Secrets = map[string]string{"MY_SECRET": fakeSecret}
+	cfg := cfgWithSecretPRReview(fakeSecret)
 
 	var buf bytes.Buffer
 	w := NewPRReviewWorkflow(cfg, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
@@ -147,11 +151,7 @@ func TestPRReviewHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 }
 
 func TestPRReviewHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
-	cfg := &config.Config{}
-	config.ApplyDefaults(cfg)
-	tp := true
-	cfg.PRReview.Enabled = &tp
-	cfg.Secrets = map[string]string{"MY_SECRET": "supersecret-pr-review-qwe456"}
+	cfg := cfgWithSecretPRReview("supersecret-pr-review-qwe456")
 
 	var buf bytes.Buffer
 	w := NewPRReviewWorkflow(cfg, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
