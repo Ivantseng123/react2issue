@@ -391,6 +391,7 @@ func TestBuildPrompt_SecurityGuardrail_PresentInAllWorkflows(t *testing.T) {
 		"Never copy git remote URLs that contain credentials",
 		"use owner/repo form only",
 		"summarise it without pasting the values",
+		"</security_rules>",
 	}
 
 	baseCtx := func(goal string) queue.PromptContext {
