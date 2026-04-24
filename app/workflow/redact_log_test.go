@@ -150,6 +150,30 @@ func TestPRReviewHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 	}
 }
 
+// TestPRReviewHandleResult_ParseFail_RedactsSecretPastTruncation pins the
+// redact-before-truncate ordering: a secret that appears only after byte 2000
+// still gets redacted because firstN runs on the already-redacted string.
+func TestPRReviewHandleResult_ParseFail_RedactsSecretPastTruncation(t *testing.T) {
+	const fakeSecret = "supersecret-pr-review-late-zzz987"
+	cfg := cfgWithSecretPRReview(fakeSecret)
+
+	var buf bytes.Buffer
+	w := NewPRReviewWorkflow(cfg, newFakeSlackPort(), &fakeGitHubPR{}, nil, captureLogger(&buf))
+
+	padding := strings.Repeat("a", 2500) // push secret past the 2000-byte cut
+	state := &queue.JobState{Job: &queue.Job{TaskType: "pr_review", WorkflowArgs: map[string]string{"pr_url": "https://github.com/foo/bar/pull/1"}}}
+	result := &queue.JobResult{
+		Status:    "completed",
+		RawOutput: padding + fakeSecret + padding,
+	}
+	_ = w.HandleResult(context.Background(), state, result)
+
+	logged := buf.String()
+	if strings.Contains(logged, fakeSecret) {
+		t.Errorf("secret past the 2000-byte boundary leaked through truncation: redact ordering is wrong")
+	}
+}
+
 func TestPRReviewHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 	cfg := cfgWithSecretPRReview("supersecret-pr-review-qwe456")
 
