@@ -541,9 +541,10 @@ func TestRepoCache_EnsureRepo_HealsLegacyTokenInConfig(t *testing.T) {
 		t.Fatalf("test setup: legacy token not in config")
 	}
 
-	// Second EnsureRepo should heal the URL. Fetch will fail because the
-	// remote is now the fake github.com URL, but the URL rewrite runs before
-	// fetch, so the config should still be cleaned up.
+	// Second EnsureRepo should heal the URL: the heal step runs before fetch
+	// and rewrites origin back to the clean file:// URL, after which fetch
+	// against the real file repo succeeds. Either way, the config must be
+	// credential-free once EnsureRepo returns.
 	_, _ = cache.EnsureRepo("file://"+sourceDir, "")
 
 	cfg, err = os.ReadFile(filepath.Join(barePath, "config"))

@@ -130,31 +130,14 @@ func (rc *RepoCache) effectiveToken(perCall string) string {
 	return rc.githubPAT
 }
 
-// clonePath bare-clones cloneURL to localPath, then immediately rewrites the
-// remote URL to the token-free form. Any `git remote -v` or `git config` run
-// inside a worktree derived from this bare repo will see the clean URL, so an
-// agent can't leak the PAT by pasting the remote into an issue body (#179).
-// A best-effort strip-failure is logged but not fatal — the clone succeeded
-// and the caller would rather proceed than refuse to do work; the warn gives
-// operators an observability signal if the underlying git ever rejects the
-// rewrite.
-func (rc *RepoCache) clonePath(cloneURL, cleanURL, localPath, repoRef string) error {
+// clonePath bare-clones cleanURL into localPath. Auth flows through gitAuthEnv
+// so the PAT never sits in argv (which would leak via `ps` / /proc/PID/cmdline)
+// and the URL written into .git/config stays credential-free from the first
+// write — no post-clone rewrite required (#179).
+func (rc *RepoCache) clonePath(authToken, cleanURL, localPath string) error {
 	// Bare clone so multiple worktrees can share the same cache safely.
-	cmd := exec.Command("git", "clone", "--bare", cloneURL, localPath)
-	if _, err := cmd.CombinedOutput(); err != nil {
+	if _, err := runGitWithAuth(authToken, "clone", "--bare", cleanURL, localPath); err != nil {
 		return fmt.Errorf("git clone failed: %w", err)
-	}
-	if cleanURL != "" && cleanURL != cloneURL {
-		setCmd := exec.Command("git", "-C", localPath, "remote", "set-url", "origin", cleanURL)
-		if out, err := setCmd.CombinedOutput(); err != nil {
-			rc.logger.Warn("Clone 後去除 remote URL 中的 token 失敗；.git/config 可能仍保留 PAT",
-				"phase", "警告",
-				"repo", SanitizeURL(repoRef),
-				"path", localPath,
-				"error", err,
-				"output", strings.TrimSpace(string(out)),
-			)
-		}
 	}
 	return nil
 }
@@ -164,7 +147,6 @@ func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 	defer rc.mu.Unlock()
 
 	start := time.Now()
-	cloneURL := rc.resolveURLWithToken(repoRef, token)
 	cleanURL := tokenFreeGitHubURL(repoRef)
 	authToken := rc.effectiveToken(token)
 	localPath := filepath.Join(rc.dir, rc.dirName(repoRef))
@@ -174,7 +156,7 @@ func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 		if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 			return "", fmt.Errorf("mkdir: %w", err)
 		}
-		if err := rc.clonePath(cloneURL, cleanURL, localPath, repoRef); err != nil {
+		if err := rc.clonePath(authToken, cleanURL, localPath); err != nil {
 			return "", err
 		}
 		rc.lastPull[repoRef] = time.Now()
@@ -209,8 +191,8 @@ func (rc *RepoCache) EnsureRepo(repoRef string, token string) (string, error) {
 			if err := os.MkdirAll(filepath.Dir(localPath), 0755); err != nil {
 				return "", fmt.Errorf("mkdir: %w", err)
 			}
-			if err := rc.clonePath(cloneURL, cleanURL, localPath, repoRef); err != nil {
-				return "", fmt.Errorf("retry: %w", err)
+			if err := rc.clonePath(authToken, cleanURL, localPath); err != nil {
+				return "", fmt.Errorf("git clone (retry) failed: %w", err)
 			}
 			rc.lastPull[repoRef] = time.Now()
 			rc.logger.Info("Repo 同步完成", "phase", "完成", "repo", SanitizeURL(repoRef), "duration_ms", time.Since(start).Milliseconds())
