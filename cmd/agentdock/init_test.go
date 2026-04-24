@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	workerconfig "github.com/Ivantseng123/agentdock/worker/config"
 )
 
 func TestInitApp_YAML(t *testing.T) {
@@ -101,11 +103,12 @@ func TestInitWorker_YAML_NoBuiltinSnapshot(t *testing.T) {
 	// filled at runtime by mergeBuiltinAgents so operators pick up new defaults
 	// automatically on binary upgrade.
 	//
-	// We check for the yaml-serialized form "  <name>:\n" (two leading spaces,
+	// We check for the yaml-serialized form "\n  <name>:\n" (two leading spaces,
 	// no leading #) which is what yaml.Marshal emits for map entries under
 	// "agents:". Commented guidance lines use "#  <name>:" (hash prefix) and
-	// must not be flagged.
-	for _, name := range []string{"claude", "codex", "opencode"} {
+	// must not be flagged. Iterating BuiltinAgents ensures this stays in sync
+	// when new built-in agents are added.
+	for name := range workerconfig.BuiltinAgents {
 		literal := "\n  " + name + ":\n"
 		if strings.Contains(content, literal) {
 			t.Errorf("worker.yaml should not contain literal built-in agent entry %q", literal)

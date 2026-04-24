@@ -176,11 +176,9 @@ func marshalWorkerYAML(cfg *workerconfig.Config, path string) ([]byte, error) {
 	if len(cfg.Providers) == 0 {
 		text = insertBefore(text, "providers:", "# REQUIRED: list of agent names to try, in order")
 	}
-	// Inject a guidance comment for the agents: block.
-	// Built-in agents (claude/codex/opencode) are filled by mergeBuiltinAgents at
-	// startup — omitting this block means you always get the latest defaults from
-	// the current binary. Add entries here only when you need to override a specific
-	// built-in value (e.g. timeout, skill_dir, or the full command/args).
+	// agents: block is not serialized (cfg.Agents is nil); prepend a guidance
+	// comment so operators know they can override individual built-in fields
+	// without having to snapshot the whole set.
 	agentsComment := "# agents: (optional override — omit to use built-in defaults from the current binary)\n" +
 		"#   opencode:\n" +
 		"#     timeout: 30m  # example: extend timeout for a single agent\n"
