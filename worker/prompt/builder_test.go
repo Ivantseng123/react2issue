@@ -418,7 +418,7 @@ func TestBuildPrompt_SecurityGuardrail_PresentInAllWorkflows(t *testing.T) {
 			got := BuildPrompt(tc.ctx, nil, nil)
 			for _, frag := range guardrailFragments {
 				if !strings.Contains(got, frag) {
-					t.Errorf("[%s] missing guardrail fragment %q in:\n%s", tc.name, frag, got)
+					t.Errorf("missing guardrail fragment %q in:\n%s", frag, got)
 				}
 			}
 		})
