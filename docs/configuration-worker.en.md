@@ -27,16 +27,19 @@ agents:
     timeout: 15m
     skill_dir: .claude/skills
     stream: true                      # enable real-time event tracking
+    required_secrets: [GH_TOKEN]      # default: only GH_TOKEN forwarded (can be overridden)
   codex:
     command: codex
     args: ["exec", "--skip-git-repo-check", "--color", "never", "{prompt}"]
     timeout: 15m
     skill_dir: .agents/skills         # Codex discovers skills in .agents/skills, not .codex/skills
+    required_secrets: [GH_TOKEN]
   opencode:
     command: opencode
     args: ["run", "--pure", "{prompt}"]  # --pure skips external plugins (e.g. oh-my-openagent) that spawn async background agents
     timeout: 15m
     skill_dir: .opencode/skills
+    required_secrets: [GH_TOKEN]
 
 providers: [claude, codex, opencode]  # ordered fallback chain; single-agent mode: providers: [claude]
 
@@ -121,3 +124,25 @@ Preflight failure blocks start. Pass `--log-level debug` for verbose diagnostics
 - `github.token` auto-merges into `secrets["GH_TOKEN"]`
 - `AGENTDOCK_SECRET_<NAME>` env vars slot into `secrets["<NAME>"]`
 - Decrypted `secrets` are injected as env vars on the agent subprocess
+
+### Secret whitelist (`required_secrets`)
+
+Each agent can declare the exact secret keys it actually needs. The worker filters `mergedSecrets` against this list before injecting into the child process — the subprocess only sees the declared keys.
+
+```yaml
+agents:
+  custom-agent:
+    command: /opt/custom-agent
+    args: ["{prompt}"]
+    required_secrets: [GH_TOKEN, OPENAI_API_KEY]
+```
+
+Semantics:
+
+| `required_secrets` value | Behaviour |
+|---|---|
+| absent (`nil`) | falls back to `[GH_TOKEN]` (back-compat default) |
+| `[]` (explicit empty) | no secrets forwarded (zero-trust provider) |
+| `[GH_TOKEN, X]` | only those two keys forwarded |
+
+**Migration note**: existing `worker.yaml` custom agents that need secrets beyond `GH_TOKEN` (e.g. `OPENAI_API_KEY`) must add `required_secrets: [GH_TOKEN, OPENAI_API_KEY]` explicitly. Agents without the field fall back to `[GH_TOKEN]`; other keys are silently withheld.

@@ -27,16 +27,19 @@ agents:
     timeout: 15m
     skill_dir: .claude/skills
     stream: true                      # 啟用即時事件追蹤
+    required_secrets: [GH_TOKEN]      # 預設：僅注入 GH_TOKEN（可覆蓋）
   codex:
     command: codex
     args: ["exec", "--skip-git-repo-check", "--color", "never", "{prompt}"]
     timeout: 15m
     skill_dir: .agents/skills         # Codex 讀 .agents/skills，不是 .codex/skills
+    required_secrets: [GH_TOKEN]
   opencode:
     command: opencode
     args: ["run", "--pure", "{prompt}"]  # --pure 跳過 external plugins（例如 oh-my-openagent）避免 async 背景 agent
     timeout: 15m
     skill_dir: .opencode/skills
+    required_secrets: [GH_TOKEN]
 
 providers: [claude, codex, opencode]  # fallback chain（依序嘗試）；單一 agent 模式：providers: [claude]
 
@@ -120,3 +123,25 @@ Preflight 失敗直接拒啟動；`--log-level debug` 會印細節。
 - `github.token` 會自動 merge 進 `secrets["GH_TOKEN"]`
 - `AGENTDOCK_SECRET_<NAME>` 環境變數會進 `secrets["<NAME>"]`
 - Job 跑起來時，解密後的 `secrets` 注入為 agent 子進程的 env var
+
+### Secret 白名單（`required_secrets`）
+
+每個 agent 可以宣告它實際需要的 secret key。worker 在注入前會過濾，子進程只看得到白名單內的 key：
+
+```yaml
+agents:
+  custom-agent:
+    command: /opt/custom-agent
+    args: ["{prompt}"]
+    required_secrets: [GH_TOKEN, OPENAI_API_KEY]
+```
+
+語意規則：
+
+| `required_secrets` 值 | 行為 |
+|---|---|
+| 未宣告（`nil`）| 回退預設值 `[GH_TOKEN]`（back-compat） |
+| `[]`（空 list） | 不注入任何 secret（zero-trust provider） |
+| `[GH_TOKEN, X]` | 只注入這兩個 key |
+
+**Migration 注意**：現有 `worker.yaml` 如果有自訂 agent 且需要 `GH_TOKEN` 以外的 secret（例如 `OPENAI_API_KEY`），必須手動加 `required_secrets: [GH_TOKEN, OPENAI_API_KEY]`。未宣告的 agent 自動回退到 `[GH_TOKEN]`，其他 key 不會被注入。
