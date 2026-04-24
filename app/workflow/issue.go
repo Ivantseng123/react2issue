@@ -381,13 +381,22 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 		body = stripTriageSection(body)
 	}
 
+	// Redact any configured secrets that the agent may have echoed into its
+	// parsed output before it lands on a permanent public surface (#180).
+	title := logging.Redact(parsed.Title, w.cfg.Secrets)
+	body = logging.Redact(body, w.cfg.Secrets)
+	labels := make([]string, len(parsed.Labels))
+	for i, l := range parsed.Labels {
+		labels[i] = logging.Redact(string(l), w.cfg.Secrets)
+	}
+
 	branchInfo := ""
 	if job.Branch != "" {
 		branchInfo = fmt.Sprintf(" (branch: `%s`)", job.Branch)
 	}
 
 	owner, repo := splitRepo(job.Repo)
-	url, err := w.github.CreateIssue(ctx, owner, repo, parsed.Title, body, []string(parsed.Labels))
+	url, err := w.github.CreateIssue(ctx, owner, repo, title, body, labels)
 	if err != nil {
 		w.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
 		return fmt.Errorf("github create issue: %w", err)

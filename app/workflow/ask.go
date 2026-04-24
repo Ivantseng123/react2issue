@@ -450,7 +450,8 @@ func (w *AskWorkflow) HandleResult(ctx context.Context, state *queue.JobState, r
 		return w.post(job, fmt.Sprintf(":x: 解析失敗：%v", err))
 	}
 
-	answer := parsed.Answer
+	// Redact configured secrets before posting to Slack (#180).
+	answer := logging.Redact(parsed.Answer, w.cfg.Secrets)
 	if len(answer) > askMaxChars {
 		answer = answer[:askMaxChars] + "\n…(已截斷)"
 	}
