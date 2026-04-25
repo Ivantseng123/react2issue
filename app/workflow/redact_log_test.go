@@ -84,8 +84,11 @@ func TestAskHandleResult_ParseFail_RedactsSecret(t *testing.T) {
 
 	state := &queue.JobState{Job: &queue.Job{TaskType: "ask"}}
 	result := &queue.JobResult{
-		Status:    "completed",
-		RawOutput: `malformed output with token ` + fakeSecret + ` in it`,
+		Status: "completed",
+		// Marker present + malformed JSON triggers the strict parse-fail path
+		// (the missing-marker fallback intentionally does not cover this case;
+		// spec §Design Decisions Resolved #2).
+		RawOutput: "===ASK_RESULT===\nbad json with token " + fakeSecret + " inside",
 	}
 	_ = w.HandleResult(context.Background(), state, result)
 
@@ -103,7 +106,9 @@ func TestAskHandleResult_ParseFail_NoSecret_Unchanged(t *testing.T) {
 	var buf bytes.Buffer
 	w := NewAskWorkflow(cfg, newFakeSlackPort(), nil, captureLogger(&buf))
 
-	const harmlessOutput = "just a plain debug string with no secrets"
+	// No newline so the slog text handler does not escape it; the assertion
+	// uses substring containment on the rendered log line.
+	const harmlessOutput = "===ASK_RESULT=== not valid json at all"
 	state := &queue.JobState{Job: &queue.Job{TaskType: "ask"}}
 	result := &queue.JobResult{
 		Status:    "completed",
