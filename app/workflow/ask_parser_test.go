@@ -17,12 +17,44 @@ func TestParseAskOutput_Valid(t *testing.T) {
 	if r.Confidence != "high" {
 		t.Errorf("confidence = %q", r.Confidence)
 	}
+	if r.ResultSource != ResultSourceSchema {
+		t.Errorf("ResultSource = %q, want %q", r.ResultSource, ResultSourceSchema)
+	}
 }
 
-func TestParseAskOutput_MarkerMissing(t *testing.T) {
-	output := `{"answer":"no marker"}`
-	if _, err := ParseAskOutput(output); err == nil {
-		t.Error("expected error when marker missing")
+// TestParseAskOutput_MarkerMissing_FallbackToRaw exercises the missing-marker
+// fallback: when the agent omits the ===ASK_RESULT=== wrapper but its raw
+// stdout passes the syntactic gate, the parser surfaces stdout verbatim as
+// the answer with ResultSource="raw_fallback". Spec §Ask Fallback Policy.
+func TestParseAskOutput_MarkerMissing_FallbackToRaw(t *testing.T) {
+	output := "Here is the answer to your question."
+	r, err := ParseAskOutput(output)
+	if err != nil {
+		t.Fatalf("expected fallback success, got error: %v", err)
+	}
+	if r.Answer != output {
+		t.Errorf("Answer = %q, want %q", r.Answer, output)
+	}
+	if r.ResultSource != ResultSourceRawFallback {
+		t.Errorf("ResultSource = %q, want %q", r.ResultSource, ResultSourceRawFallback)
+	}
+}
+
+func TestParseAskOutput_MarkerMissing_EmptyFails(t *testing.T) {
+	if _, err := ParseAskOutput(""); err == nil {
+		t.Error("expected error on empty stdout")
+	}
+}
+
+func TestParseAskOutput_MarkerMissing_WhitespaceOnlyFails(t *testing.T) {
+	if _, err := ParseAskOutput("   \n\t  \n"); err == nil {
+		t.Error("expected error on whitespace-only stdout")
+	}
+}
+
+func TestParseAskOutput_MarkerMissing_TooShortFails(t *testing.T) {
+	if _, err := ParseAskOutput("hi"); err == nil {
+		t.Error("expected error on too-short stdout")
 	}
 }
 
@@ -33,10 +65,13 @@ func TestParseAskOutput_EmptyAnswer(t *testing.T) {
 	}
 }
 
+// TestParseAskOutput_MalformedJSON confirms marker-present-but-unparseable
+// JSON still fails closed. Fallback is intentionally limited to
+// missing-marker; spec §Design Decisions Resolved #2.
 func TestParseAskOutput_MalformedJSON(t *testing.T) {
 	output := "===ASK_RESULT===\n{not json"
 	if _, err := ParseAskOutput(output); err == nil {
-		t.Error("expected error on malformed JSON")
+		t.Error("expected error on malformed JSON; fallback must not cover this case")
 	}
 }
 
