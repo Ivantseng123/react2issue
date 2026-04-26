@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.0](https://github.com/Ivantseng123/agentdock/compare/v2.7.0...v3.0.0) (2026-04-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* **workflow:** metric label WorkflowCompletionsTotal{workflow="ask",status="fallback_raw"} is removed and replaced by four fallback_* labels enumerated above. Dashboards keying on fallback_raw need to switch to a fallback_* regex or enumerate the new labels.
+
+### Features
+
+* **workflow:** extend Ask fallback to all parse failures with categorised metrics ([7580e1a](https://github.com/Ivantseng123/agentdock/commit/7580e1a8b76f1553fc0f2469e7023a52cb0e275b))
+* **workflow:** extend Ask fallback to cover all parse failures ([d9a4886](https://github.com/Ivantseng123/agentdock/commit/d9a48867a3e9e51c4d3fc69cb46b6e115c51eeaa))
+
+
+### Bug Fixes
+
+* **pr-review:** 修正 diff 來源與 422 錯誤訊息誤譯 ([8c0f0d0](https://github.com/Ivantseng123/agentdock/commit/8c0f0d09854ae7a0612cfcc242462f54f6f2d6b9))
+* **pr-review:** 將 diff 來源改為 PR API，並讓 422 錯誤帶出真正原因 ([d841108](https://github.com/Ivantseng123/agentdock/commit/d8411089873c3e8726b166919aecf0106ff45a42))
+
 ## [2.7.0](https://github.com/Ivantseng123/agentdock/compare/v2.6.3...v2.7.0) (2026-04-25)
 
 
