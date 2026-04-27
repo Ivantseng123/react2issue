@@ -28,14 +28,14 @@ var BuiltinAgents = map[string]AgentConfig{
 	"claude": {
 		Command:  "claude",
 		Args:     []string{"--print", "--output-format", "stream-json", "{extra_args}", "-p", "{prompt}"},
-		Timeout:  15 * time.Minute,
+		Timeout:  30 * time.Minute,
 		SkillDir: ".claude/skills",
 		Stream:   true,
 	},
 	"codex": {
 		Command: "codex",
 		Args:    []string{"exec", "--skip-git-repo-check", "--color", "never", "{extra_args}", "{prompt}"},
-		Timeout: 15 * time.Minute,
+		Timeout: 30 * time.Minute,
 		// Codex CLI discovers skills from .agents/skills (repo/CWD scope),
 		// NOT .codex/skills. See https://developers.openai.com/codex/skills.
 		SkillDir: ".agents/skills",
@@ -48,7 +48,7 @@ var BuiltinAgents = map[string]AgentConfig{
 		// first "I dispatched" text — before the sub-agents return a parseable
 		// TRIAGE_RESULT. Internal auth plugins still load, so credentials stay intact.
 		Args:     []string{"run", "--pure", "{extra_args}", "{prompt}"},
-		Timeout:  15 * time.Minute,
+		Timeout:  30 * time.Minute,
 		SkillDir: ".opencode/skills",
 	},
 }
