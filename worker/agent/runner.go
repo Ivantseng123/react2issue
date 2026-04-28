@@ -16,10 +16,6 @@ import (
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
-// extraArgsToken is the placeholder that substitutePlaceholders splices out
-// and replaces with AgentConfig.ExtraArgs elements.
-const extraArgsToken = "{extra_args}"
-
 // RunOptions provides per-call callbacks for agent execution.
 type RunOptions struct {
 	OnStarted func(pid int, command string)
@@ -81,24 +77,6 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 
 	const maxArgLen = 32 * 1024 // 32KB safe limit for command args
 
-	// Warn if the user has both a full args override (without {extra_args}) and
-	// extra_args set — the extra_args will be silently ignored in that case.
-	if len(agent.Args) > 0 && len(agent.ExtraArgs) > 0 {
-		hasExtraArgsToken := false
-		for _, a := range agent.Args {
-			if a == extraArgsToken {
-				hasExtraArgsToken = true
-				break
-			}
-		}
-		if !hasExtraArgsToken {
-			logger.Warn("agent has both args override and extra_args; extra_args ignored",
-				"phase", "處理中",
-				"command", agent.Command,
-			)
-		}
-	}
-
 	hasPromptPlaceholder := false
 	hasOutputFilePlaceholder := false
 	for _, a := range agent.Args {
@@ -135,13 +113,10 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	if useStdin && hasPromptPlaceholder {
 		// Prompt too large for args — drop the prompt arg, use stdin instead.
 		// {output_file} still substitutes in place; {prompt}-bearing args are
-		// skipped entirely.
+		// skipped entirely. {extra_args} is already gone (expandExtraArgs ran
+		// above), so this loop only handles the remaining string-valued slots.
 		for _, a := range expanded {
 			if strings.Contains(a, "{prompt}") {
-				continue
-			}
-			if a == extraArgsToken {
-				args = append(args, agent.ExtraArgs...)
 				continue
 			}
 			args = append(args, strings.ReplaceAll(a, "{output_file}", outputFile))

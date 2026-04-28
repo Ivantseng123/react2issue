@@ -347,6 +347,56 @@ echo "padding padding padding padding padding padding padding padding padding pa
 	}
 }
 
+// TestRunner_ExtraArgsSplicedInStdinPath covers the large-prompt path where
+// runOne drops the {prompt} arg and feeds the prompt via stdin. extra_args
+// must still splice into the same slot as the small-prompt path — both paths
+// share the single expandExtraArgs splice site.
+func TestRunner_ExtraArgsSplicedInStdinPath(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "argv-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+for a in "$@"; do echo "ARG=$a"; done
+echo "padding padding padding padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{
+		{
+			Command:   script,
+			Args:      []string{"run", "--pure", "{extra_args}", "{prompt}"},
+			ExtraArgs: []string{"-m", "opencode/claude-opus-4-7"},
+			Timeout:   5 * time.Second,
+		},
+	})
+	// 33KB prompt forces the stdin path (maxArgLen = 32KB).
+	bigPrompt := strings.Repeat("x", 33*1024)
+	output, err := runner.Run(context.Background(), slog.Default(), dir, bigPrompt, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	wantOrder := []string{
+		"ARG=run",
+		"ARG=--pure",
+		"ARG=-m",
+		"ARG=opencode/claude-opus-4-7",
+	}
+	idx := 0
+	for _, line := range strings.Split(output, "\n") {
+		if line == wantOrder[idx] {
+			idx++
+			if idx == len(wantOrder) {
+				break
+			}
+		}
+	}
+	if idx != len(wantOrder) {
+		t.Errorf("argv order wrong in stdin path. got output:\n%s\nstuck at wantOrder[%d]=%q", output, idx, wantOrder[idx])
+	}
+	// Prompt must NOT appear as an arg — it should have been dropped and sent via stdin.
+	if strings.Contains(output, "ARG=xxx") {
+		t.Errorf("prompt leaked into argv (should be on stdin), got:\n%s", output)
+	}
+}
+
 func TestRunner_CancelShortCircuitsProviderChain(t *testing.T) {
 	runner := &Runner{
 		agents: []config.AgentConfig{
