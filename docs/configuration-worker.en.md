@@ -97,10 +97,10 @@ agents:
 
 ### Precedence
 
-If you write both a full `args` override **and** `extra_args`, but the `args` override does not contain an `{extra_args}` token, `extra_args` is silently ignored and a startup warn is logged:
+If you write both a full `args` override **and** `extra_args`, but the `args` override does not contain an `{extra_args}` token, `extra_args` is silently ignored and a startup warn is logged (the message is in Chinese to match the repo's logging convention):
 
 ```
-agent has both args override and extra_args; extra_args ignored
+extra_args 被忽略：args 覆寫未包含 {extra_args} token  component=config phase=載入 agent=<name>
 ```
 
 Recommendation: **only write `extra_args` — do not copy the full args list.** That way you automatically get upstream args refreshes when built-ins change.

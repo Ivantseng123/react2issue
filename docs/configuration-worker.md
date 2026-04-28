@@ -97,7 +97,7 @@ agents:
 如果你同時寫了完整的 `args` override **和** `extra_args`，但 `args` 裡沒有 `{extra_args}` token，`extra_args` 會被忽略，啟動時會印 warn log：
 
 ```
-agent has both args override and extra_args; extra_args ignored
+extra_args 被忽略：args 覆寫未包含 {extra_args} token  component=config phase=載入 agent=<name>
 ```
 
 建議：**只寫 `extra_args`，不要複製整組 args** — 這樣之後 builtin 更新旗標時你會自動拿到。
