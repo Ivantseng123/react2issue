@@ -46,6 +46,55 @@ func TestRedisJobStore_Put_RespectsCancelledContext(t *testing.T) {
 	}
 }
 
+// TestRedisJobStore_AllMethods_RespectCancelledContext extends the #194
+// contract to every JobStore method, not just Put. The four txUpdate-backed
+// methods (UpdateStatus / SetWorker / SetAgentStatus, plus the read-only
+// GetByThread / ListPending / ListAll / Get / Delete paths) each rely on
+// honouring caller ctx for the latent-hang fix to hold. A future regression
+// that re-introduces context.Background() inside any one of them would slip
+// past a Put-only test.
+func TestRedisJobStore_AllMethods_RespectCancelledContext(t *testing.T) {
+	store := newTestStore(t, time.Minute)
+
+	// Seed one job under a healthy ctx so read paths have a real key to
+	// resolve; without this, "missing job" could shadow the ctx-cancelled
+	// assertion on Get / GetByThread / UpdateStatus.
+	seedCtx := context.Background()
+	if err := store.Put(seedCtx, makeJob("j-seed", "C1", "100.001")); err != nil {
+		t.Fatalf("seed Put: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cases := []struct {
+		name string
+		op   func() error
+	}{
+		{"Put", func() error { return store.Put(ctx, makeJob("j-x", "C2", "200.001")) }},
+		{"Get", func() error { _, err := store.Get(ctx, "j-seed"); return err }},
+		{"GetByThread", func() error { _, err := store.GetByThread(ctx, "C1", "100.001"); return err }},
+		{"ListPending", func() error { _, err := store.ListPending(ctx); return err }},
+		{"ListAll", func() error { _, err := store.ListAll(ctx); return err }},
+		{"UpdateStatus", func() error { return store.UpdateStatus(ctx, "j-seed", JobRunning) }},
+		{"SetWorker", func() error { return store.SetWorker(ctx, "j-seed", "worker-a") }},
+		{"SetAgentStatus", func() error { return store.SetAgentStatus(ctx, "j-seed", StatusReport{JobID: "j-seed"}) }},
+		{"Delete", func() error { return store.Delete(ctx, "j-seed") }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.op()
+			if err == nil {
+				t.Fatalf("%s with cancelled ctx should have errored, got nil", tc.name)
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s error = %v, want errors.Is(err, context.Canceled)", tc.name, err)
+			}
+		})
+	}
+}
+
 func TestRedisJobStore_PutAndGet(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t, time.Minute)
