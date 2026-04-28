@@ -63,7 +63,7 @@ func (w *PRReviewWorkflow) Type() string { return "pr_review" }
 // All three paths produce a Pending with identity fields (Reporter / ChannelName
 // / RequestID / TaskType) populated so BuildJob can reuse them later.
 func (w *PRReviewWorkflow) Trigger(ctx context.Context, ev TriggerEvent, args string) (NextStep, error) {
-	if !w.cfg.PRReview.IsEnabled() {
+	if !w.cfg.Workflows.PRReview.IsEnabled() {
 		return NextStep{Kind: NextStepError, ErrorText: "PR Review 尚未啟用，請聯絡管理員"}, nil
 	}
 
@@ -271,13 +271,13 @@ func (w *PRReviewWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
 			Branch:           st.HeadRef, // human-readable branch name for prompt
-			Goal:             w.cfg.Prompt.PRReview.Goal,
-			ResponseSchema:   w.cfg.Prompt.PRReview.ResponseSchema,
-			OutputRules:      w.cfg.Prompt.PRReview.OutputRules,
-			Language:         w.cfg.Prompt.Language,
+			Goal:             w.cfg.Workflows.PRReview.Prompt.Goal,
+			ResponseSchema:   w.cfg.Workflows.PRReview.Prompt.ResponseSchema,
+			OutputRules:      w.cfg.Workflows.PRReview.Prompt.OutputRules,
+			Language:         w.cfg.PromptDefaults.Language,
 			Channel:          p.ChannelName,
 			Reporter:         p.Reporter,
-			AllowWorkerRules: w.cfg.Prompt.IsWorkerRulesAllowed(),
+			AllowWorkerRules: w.cfg.PromptDefaults.IsWorkerRulesAllowed(),
 			// ThreadMessages / Attachments filled by downstream submit-helper.
 		},
 		WorkflowArgs: map[string]string{
@@ -318,20 +318,27 @@ func (w *PRReviewWorkflow) HandleResult(ctx context.Context, state *queue.JobSta
 		return w.post(job, fmt.Sprintf(":x: Review 失敗：parse error: %v", err))
 	}
 
+	// Redact configured secrets from any parsed agent field that ends up in
+	// Slack before rendering (#180).
+	summary := logging.Redact(parsed.Summary, w.cfg.Secrets)
+	reason := logging.Redact(parsed.Reason, w.cfg.Secrets)
+	severity := logging.Redact(parsed.Severity, w.cfg.Secrets)
+	parsedErr := logging.Redact(parsed.Error, w.cfg.Secrets)
+
 	switch parsed.Status {
 	case "POSTED":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "posted").Inc()
 		return w.post(job, fmt.Sprintf(
 			":white_check_mark: Review 完成 (severity: %s · %d comments, %d skipped) on %s\n> %s",
-			fallback(parsed.Severity, "unknown"), parsed.CommentsPosted, parsed.CommentsSkipped, prURL,
-			firstN(parsed.Summary, 200),
+			fallback(severity, "unknown"), parsed.CommentsPosted, parsed.CommentsSkipped, prURL,
+			firstN(summary, 200),
 		))
 	case "SKIPPED":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "skipped").Inc()
-		return w.post(job, fmt.Sprintf(":information_source: Review 跳過 (%s): %s", parsed.Reason, firstN(parsed.Summary, 200)))
+		return w.post(job, fmt.Sprintf(":information_source: Review 跳過 (%s): %s", reason, firstN(summary, 200)))
 	case "ERROR":
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "error").Inc()
-		return w.post(job, fmt.Sprintf(":x: Review 失敗：%s", parsed.Error))
+		return w.post(job, fmt.Sprintf(":x: Review 失敗：%s", parsedErr))
 	}
 	return nil
 }

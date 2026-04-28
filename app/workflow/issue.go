@@ -238,15 +238,15 @@ func (w *IssueWorkflow) BuildJob(ctx context.Context, p *Pending) (*queue.Job, s
 		Priority:    w.channelPriority(p.ChannelID),
 		SubmittedAt: time.Now(),
 		PromptContext: &queue.PromptContext{
-			Goal:             w.cfg.Prompt.Issue.Goal,
-			ResponseSchema:   w.cfg.Prompt.Issue.ResponseSchema,
-			OutputRules:      w.cfg.Prompt.Issue.OutputRules,
-			Language:         w.cfg.Prompt.Language,
+			Goal:             w.cfg.Workflows.Issue.Prompt.Goal,
+			ResponseSchema:   w.cfg.Workflows.Issue.Prompt.ResponseSchema,
+			OutputRules:      w.cfg.Workflows.Issue.Prompt.OutputRules,
+			Language:         w.cfg.PromptDefaults.Language,
 			ExtraDescription: st.ExtraDesc,
 			Branch:           st.SelectedBranch,
 			Channel:          p.ChannelName,
 			Reporter:         p.Reporter,
-			AllowWorkerRules: w.cfg.Prompt.IsWorkerRulesAllowed(),
+			AllowWorkerRules: w.cfg.PromptDefaults.IsWorkerRulesAllowed(),
 			// ThreadMessages, Attachments, Skills, EncryptedSecrets filled by Task 2.7 helper.
 		},
 	}
@@ -281,12 +281,14 @@ func (w *IssueWorkflow) HandleResult(ctx context.Context, state *queue.JobState,
 		w.handleFailure(state, r)
 		return nil
 	}
+	// Redact configured secrets that the agent may have echoed into Message
+	// before any branch can surface it (#180).
+	msg := logging.Redact(parsed.Message, w.cfg.Secrets)
 	switch parsed.Status {
 	case "REJECTED":
-		w.postLowConfidence(job, parsed.Message)
+		w.postLowConfidence(job, msg)
 		return nil
 	case "ERROR":
-		msg := parsed.Message
 		if msg == "" {
 			msg = "agent reported ERROR without message"
 		}
@@ -390,13 +392,22 @@ func (w *IssueWorkflow) createAndPostIssue(ctx context.Context, state *queue.Job
 		body = stripTriageSection(body)
 	}
 
+	// Redact any configured secrets that the agent may have echoed into its
+	// parsed output before it lands on a permanent public surface (#180).
+	title := logging.Redact(parsed.Title, w.cfg.Secrets)
+	body = logging.Redact(body, w.cfg.Secrets)
+	labels := make([]string, len(parsed.Labels))
+	for i, l := range parsed.Labels {
+		labels[i] = logging.Redact(string(l), w.cfg.Secrets)
+	}
+
 	branchInfo := ""
 	if job.Branch != "" {
 		branchInfo = fmt.Sprintf(" (branch: `%s`)", job.Branch)
 	}
 
 	owner, repo := splitRepo(job.Repo)
-	url, err := w.github.CreateIssue(ctx, owner, repo, parsed.Title, body, []string(parsed.Labels))
+	url, err := w.github.CreateIssue(ctx, owner, repo, title, body, labels)
 	if err != nil {
 		w.updateStatus(job, fmt.Sprintf(":warning: Triage 完成但建立 issue 失敗: %v", err))
 		return fmt.Errorf("github create issue: %w", err)
