@@ -13,8 +13,8 @@ var BuiltinAgents = map[string]AgentConfig{
 		Command: "claude",
 		// {extra_args} sits after --output-format stream-json and before -p
 		// because the claude CLI requires all option flags to appear before the
-		// -p/--print positional. Any extra flags (e.g. --model, --effort,
-		// --dangerously-skip-permissions) must therefore land here.
+		// -p/--print positional. Any extra flags (e.g. --model, --effort) must
+		// therefore land here.
 		Args:     []string{"--print", "--output-format", "stream-json", "{extra_args}", "-p", "{prompt}"},
 		Timeout:  30 * time.Minute,
 		SkillDir: ".claude/skills",
@@ -24,7 +24,7 @@ var BuiltinAgents = map[string]AgentConfig{
 		Command: "codex",
 		// {extra_args} sits between the fixed flags and the positional prompt
 		// argument. The codex exec sub-command accepts option flags anywhere
-		// before the positional, so extra flags (e.g. --sandbox) go here.
+		// before the positional, so extra flags (e.g. --reasoning-effort) go here.
 		Args:    []string{"exec", "--skip-git-repo-check", "--color", "never", "{extra_args}", "{prompt}"},
 		Timeout: 30 * time.Minute,
 		// Codex CLI discovers skills from .agents/skills (repo/CWD scope),

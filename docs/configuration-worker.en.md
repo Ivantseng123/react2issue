@@ -81,10 +81,10 @@ agents:
     extra_args: ["-m", "opencode/claude-opus-4-7"]    # pin a model
 
   claude:
-    extra_args: ["--dangerously-skip-permissions"]     # skip permission prompts (sandboxed env)
+    extra_args: ["--model", "claude-opus-4-7"]        # pin a model
 
   codex:
-    extra_args: ["--sandbox", "off"]                  # disable sandbox
+    extra_args: ["--reasoning-effort", "high"]        # raise reasoning effort
 ```
 
 ### Injection positions

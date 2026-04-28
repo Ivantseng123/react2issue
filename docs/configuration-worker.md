@@ -78,10 +78,10 @@ agents:
     extra_args: ["-m", "opencode/claude-opus-4-7"]    # 指定 model
 
   claude:
-    extra_args: ["--dangerously-skip-permissions"]     # 跳過 permission prompt（沙箱環境）
+    extra_args: ["--model", "claude-opus-4-7"]        # 指定 model
 
   codex:
-    extra_args: ["--sandbox", "off"]                  # 關掉 sandbox
+    extra_args: ["--reasoning-effort", "high"]        # 提升 reasoning effort
 ```
 
 ### 注入位置
