@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -243,91 +244,156 @@ func TestNewRunnerFromConfig_SingleProvider(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// substitutePlaceholders unit tests
-// ---------------------------------------------------------------------------
-
-func TestSubstitutePlaceholders_NilExtraArgs(t *testing.T) {
+func TestExpandExtraArgs_Nil(t *testing.T) {
 	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
-	got := substitutePlaceholders(args, nil, map[string]string{"{prompt}": "hello"})
-	want := []string{"run", "--pure", "hello"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
+	got := expandExtraArgs(args, nil)
+	want := []string{"run", "--pure", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+	// No empty string leftovers.
+	for _, a := range got {
+		if a == "" {
+			t.Errorf("empty-string arg leaked into result: %q", got)
 		}
 	}
 }
 
-func TestSubstitutePlaceholders_EmptyExtraArgs(t *testing.T) {
+func TestExpandExtraArgs_Empty(t *testing.T) {
 	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
-	got := substitutePlaceholders(args, []string{}, map[string]string{"{prompt}": "hello"})
-	want := []string{"run", "--pure", "hello"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
+	got := expandExtraArgs(args, []string{})
+	want := []string{"run", "--pure", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestSubstitutePlaceholders_SingleExtraArg(t *testing.T) {
+func TestExpandExtraArgs_Single(t *testing.T) {
 	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
-	got := substitutePlaceholders(args, []string{"-m", "opencode/claude-opus-4-7"}, map[string]string{"{prompt}": "hello"})
-	want := []string{"run", "--pure", "-m", "opencode/claude-opus-4-7", "hello"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
-		}
+	got := expandExtraArgs(args, []string{"--foo"})
+	want := []string{"run", "--pure", "--foo", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestSubstitutePlaceholders_MultiExtraArgs_OrderPreserved(t *testing.T) {
-	args := []string{"--print", "--output-format", "stream-json", "{extra_args}", "-p", "{prompt}"}
-	extra := []string{"--model", "claude-opus-4-7", "--effort", "high"}
-	got := substitutePlaceholders(args, extra, map[string]string{"{prompt}": "test"})
-	want := []string{"--print", "--output-format", "stream-json", "--model", "claude-opus-4-7", "--effort", "high", "-p", "test"}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
-		}
+func TestExpandExtraArgs_Multi(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	got := expandExtraArgs(args, []string{"-m", "opencode/claude-opus-4-7"})
+	want := []string{"run", "--pure", "-m", "opencode/claude-opus-4-7", "{prompt}"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-// TestRunner_ExtraArgsInjected is an integration-ish test: it verifies that the
-// runner passes extra_args to the subprocess at the correct position.
-func TestRunner_ExtraArgsInjected(t *testing.T) {
+// TestExpandExtraArgs_ThenStringSubstitute verifies the two-step pipeline used
+// by runOne: expandExtraArgs first, then substituteStringPlaceholders. After
+// both steps the argv must contain the extra args in the right slot AND the
+// substituted prompt.
+func TestExpandExtraArgs_ThenStringSubstitute(t *testing.T) {
+	args := []string{"run", "--pure", "{extra_args}", "{prompt}"}
+	expanded := expandExtraArgs(args, []string{"-m", "x"})
+	got := substituteStringPlaceholders(expanded, map[string]string{"{prompt}": "hi"})
+	want := []string{"run", "--pure", "-m", "x", "hi"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestRunner_ExtraArgsSpliced is the integration-ish check: spawn a real
+// process with a built-in-shaped Args ({prompt} at the end, {extra_args}
+// right before it) and verify the shell sees the extra flags between --pure
+// and the prompt positional.
+func TestRunner_ExtraArgsSpliced(t *testing.T) {
 	dir := t.TempDir()
-	script := dir + "/echo-args"
+	script := filepath.Join(dir, "argv-agent")
+	// Echo each positional on its own line so we can assert the exact ordering.
 	os.WriteFile(script, []byte(`#!/bin/sh
-# Print all args one per line so we can check position
-for a in "$@"; do printf '%s\n' "$a"; done
-echo "padding padding padding padding padding padding padding"
+for a in "$@"; do echo "ARG=$a"; done
+echo "padding padding padding padding padding padding padding padding padding padding"
 `), 0755)
 
 	runner := NewRunner([]config.AgentConfig{
 		{
 			Command:   script,
-			Args:      []string{"--flag-before", "{extra_args}", "--flag-after", "{prompt}"},
-			ExtraArgs: []string{"-x", "extra-val"},
+			Args:      []string{"run", "--pure", "{extra_args}", "{prompt}"},
+			ExtraArgs: []string{"-m", "opencode/claude-opus-4-7"},
 			Timeout:   5 * time.Second,
 		},
 	})
-
-	output, err := runner.Run(context.Background(), slog.Default(), dir, "myprompt", RunOptions{})
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "hello", RunOptions{})
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	if !strings.Contains(output, "-x") || !strings.Contains(output, "extra-val") {
-		t.Errorf("extra_args not in output: %q", output)
+	// Verify order: run, --pure, -m, opencode/claude-opus-4-7, hello
+	wantOrder := []string{
+		"ARG=run",
+		"ARG=--pure",
+		"ARG=-m",
+		"ARG=opencode/claude-opus-4-7",
+		"ARG=hello",
 	}
-	if !strings.Contains(output, "myprompt") {
-		t.Errorf("prompt not in output: %q", output)
+	idx := 0
+	for _, line := range strings.Split(output, "\n") {
+		if line == wantOrder[idx] {
+			idx++
+			if idx == len(wantOrder) {
+				break
+			}
+		}
+	}
+	if idx != len(wantOrder) {
+		t.Errorf("argv order wrong. got output:\n%s\nstuck at wantOrder[%d]=%q", output, idx, wantOrder[idx])
+	}
+}
+
+// TestRunner_ExtraArgsSplicedInStdinPath covers the large-prompt path where
+// runOne drops the {prompt} arg and feeds the prompt via stdin. extra_args
+// must still splice into the same slot as the small-prompt path — both paths
+// share the single expandExtraArgs splice site.
+func TestRunner_ExtraArgsSplicedInStdinPath(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "argv-agent")
+	os.WriteFile(script, []byte(`#!/bin/sh
+for a in "$@"; do echo "ARG=$a"; done
+echo "padding padding padding padding padding padding padding padding padding padding"
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{
+		{
+			Command:   script,
+			Args:      []string{"run", "--pure", "{extra_args}", "{prompt}"},
+			ExtraArgs: []string{"-m", "opencode/claude-opus-4-7"},
+			Timeout:   5 * time.Second,
+		},
+	})
+	// 33KB prompt forces the stdin path (maxArgLen = 32KB).
+	bigPrompt := strings.Repeat("x", 33*1024)
+	output, err := runner.Run(context.Background(), slog.Default(), dir, bigPrompt, RunOptions{})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	wantOrder := []string{
+		"ARG=run",
+		"ARG=--pure",
+		"ARG=-m",
+		"ARG=opencode/claude-opus-4-7",
+	}
+	idx := 0
+	for _, line := range strings.Split(output, "\n") {
+		if line == wantOrder[idx] {
+			idx++
+			if idx == len(wantOrder) {
+				break
+			}
+		}
+	}
+	if idx != len(wantOrder) {
+		t.Errorf("argv order wrong in stdin path. got output:\n%s\nstuck at wantOrder[%d]=%q", output, idx, wantOrder[idx])
+	}
+	// Prompt must NOT appear as an arg — it should have been dropped and sent via stdin.
+	if strings.Contains(output, "ARG=xxx") {
+		t.Errorf("prompt leaked into argv (should be on stdin), got:\n%s", output)
 	}
 }
 

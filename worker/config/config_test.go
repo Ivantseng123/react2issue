@@ -80,25 +80,16 @@ agents:
 	}
 }
 
-func TestAgentConfig_ExtraArgsUnmarshal(t *testing.T) {
+func TestLoadConfig_ExtraArgsUnmarshals(t *testing.T) {
 	cfg := loadFromString(t, `
 agents:
   opencode:
-    command: opencode
     extra_args: ["-m", "opencode/claude-opus-4-7"]
 `)
-	oc, ok := cfg.Agents["opencode"]
-	if !ok {
-		t.Fatal("agents.opencode missing after unmarshal")
-	}
-	if len(oc.ExtraArgs) != 2 {
-		t.Fatalf("ExtraArgs len = %d, want 2; got %v", len(oc.ExtraArgs), oc.ExtraArgs)
-	}
-	if oc.ExtraArgs[0] != "-m" {
-		t.Errorf("ExtraArgs[0] = %q, want \"-m\"", oc.ExtraArgs[0])
-	}
-	if oc.ExtraArgs[1] != "opencode/claude-opus-4-7" {
-		t.Errorf("ExtraArgs[1] = %q, want \"opencode/claude-opus-4-7\"", oc.ExtraArgs[1])
+	got := cfg.Agents["opencode"].ExtraArgs
+	want := []string{"-m", "opencode/claude-opus-4-7"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("ExtraArgs = %v, want %v", got, want)
 	}
 }
 

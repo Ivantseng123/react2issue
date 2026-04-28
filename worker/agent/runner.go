@@ -16,10 +16,6 @@ import (
 	"github.com/Ivantseng123/agentdock/worker/config"
 )
 
-// extraArgsToken is the placeholder that substitutePlaceholders splices out
-// and replaces with AgentConfig.ExtraArgs elements.
-const extraArgsToken = "{extra_args}"
-
 // RunOptions provides per-call callbacks for agent execution.
 type RunOptions struct {
 	OnStarted func(pid int, command string)
@@ -81,24 +77,6 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 
 	const maxArgLen = 32 * 1024 // 32KB safe limit for command args
 
-	// Warn if the user has both a full args override (without {extra_args}) and
-	// extra_args set — the extra_args will be silently ignored in that case.
-	if len(agent.Args) > 0 && len(agent.ExtraArgs) > 0 {
-		hasExtraArgsToken := false
-		for _, a := range agent.Args {
-			if a == extraArgsToken {
-				hasExtraArgsToken = true
-				break
-			}
-		}
-		if !hasExtraArgsToken {
-			logger.Warn("agent has both args override and extra_args; extra_args ignored",
-				"phase", "處理中",
-				"command", agent.Command,
-			)
-		}
-	}
-
 	hasPromptPlaceholder := false
 	hasOutputFilePlaceholder := false
 	for _, a := range agent.Args {
@@ -125,22 +103,27 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	}
 
 	useStdin := !hasPromptPlaceholder || len(prompt) >= maxArgLen
+
+	// Single splice site for {extra_args}. Both branches below operate on the
+	// already-expanded slice, so future placeholders / bug fixes only need to
+	// touch one place.
+	expanded := expandExtraArgs(agent.Args, agent.ExtraArgs)
+
 	var args []string
 	if useStdin && hasPromptPlaceholder {
 		// Prompt too large for args — drop the prompt arg, use stdin instead.
-		for _, a := range agent.Args {
+		// {output_file} still substitutes in place; {prompt}-bearing args are
+		// skipped entirely. {extra_args} is already gone (expandExtraArgs ran
+		// above), so this loop only handles the remaining string-valued slots.
+		for _, a := range expanded {
 			if strings.Contains(a, "{prompt}") {
-				continue
-			}
-			if a == extraArgsToken {
-				args = append(args, agent.ExtraArgs...)
 				continue
 			}
 			args = append(args, strings.ReplaceAll(a, "{output_file}", outputFile))
 		}
 		logger.Info("Prompt 過大，改用 stdin", "phase", "處理中", "prompt_len", len(prompt))
 	} else {
-		args = substitutePlaceholders(agent.Args, agent.ExtraArgs, map[string]string{
+		args = substituteStringPlaceholders(expanded, map[string]string{
 			"{prompt}":      prompt,
 			"{output_file}": outputFile,
 		})
@@ -267,20 +250,31 @@ func readOutput(ctx context.Context, r io.Reader, stream bool, onEvent func(queu
 	return result
 }
 
-// substitutePlaceholders expands placeholders in args.
-//
-// The extraArgsToken slot is treated as a splice point: if extraArgs is
-// non-empty the token slot is replaced with each element as a separate arg; if
-// extraArgs is nil or empty the slot is dropped entirely (no empty-string arg
-// is emitted). All other {key} tokens in values are replaced via
-// strings.ReplaceAll on the arg string.
-func substitutePlaceholders(args []string, extraArgs []string, values map[string]string) []string {
+// expandExtraArgs replaces every standalone "{extra_args}" element with zero
+// or more entries from extraArgs. nil/empty extraArgs drops the slot entirely
+// (no empty-string element leaks into the resulting argv). Substring matches
+// inside a larger string are NOT expanded — the token must stand alone as its
+// own arg. This is the single splice site for extra_args across both the
+// arg-prompt and stdin-prompt paths.
+func expandExtraArgs(args []string, extraArgs []string) []string {
 	result := make([]string, 0, len(args)+len(extraArgs))
 	for _, a := range args {
-		if a == extraArgsToken {
+		if a == config.ExtraArgsToken {
 			result = append(result, extraArgs...)
 			continue
 		}
+		result = append(result, a)
+	}
+	return result
+}
+
+// substituteStringPlaceholders applies strings.ReplaceAll for each (key, val)
+// pair to every element of args. Used only for string-valued placeholders
+// ({prompt}, {output_file}); list-valued {extra_args} must be expanded via
+// expandExtraArgs beforehand.
+func substituteStringPlaceholders(args []string, values map[string]string) []string {
+	result := make([]string, 0, len(args))
+	for _, a := range args {
 		for k, v := range values {
 			a = strings.ReplaceAll(a, k, v)
 		}
