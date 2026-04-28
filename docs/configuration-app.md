@@ -169,7 +169,7 @@ App 用 `JobStore` 追蹤每個 Job 的 lifecycle（Pending → Running → Comp
 `workflows.pr_review.enabled` **預設 `true`**（`github-pr-review` skill 和 `agentdock pr-review-helper` subcommand 都已經包進 release image，預設 opt-out 即可）。若要關掉，顯式寫 `workflows.pr_review.enabled: false`（舊寫法 `pr_review.enabled: false` 也仍被接受，但會走 legacy alias 路徑）。
 
 `@bot review <PR URL>` 走 PRReviewWorkflow；沒帶 URL 時會掃 thread、掃不到就開 modal。執行前確認：
-1. Worker 側已經載到 `github-pr-review` skill（`skills_config` 有指到 `agents/skills/github-pr-review`）。
+1. Worker 側已經載到 `github-pr-review` skill（`skills_config` 有指到 `app/agents/skills/github-pr-review`）。
 2. Worker container 的 `agentdock pr-review-helper` 可執行（內建 subcommand，app/worker binary 要同版）。
 3. `secrets.GH_TOKEN` 在目標 PR 有 review comments 權限。
 
