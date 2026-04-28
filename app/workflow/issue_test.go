@@ -256,6 +256,31 @@ func TestIssueWorkflow_HandleResult_NoSecrets_Unchanged(t *testing.T) {
 	}
 }
 
+// TestIssueWorkflow_HandleResult_RejectedMessage_RedactsSecrets pins #180:
+// secrets echoed by the agent into a REJECTED parsed.Message must be scrubbed
+// before postLowConfidence forwards it to Slack.
+func TestIssueWorkflow_HandleResult_RejectedMessage_RedactsSecrets(t *testing.T) {
+	const secret = "tokenABC1234567890"
+	w, slack, _ := newTestIssueWorkflow(t, withSecrets(map[string]string{"GH_TOKEN": secret}))
+	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", Repo: "foo/bar", StatusMsgTS: "s-ts", TaskType: "issue"}
+	state := &queue.JobState{Job: job}
+	result := &queue.JobResult{
+		JobID: "j1", Status: "completed",
+		RawOutput: `===TRIAGE_RESULT===
+{"status":"REJECTED","message":"not our repo, leaked ` + secret + ` here"}`,
+	}
+	if err := w.HandleResult(context.Background(), state, result); err != nil {
+		t.Fatalf("HandleResult: %v", err)
+	}
+	joined := strings.Join(slack.Posted, " | ")
+	if strings.Contains(joined, secret) {
+		t.Errorf("posted REJECTED message leaked secret: %v", slack.Posted)
+	}
+	if !strings.Contains(joined, "***") {
+		t.Errorf("posted message missing redaction marker: %v", slack.Posted)
+	}
+}
+
 func TestIssueWorkflow_HandleResult_Rejected_PostsLowConfidence(t *testing.T) {
 	w, slack, _ := newTestIssueWorkflow(t)
 	job := &queue.Job{ID: "j1", ChannelID: "C1", ThreadTS: "1.0", StatusMsgTS: "s-ts", TaskType: "issue"}

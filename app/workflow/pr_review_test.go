@@ -214,6 +214,10 @@ func TestPRReviewWorkflow_HandleResult_RedactsSecretsInSummary(t *testing.T) {
 			rawJSON: `{"status":"POSTED","summary":"token ` + secret + ` leaked","comments_posted":1,"severity_summary":"clean"}`,
 		},
 		{
+			name:    "posted_severity",
+			rawJSON: `{"status":"POSTED","summary":"all good","comments_posted":1,"severity_summary":"sev-` + secret + `"}`,
+		},
+		{
 			name:    "skipped_reason_and_summary",
 			rawJSON: `{"status":"SKIPPED","reason":"skip because ` + secret + `","summary":"summary with ` + secret + `"}`,
 		},

@@ -322,6 +322,7 @@ func (w *PRReviewWorkflow) HandleResult(ctx context.Context, state *queue.JobSta
 	// Slack before rendering (#180).
 	summary := logging.Redact(parsed.Summary, w.cfg.Secrets)
 	reason := logging.Redact(parsed.Reason, w.cfg.Secrets)
+	severity := logging.Redact(parsed.Severity, w.cfg.Secrets)
 	parsedErr := logging.Redact(parsed.Error, w.cfg.Secrets)
 
 	switch parsed.Status {
@@ -329,7 +330,7 @@ func (w *PRReviewWorkflow) HandleResult(ctx context.Context, state *queue.JobSta
 		metrics.WorkflowCompletionsTotal.WithLabelValues("pr_review", "posted").Inc()
 		return w.post(job, fmt.Sprintf(
 			":white_check_mark: Review 完成 (severity: %s · %d comments, %d skipped) on %s\n> %s",
-			fallback(parsed.Severity, "unknown"), parsed.CommentsPosted, parsed.CommentsSkipped, prURL,
+			fallback(severity, "unknown"), parsed.CommentsPosted, parsed.CommentsSkipped, prURL,
 			firstN(summary, 200),
 		))
 	case "SKIPPED":

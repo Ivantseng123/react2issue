@@ -272,12 +272,14 @@ func (w *IssueWorkflow) HandleResult(ctx context.Context, state *queue.JobState,
 		w.handleFailure(state, r)
 		return nil
 	}
+	// Redact configured secrets that the agent may have echoed into Message
+	// before any branch can surface it (#180).
+	msg := logging.Redact(parsed.Message, w.cfg.Secrets)
 	switch parsed.Status {
 	case "REJECTED":
-		w.postLowConfidence(job, parsed.Message)
+		w.postLowConfidence(job, msg)
 		return nil
 	case "ERROR":
-		msg := parsed.Message
 		if msg == "" {
 			msg = "agent reported ERROR without message"
 		}
