@@ -236,6 +236,12 @@ func TestAskWorkflow_Selection_AttachExternalSearchIncludesCancel(t *testing.T) 
 
 func TestAskWorkflow_Selection_BranchPickGoesToDescriptionPrompt(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
+	// Channel has just one repo (== the primary about to be picked), so
+	// after branch pick maybeAskRefStep finds 0 ref candidates and falls
+	// through to the description prompt without showing ref_decide. Without
+	// this static list, the channel would default to external search and
+	// the new ref flow would always offer a decide step.
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar"}
 	p := &Pending{Phase: "ask_branch_select", State: &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"}, ChannelID: "C1", ThreadTS: "1.0"}
 	step, err := w.Selection(context.Background(), p, "feature/xyz")
 	if err != nil {
@@ -260,6 +266,9 @@ func TestAskWorkflow_Selection_SingleBranchSkipsSelector(t *testing.T) {
 	trueVal := true
 	w.cfg.ChannelDefaults.BranchSelect = &trueVal
 	w.cfg.ChannelDefaults.Branches = []string{"main"}
+	// Same single-repo channel setup as the branch-pick test — keeps this
+	// test focused on the branch-skip behaviour, not on the ref flow.
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar"}
 	p := &Pending{Phase: "ask_repo_select", State: &askState{Question: "Q", AttachRepo: true}, ChannelID: "C1", ThreadTS: "1.0"}
 	step, err := w.Selection(context.Background(), p, "foo/bar")
 	if err != nil {
@@ -852,4 +861,521 @@ func TestAskWorkflow_HandleResult_SchemaPathHasNoBanner(t *testing.T) {
 	if !strings.Contains(last, "the answer is 42") {
 		t.Errorf("schema path must post the parsed answer; posted: %q", last)
 	}
+}
+
+// ── Multi-repo (ref) tests ───────────────────────────────────────────────────
+
+// TestAskWorkflow_RefFlow_DecidePromptOffered covers the entry to the ref
+// flow after primary branch is picked: ref candidates exist (channel has
+// extra repos beyond primary) so ask_ref_decide fires.
+func TestAskWorkflow_RefFlow_DecidePromptOffered(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux", "third/repo"}
+	p := &Pending{
+		Phase:     "ask_branch_select",
+		State:     &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_decide" {
+		t.Fatalf("Phase = %q, want ask_ref_decide", p.Phase)
+	}
+	if len(step.Selector.Options) != 2 {
+		t.Errorf("decide selector should have 2 options (加入/不用), got %d", len(step.Selector.Options))
+	}
+}
+
+// TestAskWorkflow_RefFlow_ZeroCandidatesSkipsDecide covers AC-12: when the
+// channel's static repo list contains only primary, the ref decide phase
+// is skipped entirely so the thread doesn't see "加入參考 repo？".
+func TestAskWorkflow_RefFlow_ZeroCandidatesSkipsDecide(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar"} // primary == only repo
+	p := &Pending{
+		Phase:     "ask_branch_select",
+		State:     &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase == "ask_ref_decide" {
+		t.Errorf("Phase = ask_ref_decide; want it skipped (0 candidates)")
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+}
+
+// TestAskWorkflow_RefFlow_DecideAddRoutesToPick covers the "加入" → ref pick
+// transition. AddRefs flips true and the picker phase appears.
+func TestAskWorkflow_RefFlow_DecideAddRoutesToPick(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
+	p := &Pending{
+		Phase:     "ask_ref_decide",
+		State:     &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "add")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_pick" {
+		t.Errorf("Phase = %q, want ask_ref_pick", p.Phase)
+	}
+	st := p.State.(*askState)
+	if !st.AddRefs {
+		t.Error("AddRefs should be true after 加入")
+	}
+}
+
+// TestAskWorkflow_RefFlow_DecideSkipRoutesToPriorAnswer covers the "不用"
+// path — AddRefs stays false and we proceed to the existing prior-answer/
+// description flow without touching ref state.
+func TestAskWorkflow_RefFlow_DecideSkipRoutesToPriorAnswer(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
+	p := &Pending{
+		Phase:     "ask_ref_decide",
+		State:     &askState{Question: "Q", AttachRepo: true, SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "skip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.AddRefs {
+		t.Error("AddRefs should remain false after skip")
+	}
+	if len(st.RefRepos) != 0 {
+		t.Errorf("RefRepos should be empty, got %v", st.RefRepos)
+	}
+}
+
+// TestAskWorkflow_RefFlow_PickFiltersPrimary covers AC-10: primary must not
+// appear in the ref candidate list.
+func TestAskWorkflow_RefFlow_PickFiltersPrimary(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux", "third/repo"}
+	p := &Pending{
+		Phase:     "ask_ref_decide",
+		State:     &askState{AttachRepo: true, SelectedRepo: "foo/bar"},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "add")
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := selectorValues(step.Selector.Options)
+	for _, v := range values {
+		if v == "foo/bar" {
+			t.Errorf("primary foo/bar must not appear in ref candidates; got %v", values)
+		}
+	}
+	// Should contain the two non-primary repos + the back option.
+	wantSet := map[string]bool{"baz/qux": true, "third/repo": true, "back_to_decide": true}
+	for _, v := range values {
+		if !wantSet[v] {
+			t.Errorf("unexpected ref candidate value: %q (got %v)", v, values)
+		}
+	}
+}
+
+// TestAskWorkflow_RefFlow_PickGoesToContinueWhenNoBranchSelect covers
+// the inline flow: pick a ref → branch_select disabled → branch loop
+// drains instantly → land on continue ("再加一個 / 開始問問題"). Without
+// branch_select, this is the natural shape.
+func TestAskWorkflow_RefFlow_PickGoesToContinueWhenNoBranchSelect(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	// branch_select default false → ref branch picker skipped per ref.
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux", "third/repo"}
+	p := &Pending{
+		Phase:     "ask_ref_pick",
+		State:     &askState{AttachRepo: true, SelectedRepo: "foo/bar", AddRefs: true},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "baz/qux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_continue" {
+		t.Errorf("Phase = %q, want ask_ref_continue", p.Phase)
+	}
+	st := p.State.(*askState)
+	if len(st.RefRepos) != 1 || st.RefRepos[0].Repo != "baz/qux" {
+		t.Errorf("RefRepos = %v, want one entry of baz/qux", st.RefRepos)
+	}
+	if st.RefRepos[0].CloneURL == "" {
+		t.Error("RefRepos[0].CloneURL should be populated by cleanCloneURL")
+	}
+	values := selectorValues(step.Selector.Options)
+	wantSet := map[string]bool{"more": true, "done": true}
+	for _, v := range values {
+		if !wantSet[v] {
+			t.Errorf("unexpected continue option %q (got %v)", v, values)
+		}
+	}
+}
+
+// TestAskWorkflow_RefFlow_PickGoesToBranchWhenBranchSelect covers the
+// inline interleaved flow: pick a ref → ask_ref_branch fires for THAT ref
+// (not all refs collected first). User-reported UX bug: collecting all
+// refs before any branches asks "did I want main for frontend or backend?"
+// 3 refs later, which is wrong. Inline matches primary's flow shape.
+func TestAskWorkflow_RefFlow_PickGoesToBranchWhenBranchSelect(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	trueVal := true
+	w.cfg.ChannelDefaults.BranchSelect = &trueVal
+	w.cfg.ChannelDefaults.Branches = []string{"main", "release"}
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux", "third/repo"}
+	p := &Pending{
+		Phase:     "ask_ref_pick",
+		State:     &askState{AttachRepo: true, SelectedRepo: "foo/bar", AddRefs: true},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "baz/qux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_branch" {
+		t.Fatalf("Phase = %q, want ask_ref_branch (inline branch pick)", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.BranchTargetRepo != "baz/qux" {
+		t.Errorf("BranchTargetRepo = %q, want baz/qux (the just-picked ref)", st.BranchTargetRepo)
+	}
+	if !strings.Contains(step.Selector.Prompt, "baz/qux") {
+		t.Errorf("prompt should reference baz/qux; got %q", step.Selector.Prompt)
+	}
+}
+
+// TestAskWorkflow_RefFlow_PickDedupAlreadyPicked covers AC-11: same repo
+// can't appear twice in the candidate list.
+func TestAskWorkflow_RefFlow_PickDedupAlreadyPicked(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux", "third/repo"}
+	p := &Pending{
+		Phase: "ask_ref_continue",
+		State: &askState{
+			AttachRepo:   true,
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+			RefRepos:     []queue.RefRepo{{Repo: "baz/qux", CloneURL: "https://github.com/baz/qux.git"}},
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	// Click "再加一個" → should show pick selector with baz/qux excluded.
+	step, err := w.Selection(context.Background(), p, "more")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_pick" {
+		t.Errorf("Phase = %q, want ask_ref_pick", p.Phase)
+	}
+	values := selectorValues(step.Selector.Options)
+	for _, v := range values {
+		if v == "baz/qux" {
+			t.Errorf("already-picked baz/qux must not appear in candidates; got %v", values)
+		}
+	}
+	// third/repo must still be available.
+	found := false
+	for _, v := range values {
+		if v == "third/repo" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("third/repo missing from candidates: %v", values)
+	}
+}
+
+// TestAskWorkflow_RefFlow_ContinueExhaustedPoolHidesMore covers a UX detail:
+// when the static candidate pool is fully consumed, "再加一個" drops from
+// the continue selector since there's nothing to pick. Picks the only
+// remaining ref (baz/qux); branch_select disabled so we land directly on
+// the continue selector with the exhausted pool.
+func TestAskWorkflow_RefFlow_ContinueExhaustedPoolHidesMore(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
+	p := &Pending{
+		Phase: "ask_ref_pick",
+		State: &askState{
+			AttachRepo:   true,
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "baz/qux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_continue" {
+		t.Fatalf("Phase = %q, want ask_ref_continue (no branch_select → straight to continue)", p.Phase)
+	}
+	values := selectorValues(step.Selector.Options)
+	for _, v := range values {
+		if v == "more" {
+			t.Errorf("'more' option should be hidden when pool is exhausted; got %v", values)
+		}
+	}
+	if len(values) != 1 || values[0] != "done" {
+		t.Errorf("expected only 'done' option, got %v", values)
+	}
+}
+
+// TestAskWorkflow_RefFlow_ContinueDoneRoutesToDescription covers
+// "開始問問題" — exits the ref loop entirely. Branches are already filled
+// per-ref during pick (inline flow), so done has no branch loop to enter;
+// it goes straight to prior-answer/description.
+func TestAskWorkflow_RefFlow_ContinueDoneRoutesToDescription(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
+	p := &Pending{
+		Phase: "ask_ref_continue",
+		State: &askState{
+			AttachRepo:   true,
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+			RefRepos: []queue.RefRepo{
+				{Repo: "baz/qux", CloneURL: "https://github.com/baz/qux.git"},
+			},
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	_, err := w.Selection(context.Background(), p, "done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+	}
+}
+
+// TestAskWorkflow_RefFlow_InlineBranchPickerPerRef covers the full inline
+// flow: pick ref1 → branch1 → continue → pick ref2 → branch2 → done. Each
+// ref's branch is asked immediately after picking that ref, not deferred
+// to a separate end-of-flow loop. RefBranchIdx tracks which ref we're
+// branch-picking for so RefRepos[idx].Branch lands on the right ref.
+func TestAskWorkflow_RefFlow_InlineBranchPickerPerRef(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	trueVal := true
+	w.cfg.ChannelDefaults.BranchSelect = &trueVal
+	w.cfg.ChannelDefaults.Branches = []string{"main", "release"}
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "frontend/web", "backend/api"}
+	p := &Pending{
+		Phase: "ask_ref_pick",
+		State: &askState{
+			AttachRepo:   true,
+			SelectedRepo: "foo/bar",
+			AddRefs:      true,
+		},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+
+	// Pick ref1 → branch picker fires for ref1 immediately.
+	step, err := w.Selection(context.Background(), p, "frontend/web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_branch" {
+		t.Fatalf("after ref1 pick, Phase = %q, want ask_ref_branch", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.BranchTargetRepo != "frontend/web" {
+		t.Errorf("BranchTargetRepo = %q, want frontend/web", st.BranchTargetRepo)
+	}
+	if !strings.Contains(step.Selector.Prompt, "frontend/web") {
+		t.Errorf("prompt should reference frontend/web; got %q", step.Selector.Prompt)
+	}
+
+	// Pick ref1's branch → loop pivot (continue selector).
+	_, err = w.Selection(context.Background(), p, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_continue" {
+		t.Fatalf("after ref1 branch pick, Phase = %q, want ask_ref_continue", p.Phase)
+	}
+	if st.RefRepos[0].Branch != "main" {
+		t.Errorf("ref[0].Branch = %q, want main", st.RefRepos[0].Branch)
+	}
+
+	// "再加一個" → back to pick.
+	_, err = w.Selection(context.Background(), p, "more")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_pick" {
+		t.Fatalf("after 'more', Phase = %q, want ask_ref_pick", p.Phase)
+	}
+
+	// Pick ref2 → its branch picker fires.
+	_, err = w.Selection(context.Background(), p, "backend/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_branch" {
+		t.Fatalf("after ref2 pick, Phase = %q, want ask_ref_branch", p.Phase)
+	}
+	if st.BranchTargetRepo != "backend/api" {
+		t.Errorf("BranchTargetRepo = %q, want backend/api", st.BranchTargetRepo)
+	}
+
+	// Pick ref2's branch → continue → done.
+	_, err = w.Selection(context.Background(), p, "release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_continue" {
+		t.Fatalf("after ref2 branch pick, Phase = %q, want ask_ref_continue", p.Phase)
+	}
+	if st.RefRepos[1].Branch != "release" {
+		t.Errorf("ref[1].Branch = %q, want release", st.RefRepos[1].Branch)
+	}
+
+	_, err = w.Selection(context.Background(), p, "done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_description_prompt" {
+		t.Errorf("after 'done', Phase = %q, want ask_description_prompt", p.Phase)
+	}
+}
+
+// TestAskWorkflow_BuildJob_WithRefs_PopulatesJobAndRules covers Task 8:
+// Job.RefRepos passthrough + dynamic output_rules injection. When refs are
+// present, the two hard rules from spec §4.6 must be appended to the
+// configured OutputRules — preserving any rules already set on the
+// workflow's prompt config.
+func TestAskWorkflow_BuildJob_WithRefs_PopulatesJobAndRules(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.Workflows.Ask.Prompt.Goal = "ask"
+	w.cfg.Workflows.Ask.Prompt.OutputRules = []string{"existing rule"}
+	p := &Pending{
+		ChannelID:   "C1",
+		ThreadTS:    "1.0",
+		Reporter:    "Alice",
+		ChannelName: "general",
+		State: &askState{
+			Question:     "x",
+			AttachRepo:   true,
+			SelectedRepo: "foo/bar",
+			RefRepos: []queue.RefRepo{
+				{Repo: "frontend/web", CloneURL: "https://github.com/frontend/web.git", Branch: "main"},
+				{Repo: "backend/api", CloneURL: "https://github.com/backend/api.git"},
+			},
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.RefRepos) != 2 {
+		t.Errorf("Job.RefRepos len = %d, want 2", len(job.RefRepos))
+	}
+	rules := job.PromptContext.OutputRules
+	if len(rules) != 3 {
+		t.Fatalf("OutputRules len = %d, want 3 (existing + 2 injected); got %v", len(rules), rules)
+	}
+	if rules[0] != "existing rule" {
+		t.Errorf("existing rule should remain at index 0; got %q", rules[0])
+	}
+	if !strings.Contains(rules[1], "不可寫入") {
+		t.Errorf("first injected rule should be read-only enforcement; got %q", rules[1])
+	}
+	if !strings.Contains(rules[2], "critical") && !strings.Contains(rules[2], "關鍵 ref") {
+		t.Errorf("second injected rule should be critical-fail-fast; got %q", rules[2])
+	}
+}
+
+// TestAskWorkflow_BuildJob_NoRefs_NoRulesInjected covers the regression
+// case: when no refs are picked, output_rules is exactly the configured
+// list (no injection).
+func TestAskWorkflow_BuildJob_NoRefs_NoRulesInjected(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	w.cfg.Workflows.Ask.Prompt.Goal = "ask"
+	w.cfg.Workflows.Ask.Prompt.OutputRules = []string{"existing rule"}
+	p := &Pending{
+		ChannelID:   "C1",
+		ThreadTS:    "1.0",
+		Reporter:    "Alice",
+		ChannelName: "general",
+		State: &askState{
+			Question:     "x",
+			AttachRepo:   true,
+			SelectedRepo: "foo/bar",
+		},
+	}
+	job, _, err := w.BuildJob(context.Background(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(job.RefRepos) != 0 {
+		t.Errorf("Job.RefRepos = %v, want empty", job.RefRepos)
+	}
+	rules := job.PromptContext.OutputRules
+	if len(rules) != 1 || rules[0] != "existing rule" {
+		t.Errorf("OutputRules = %v, want only 'existing rule'", rules)
+	}
+}
+
+// TestAskState_RefExclusions_PrimaryAndPicked covers the RefExclusionReader
+// implementation used by HandleRefRepoSuggestion to filter type-ahead
+// results in external-search channels.
+func TestAskState_RefExclusions_PrimaryAndPicked(t *testing.T) {
+	st := &askState{
+		SelectedRepo: "foo/bar",
+		RefRepos: []queue.RefRepo{
+			{Repo: "frontend/web"},
+			{Repo: "backend/api"},
+		},
+	}
+	excl := st.RefExclusions()
+	if len(excl) != 3 {
+		t.Fatalf("RefExclusions len = %d, want 3 (primary + 2 picked)", len(excl))
+	}
+	want := map[string]bool{"foo/bar": true, "frontend/web": true, "backend/api": true}
+	for _, r := range excl {
+		if !want[r] {
+			t.Errorf("unexpected exclusion: %q", r)
+		}
+	}
+}
+
+// TestAskState_BranchSelectedRepo_FollowsBranchTarget asserts the
+// transient field swap that lets a single BranchStateReader interface
+// serve both primary and per-ref branch picking.
+func TestAskState_BranchSelectedRepo_FollowsBranchTarget(t *testing.T) {
+	st := &askState{
+		SelectedRepo:     "foo/bar",
+		BranchTargetRepo: "foo/bar",
+	}
+	if got := st.BranchSelectedRepo(); got != "foo/bar" {
+		t.Errorf("primary phase: BranchSelectedRepo = %q, want foo/bar", got)
+	}
+	st.BranchTargetRepo = "frontend/web"
+	if got := st.BranchSelectedRepo(); got != "frontend/web" {
+		t.Errorf("ref phase: BranchSelectedRepo = %q, want frontend/web", got)
+	}
+}
+
+// selectorValues extracts Value strings from a SelectorOption slice for
+// quick assertions in tests.
+func selectorValues(opts []SelectorOption) []string {
+	out := make([]string, 0, len(opts))
+	for _, o := range opts {
+		out = append(out, o.Value)
+	}
+	return out
 }

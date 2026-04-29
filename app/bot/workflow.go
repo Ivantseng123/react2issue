@@ -18,7 +18,13 @@ import (
 // evicted and the thread is condensed to the "selection timed out"
 // breadcrumb. Per-Workflow field so tests can shorten it without racing on
 // package state.
-const defaultPendingTimeout = 1 * time.Minute
+//
+// 5min covers realistic human pauses between clicks (re-reading the
+// prompt, switching context to verify a repo name) without keeping
+// abandoned sessions alive forever. Was 1min — too tight for the new
+// multi-step Ask ref flow (#216) where a 4-ref pick takes more clicks
+// than the previous max.
+const defaultPendingTimeout = 5 * time.Minute
 
 // Workflow is the thin Slack-side handler. Real triage logic lives in
 // app/workflow workflows reached through the dispatcher.
@@ -155,6 +161,44 @@ func (w *Workflow) HandleRepoSuggestion(query string) []string {
 	return repos
 }
 
+// HandleRefRepoSuggestion is the ref-pick variant of HandleRepoSuggestion:
+// runs the same repoDiscovery search, then filters out repos returned by
+// the pending state's RefExclusionReader (primary + already-picked refs).
+// When the state doesn't implement RefExclusionReader, falls through with
+// no filtering — defensive, but workflows that use ask_ref should always
+// implement the interface.
+func (w *Workflow) HandleRefRepoSuggestion(selectorMsgTS, query string) []string {
+	if w.repoDiscovery == nil {
+		return nil
+	}
+	repos, err := w.repoDiscovery.SearchRepos(context.Background(), query)
+	if err != nil {
+		slog.Warn("Ref repo 搜尋失敗", "phase", "失敗", "error", err)
+		return nil
+	}
+	w.mu.Lock()
+	pending, ok := w.pending[selectorMsgTS]
+	w.mu.Unlock()
+	if !ok || pending == nil {
+		return repos
+	}
+	excluder, ok := pending.State.(workflow.RefExclusionReader)
+	if !ok {
+		return repos
+	}
+	excluded := make(map[string]bool)
+	for _, r := range excluder.RefExclusions() {
+		excluded[r] = true
+	}
+	out := repos[:0:len(repos)]
+	for _, r := range repos {
+		if !excluded[r] {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // maxBranchSuggestions caps the type-ahead result list. External_select is
 // also bounded at 100 options per Slack's own API limit.
 const maxBranchSuggestions = 100
@@ -250,6 +294,15 @@ var transitionalValues = map[string]bool{
 	"跳過":             true, // description prompt: "跳過"
 	"back_to_repo":   true, // issue/ask back button to repo picker
 	"back_to_attach": true, // ask back from repo picker to attach prompt
+	// Ref flow (#216) — every navigation pivot is a no-info choice; the
+	// substantive picks are the ref repo + branch themselves, which still
+	// leave breadcrumbs. Without these markings, a 3-ref ask grows by
+	// 8+ extra ack lines (decide+more*N+done+back).
+	"add":            true, // ask_ref_decide: "加入"
+	"more":           true, // ask_ref_continue: "再加一個 ref"
+	"done":           true, // ask_ref_continue: "開始問問題"
+	"back_to_decide": true, // ask_ref_pick: "← 不加 ref" (static button value)
+	"← 不加 ref":       true, // ask_ref_pick: external_select cancel button label
 }
 
 // isTransitionalValue reports whether a selection value represents a pure
@@ -306,8 +359,23 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, tr
 		// cleanup keeps this one, deletes everything else.
 		pending.DSelectorAckTS = selectorMsgTS
 		pending.SessionMsgTSs = removeTS(pending.SessionMsgTSs, selectorMsgTS)
+	} else if pending.NextAckMerges && pending.LastAckTS != "" && pending.LastAckValue != "" {
+		// Merge into the previous breadcrumb: e.g. "✅ owner/repo" becomes
+		// "✅ owner/repo, main" after the branch pick. Drops the standalone
+		// branch ack line so the thread doesn't show two breadcrumbs for
+		// what reads to the user as a single (repo + branch) decision.
+		combined := pending.LastAckValue + ", " + value
+		_ = w.slack.UpdateMessage(channelID, pending.LastAckTS, ":white_check_mark: "+combined)
+		_ = w.slack.DeleteMessage(channelID, selectorMsgTS)
+		pending.SessionMsgTSs = removeTS(pending.SessionMsgTSs, selectorMsgTS)
+		pending.LastAckValue = combined
+		// LastAckTS unchanged — still pointing at the merged breadcrumb.
 	} else {
 		_ = w.slack.UpdateMessage(channelID, selectorMsgTS, ":white_check_mark: "+value)
+		// Track this ack so a later MergeWithLastAck selector can fold its
+		// pick into our breadcrumb instead of leaving a standalone line.
+		pending.LastAckTS = selectorMsgTS
+		pending.LastAckValue = value
 		// Remember the repo ack so a later "重新選 repo" click can delete it —
 		// otherwise every rejected repo pick leaves behind a ":white_check_mark:
 		// owner/repo" line the user already disowned.
@@ -315,6 +383,10 @@ func (w *Workflow) HandleSelection(channelID, actionID, value, selectorMsgTS, tr
 			pending.RepoAckTS = selectorMsgTS
 		}
 	}
+	// Single-shot flag: reset whether or not we merged this round, so the
+	// next selector's MergeWithLastAck (or its absence) is the authoritative
+	// signal — never carry a stale true forward.
+	pending.NextAckMerges = false
 	step, err := w.dispatcher.HandleSelection(ctx, pending, value)
 	if err != nil {
 		w.logger.Error("HandleSelection dispatch failed", "phase", "失敗", "error", err)
@@ -604,6 +676,10 @@ func (w *Workflow) executeStep(ctx context.Context, pending *workflow.Pending, s
 			}
 			return
 		}
+		// Latch MergeWithLastAck onto pending so the next click merges its
+		// ack into the previous breadcrumb. Always set explicitly (true OR
+		// false) so a stale "true" from a prior selector can't carry over.
+		pending.NextAckMerges = step.Selector.MergeWithLastAck
 		w.storePending(selectorTS, pending)
 
 	case workflow.NextStepOpenModal:

@@ -69,10 +69,26 @@ func selectProvider(job *queue.Job, repo RepoProvider, token string) WorkDirProv
 }
 
 // refsRootPath returns the directory in which ref worktrees live, derived
-// from the primary worktree path. The "-refs" suffix keeps ref dirs in the
-// same parent (the cache's worktrees/) so existing cleanup paths cover them.
+// from the primary worktree path.
+//
+// Refs sit INSIDE primary's worktree at `.refs/`. This contradicts the
+// original spec §1 design (refs outside primary cwd), which the spec
+// justified by avoiding `.gitignore` inheritance and cleanup nesting. That
+// design was reversed during initial e2e testing because opencode's
+// sandbox blocks any path outside cwd as `external_directory` — the
+// agent literally cannot READ refs that live outside its working
+// directory. The whole multi-repo feature collapses without inside-cwd
+// access. The earlier `-refs` sibling layout left agents staring at
+// "讓我檢查允許存取的目錄" before falling through to schema-fallback with
+// a 154-byte truncated answer.
+//
+// `.gitignore` inheritance is a much smaller risk in practice: primary's
+// `.gitignore` is unlikely to match `.refs/` (no real project uses that
+// path), and ripgrep traverses subdirs by default. The original "spike to
+// validate" assumption from spec §6 turned out to be the wrong
+// assumption — sandbox boundaries dominate `.gitignore` propagation.
 func refsRootPath(primaryPath string) string {
-	return primaryPath + "-refs"
+	return filepath.Join(primaryPath, ".refs")
 }
 
 // refDirName flattens owner/name → owner__name. GitHub disallows __ in repo
