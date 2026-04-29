@@ -234,8 +234,12 @@ func TestPrepareRefs_PartialSuccess(t *testing.T) {
 	if len(successfulPaths) != 2 {
 		t.Errorf("successfulPaths len = %d, want 2", len(successfulPaths))
 	}
-	if !strings.HasSuffix(refsRoot, "-refs") {
-		t.Errorf("refs root naming wrong: %s", refsRoot)
+	if filepath.Base(refsRoot) != ".refs" {
+		t.Errorf("refs root naming wrong: %s (want trailing .refs)", refsRoot)
+	}
+	if filepath.Dir(refsRoot) != primary {
+		t.Errorf("refs root parent should be primary worktree; got parent=%s want=%s",
+			filepath.Dir(refsRoot), primary)
 	}
 	if !strings.HasSuffix(successful[0].Path, "frontend__web") {
 		t.Errorf("ref dir naming wrong for ref[0]: %s", successful[0].Path)

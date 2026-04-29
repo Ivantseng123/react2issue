@@ -63,6 +63,20 @@ type Pending struct {
 	// keeping every abandoned step around.
 	SessionMsgTSs []string
 
+	// LastAckTS / LastAckValue track the most recent ":white_check_mark: X"
+	// breadcrumb so a follow-on selector with MergeWithLastAck can append
+	// itself ("repo, branch") into one breadcrumb instead of leaving two.
+	// Updated by the bot ack path on every non-transitional click.
+	LastAckTS    string
+	LastAckValue string
+
+	// NextAckMerges is set when the most recently posted selector had
+	// SelectorSpec.MergeWithLastAck. The next click will merge its ack into
+	// LastAckTS (updating LastAckValue) and delete its own selector message
+	// rather than leaving a separate breadcrumb. Reset to false after every
+	// click. Lifetime: posted-true → click consumes → reset.
+	NextAckMerges bool
+
 	// invalidated is set by HandleBackToRepo when the user abandons this pending
 	// generation. An in-flight repo-prep goroutine that completes after the
 	// back-button was clicked must observe this flag and skip posting the
@@ -170,6 +184,19 @@ type SelectorSpec struct {
 	BackLabel      string
 	CancelActionID string
 	CancelLabel    string
+
+	// MergeWithLastAck causes this selector's eventual ack to merge with
+	// the previous breadcrumb (Pending.LastAckTS) rather than leave its own
+	// "✅ value" line. Used to collapse repo + branch into a single
+	// "✅ owner/name, branch" breadcrumb so a 5-step flow doesn't leave 5
+	// breadcrumb messages in the thread.
+	//
+	// Sequencing: workflow sets this on the SelectorSpec for selectors
+	// whose pick is a continuation of the previous (e.g. branch picker
+	// after repo picker). The bot records it on Pending.NextAckMerges at
+	// post time; on click, the ack path consumes the flag, merges, and
+	// resets.
+	MergeWithLastAck bool
 }
 
 // Workflow is the polymorphic contract each workflow type implements.

@@ -242,8 +242,11 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 
 	case "ask_ref_pick":
 		// Cancellation (returning to attach prompt etc.) — bail out of refs
-		// entirely and proceed to prior-answer/description.
-		if value == "back_to_decide" || value == "ask_ref_back" {
+		// entirely and proceed to prior-answer/description. Match both the
+		// static-button value ("back_to_decide") and the external-select
+		// cancel button's label ("← 不加 ref"), since the slack adapter sends
+		// the label as the action value for cancel buttons.
+		if value == "back_to_decide" || value == "ask_ref_back" || value == "← 不加 ref" {
 			st.AddRefs = false
 			return w.priorAnswerOrDescriptionStep(p), nil
 		}
@@ -251,15 +254,20 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 			Repo:     value,
 			CloneURL: cleanCloneURL(value),
 		})
-		return w.refContinueStep(p), nil
+		// Inline branch pick — ask THIS ref's branch immediately so the
+		// repo+branch decision is one coherent step from the user's view.
+		// Earlier design separated all picks from all branches, but that
+		// asks the user to remember "did I want main for frontend, or for
+		// backend?" 3 refs later. Inline matches primary's flow shape.
+		st.RefBranchIdx = len(st.RefRepos) - 1
+		return w.nextRefBranchStep(p), nil
 
 	case "ask_ref_continue":
 		switch value {
 		case "more":
 			return w.refPickStep(p), nil
 		case "done":
-			st.RefBranchIdx = 0
-			return w.nextRefBranchStep(p), nil
+			return w.priorAnswerOrDescriptionStep(p), nil
 		default:
 			return NextStep{Kind: NextStepError, ErrorText: fmt.Sprintf(":x: unexpected ref_continue value: %q", value)}, nil
 		}
@@ -269,8 +277,8 @@ func (w *AskWorkflow) Selection(ctx context.Context, p *Pending, value string) (
 			return NextStep{Kind: NextStepCancel}, nil
 		}
 		st.RefRepos[st.RefBranchIdx].Branch = value
-		st.RefBranchIdx++
-		return w.nextRefBranchStep(p), nil
+		// Branch picked → loop pivot ("再加一個 / 完成").
+		return w.refContinueStep(p), nil
 
 	case "ask_prior_answer_prompt":
 		// Standalone yes/no on whether to carry the bot's last substantive
@@ -371,9 +379,10 @@ func (w *AskWorkflow) afterRepoSelectedStep(p *Pending) NextStep {
 	return NextStep{
 		Kind: NextStepSelector,
 		Selector: &SelectorSpec{
-			Prompt:   fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
-			ActionID: "ask_branch",
-			Options:  options,
+			Prompt:           fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
+			ActionID:         "ask_branch",
+			Options:          options,
+			MergeWithLastAck: true, // collapse "✅ repo" + "✅ branch" → "✅ repo, branch"
 		},
 		Pending: p,
 	}
@@ -546,16 +555,18 @@ func (w *AskWorkflow) refContinueStep(p *Pending) NextStep {
 	}
 }
 
-// nextRefBranchStep advances the per-ref branch picker. Mirrors the
-// primary's afterRepoSelectedStep skip rules: branch_select disabled OR
-// ≤ 1 branch resolved → use the (sole or default) branch and move on.
-// Otherwise show a type-ahead branch picker. When idx exhausts the ref
-// list, drops out of the ref flow into the prior-answer/description path.
+// nextRefBranchStep handles the branch decision for the just-picked ref
+// (st.RefRepos[RefBranchIdx]). Same skip rules as primary:
+//   - branch_select disabled  → no picker, leave Branch empty
+//   - ≤ 1 branch resolved     → auto-fill (or leave empty), no picker
+//   - otherwise               → show picker
+//
+// In all "no picker" cases the next step is refContinueStep (loop pivot),
+// not priorAnswerOrDescriptionStep — the user is always given a chance to
+// add another ref or end the loop, even when individual branch choices
+// are skipped.
 func (w *AskWorkflow) nextRefBranchStep(p *Pending) NextStep {
 	st := p.State.(*askState)
-	if st.RefBranchIdx >= len(st.RefRepos) {
-		return w.priorAnswerOrDescriptionStep(p)
-	}
 	target := st.RefRepos[st.RefBranchIdx].Repo
 
 	cc := w.cfg.ChannelDefaults
@@ -563,9 +574,7 @@ func (w *AskWorkflow) nextRefBranchStep(p *Pending) NextStep {
 		cc = c
 	}
 	if !cc.IsBranchSelectEnabled() {
-		// All refs use default branch (Branch stays empty).
-		st.RefBranchIdx++
-		return w.nextRefBranchStep(p)
+		return w.refContinueStep(p)
 	}
 
 	var branches []string
@@ -586,8 +595,7 @@ func (w *AskWorkflow) nextRefBranchStep(p *Pending) NextStep {
 		if len(branches) == 1 {
 			st.RefRepos[st.RefBranchIdx].Branch = branches[0]
 		}
-		st.RefBranchIdx++
-		return w.nextRefBranchStep(p)
+		return w.refContinueStep(p)
 	}
 
 	st.BranchTargetRepo = target
@@ -600,9 +608,10 @@ func (w *AskWorkflow) nextRefBranchStep(p *Pending) NextStep {
 	return NextStep{
 		Kind: NextStepSelector,
 		Selector: &SelectorSpec{
-			Prompt:   fmt.Sprintf(":point_right: Which branch of ref `%s`?", target),
-			ActionID: "ask_ref_branch",
-			Options:  options,
+			Prompt:           fmt.Sprintf(":point_right: Which branch of ref `%s`?", target),
+			ActionID:         "ask_ref_branch",
+			Options:          options,
+			MergeWithLastAck: true, // collapse ref's "✅ repo" + "✅ branch" → "✅ repo, branch"
 		},
 		Pending: p,
 	}

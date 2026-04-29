@@ -556,12 +556,13 @@ func (w *IssueWorkflow) afterRepoSelected(p *Pending, channelCfg config.ChannelC
 	return NextStep{
 		Kind: NextStepSelector,
 		Selector: &SelectorSpec{
-			Prompt:       fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
-			ActionID:     "branch_select",
-			Options:      labelsToOptions(branches),
-			Placeholder:  "選擇 branch...",
-			BackActionID: backAction,
-			BackLabel:    backLabel,
+			Prompt:           fmt.Sprintf(":point_right: Which branch of `%s`?", st.SelectedRepo),
+			ActionID:         "branch_select",
+			Options:          labelsToOptions(branches),
+			Placeholder:      "選擇 branch...",
+			BackActionID:     backAction,
+			BackLabel:        backLabel,
+			MergeWithLastAck: true, // collapse "✅ repo" + "✅ branch" → "✅ repo, branch"
 		},
 		Pending: p,
 	}

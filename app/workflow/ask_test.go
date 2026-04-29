@@ -990,10 +990,13 @@ func TestAskWorkflow_RefFlow_PickFiltersPrimary(t *testing.T) {
 	}
 }
 
-// TestAskWorkflow_RefFlow_PickAccumulatesAndContinues covers the loop
-// pivot: pick a ref → ref_continue selector with "再加一個 / 開始問問題".
-func TestAskWorkflow_RefFlow_PickAccumulatesAndContinues(t *testing.T) {
+// TestAskWorkflow_RefFlow_PickGoesToContinueWhenNoBranchSelect covers
+// the inline flow: pick a ref → branch_select disabled → branch loop
+// drains instantly → land on continue ("再加一個 / 開始問問題"). Without
+// branch_select, this is the natural shape.
+func TestAskWorkflow_RefFlow_PickGoesToContinueWhenNoBranchSelect(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
+	// branch_select default false → ref branch picker skipped per ref.
 	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux", "third/repo"}
 	p := &Pending{
 		Phase:     "ask_ref_pick",
@@ -1020,6 +1023,38 @@ func TestAskWorkflow_RefFlow_PickAccumulatesAndContinues(t *testing.T) {
 		if !wantSet[v] {
 			t.Errorf("unexpected continue option %q (got %v)", v, values)
 		}
+	}
+}
+
+// TestAskWorkflow_RefFlow_PickGoesToBranchWhenBranchSelect covers the
+// inline interleaved flow: pick a ref → ask_ref_branch fires for THAT ref
+// (not all refs collected first). User-reported UX bug: collecting all
+// refs before any branches asks "did I want main for frontend or backend?"
+// 3 refs later, which is wrong. Inline matches primary's flow shape.
+func TestAskWorkflow_RefFlow_PickGoesToBranchWhenBranchSelect(t *testing.T) {
+	w, _ := newTestAskWorkflow(t)
+	trueVal := true
+	w.cfg.ChannelDefaults.BranchSelect = &trueVal
+	w.cfg.ChannelDefaults.Branches = []string{"main", "release"}
+	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux", "third/repo"}
+	p := &Pending{
+		Phase:     "ask_ref_pick",
+		State:     &askState{AttachRepo: true, SelectedRepo: "foo/bar", AddRefs: true},
+		ChannelID: "C1", ThreadTS: "1.0",
+	}
+	step, err := w.Selection(context.Background(), p, "baz/qux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_branch" {
+		t.Fatalf("Phase = %q, want ask_ref_branch (inline branch pick)", p.Phase)
+	}
+	st := p.State.(*askState)
+	if st.BranchTargetRepo != "baz/qux" {
+		t.Errorf("BranchTargetRepo = %q, want baz/qux (the just-picked ref)", st.BranchTargetRepo)
+	}
+	if !strings.Contains(step.Selector.Prompt, "baz/qux") {
+		t.Errorf("prompt should reference baz/qux; got %q", step.Selector.Prompt)
 	}
 }
 
@@ -1066,7 +1101,9 @@ func TestAskWorkflow_RefFlow_PickDedupAlreadyPicked(t *testing.T) {
 
 // TestAskWorkflow_RefFlow_ContinueExhaustedPoolHidesMore covers a UX detail:
 // when the static candidate pool is fully consumed, "再加一個" drops from
-// the continue selector since there's nothing to pick.
+// the continue selector since there's nothing to pick. Picks the only
+// remaining ref (baz/qux); branch_select disabled so we land directly on
+// the continue selector with the exhausted pool.
 func TestAskWorkflow_RefFlow_ContinueExhaustedPoolHidesMore(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
 	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
@@ -1083,6 +1120,9 @@ func TestAskWorkflow_RefFlow_ContinueExhaustedPoolHidesMore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if p.Phase != "ask_ref_continue" {
+		t.Fatalf("Phase = %q, want ask_ref_continue (no branch_select → straight to continue)", p.Phase)
+	}
 	values := selectorValues(step.Selector.Options)
 	for _, v := range values {
 		if v == "more" {
@@ -1094,12 +1134,12 @@ func TestAskWorkflow_RefFlow_ContinueExhaustedPoolHidesMore(t *testing.T) {
 	}
 }
 
-// TestAskWorkflow_RefFlow_ContinueDoneEnterBranchLoop covers transition
-// from ref_continue "done" into per-ref branch selection. When branch_select
-// is disabled, the loop should drain instantly into prior-answer/description.
-func TestAskWorkflow_RefFlow_ContinueDoneEnterBranchLoop(t *testing.T) {
+// TestAskWorkflow_RefFlow_ContinueDoneRoutesToDescription covers
+// "開始問問題" — exits the ref loop entirely. Branches are already filled
+// per-ref during pick (inline flow), so done has no branch loop to enter;
+// it goes straight to prior-answer/description.
+func TestAskWorkflow_RefFlow_ContinueDoneRoutesToDescription(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
-	// branch_select default is nil/false, so refs use default branch.
 	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "baz/qux"}
 	p := &Pending{
 		Phase: "ask_ref_continue",
@@ -1117,80 +1157,99 @@ func TestAskWorkflow_RefFlow_ContinueDoneEnterBranchLoop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// branch_select disabled → branch loop drains, lands on description.
 	if p.Phase != "ask_description_prompt" {
 		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
 	}
-	st := p.State.(*askState)
-	if st.RefRepos[0].Branch != "" {
-		t.Errorf("ref branch should remain empty (default branch), got %q", st.RefRepos[0].Branch)
-	}
 }
 
-// TestAskWorkflow_RefFlow_PerRefBranchPicker covers per-ref branch
-// selection with multiple branches available — verifies BranchTargetRepo
-// is set to the current ref so HandleBranchSuggestion picks the right
-// repo, and that each ref gets its own decision.
-func TestAskWorkflow_RefFlow_PerRefBranchPicker(t *testing.T) {
+// TestAskWorkflow_RefFlow_InlineBranchPickerPerRef covers the full inline
+// flow: pick ref1 → branch1 → continue → pick ref2 → branch2 → done. Each
+// ref's branch is asked immediately after picking that ref, not deferred
+// to a separate end-of-flow loop. RefBranchIdx tracks which ref we're
+// branch-picking for so RefRepos[idx].Branch lands on the right ref.
+func TestAskWorkflow_RefFlow_InlineBranchPickerPerRef(t *testing.T) {
 	w, _ := newTestAskWorkflow(t)
 	trueVal := true
 	w.cfg.ChannelDefaults.BranchSelect = &trueVal
 	w.cfg.ChannelDefaults.Branches = []string{"main", "release"}
 	w.cfg.ChannelDefaults.Repos = []string{"foo/bar", "frontend/web", "backend/api"}
 	p := &Pending{
-		Phase: "ask_ref_continue",
+		Phase: "ask_ref_pick",
 		State: &askState{
 			AttachRepo:   true,
 			SelectedRepo: "foo/bar",
 			AddRefs:      true,
-			RefRepos: []queue.RefRepo{
-				{Repo: "frontend/web", CloneURL: "u1"},
-				{Repo: "backend/api", CloneURL: "u2"},
-			},
 		},
 		ChannelID: "C1", ThreadTS: "1.0",
 	}
-	// "done" → enter ref branch loop, first ref picker shows.
-	step, err := w.Selection(context.Background(), p, "done")
+
+	// Pick ref1 → branch picker fires for ref1 immediately.
+	step, err := w.Selection(context.Background(), p, "frontend/web")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if p.Phase != "ask_ref_branch" {
-		t.Fatalf("Phase = %q, want ask_ref_branch", p.Phase)
+		t.Fatalf("after ref1 pick, Phase = %q, want ask_ref_branch", p.Phase)
 	}
 	st := p.State.(*askState)
 	if st.BranchTargetRepo != "frontend/web" {
-		t.Errorf("BranchTargetRepo = %q, want frontend/web (first ref)", st.BranchTargetRepo)
+		t.Errorf("BranchTargetRepo = %q, want frontend/web", st.BranchTargetRepo)
 	}
 	if !strings.Contains(step.Selector.Prompt, "frontend/web") {
 		t.Errorf("prompt should reference frontend/web; got %q", step.Selector.Prompt)
 	}
 
-	// Pick branch for first ref → advance to second ref's branch picker.
-	step, err = w.Selection(context.Background(), p, "main")
+	// Pick ref1's branch → loop pivot (continue selector).
+	_, err = w.Selection(context.Background(), p, "main")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_continue" {
+		t.Fatalf("after ref1 branch pick, Phase = %q, want ask_ref_continue", p.Phase)
 	}
 	if st.RefRepos[0].Branch != "main" {
 		t.Errorf("ref[0].Branch = %q, want main", st.RefRepos[0].Branch)
 	}
-	if p.Phase != "ask_ref_branch" {
-		t.Fatalf("Phase = %q, want still ask_ref_branch (next ref)", p.Phase)
+
+	// "再加一個" → back to pick.
+	_, err = w.Selection(context.Background(), p, "more")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if st.BranchTargetRepo != "backend/api" {
-		t.Errorf("BranchTargetRepo = %q, want backend/api (second ref)", st.BranchTargetRepo)
+	if p.Phase != "ask_ref_pick" {
+		t.Fatalf("after 'more', Phase = %q, want ask_ref_pick", p.Phase)
 	}
 
-	// Pick branch for second ref → drain into prior-answer/description.
+	// Pick ref2 → its branch picker fires.
+	_, err = w.Selection(context.Background(), p, "backend/api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Phase != "ask_ref_branch" {
+		t.Fatalf("after ref2 pick, Phase = %q, want ask_ref_branch", p.Phase)
+	}
+	if st.BranchTargetRepo != "backend/api" {
+		t.Errorf("BranchTargetRepo = %q, want backend/api", st.BranchTargetRepo)
+	}
+
+	// Pick ref2's branch → continue → done.
 	_, err = w.Selection(context.Background(), p, "release")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if p.Phase != "ask_ref_continue" {
+		t.Fatalf("after ref2 branch pick, Phase = %q, want ask_ref_continue", p.Phase)
+	}
 	if st.RefRepos[1].Branch != "release" {
 		t.Errorf("ref[1].Branch = %q, want release", st.RefRepos[1].Branch)
 	}
+
+	_, err = w.Selection(context.Background(), p, "done")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.Phase != "ask_description_prompt" {
-		t.Errorf("Phase = %q, want ask_description_prompt", p.Phase)
+		t.Errorf("after 'done', Phase = %q, want ask_description_prompt", p.Phase)
 	}
 }
 

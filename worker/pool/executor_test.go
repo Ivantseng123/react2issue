@@ -428,9 +428,10 @@ func TestExecuteJob_MultiRepo_EndToEnd(t *testing.T) {
 
 	// dirtyingRunner writes into the successful ref's worktree before
 	// returning so the post-execute guard sees a non-empty `git status` and
-	// fires the lenient callback. Path is deterministic from refDirName.
+	// fires the lenient callback. Path is deterministic from refsRootPath +
+	// refDirName.
 	runner := &dirtyingRunner{
-		dirtyPath: filepath.Join(primaryPath+"-refs", "frontend__web", "agent-wrote-here.txt"),
+		dirtyPath: filepath.Join(primaryPath, ".refs", "frontend__web", "agent-wrote-here.txt"),
 		output:    "answer body",
 	}
 
@@ -503,7 +504,7 @@ func TestExecuteJob_MultiRepo_EndToEnd(t *testing.T) {
 		t.Errorf("RemoveWorktree path = %q, want suffix frontend__web",
 			repo.removedWorktrees[0])
 	}
-	refsRoot := primaryPath + "-refs"
+	refsRoot := filepath.Join(primaryPath, ".refs")
 	if _, err := os.Stat(refsRoot); !os.IsNotExist(err) {
 		t.Errorf("refs root should be cleaned up; stat err = %v", err)
 	}
