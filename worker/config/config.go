@@ -41,8 +41,14 @@ type AgentConfig struct {
 	Args      []string      `yaml:"args"`
 	ExtraArgs []string      `yaml:"extra_args"`
 	Timeout   time.Duration `yaml:"timeout"`
-	SkillDir  string        `yaml:"skill_dir"`
-	Stream    bool          `yaml:"stream"`
+	// InactivityTimeout: if > 0 and Stream is true, send SIGTERM when no
+	// stream event arrives within this duration. Default zero (disabled).
+	// Only meaningful for streaming agents — non-stream CLIs emit no events
+	// and would be killed prematurely if applied. Should be shorter than
+	// Timeout but long enough for a thinking-heavy turn (e.g. 2m).
+	InactivityTimeout time.Duration `yaml:"inactivity_timeout"`
+	SkillDir          string        `yaml:"skill_dir"`
+	Stream            bool          `yaml:"stream"`
 }
 
 // PromptConfig is the worker-owned prompt extension (the extra_rules segment
