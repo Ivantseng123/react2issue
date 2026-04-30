@@ -64,7 +64,12 @@ func TestDetectVersion_EmptyOutput(t *testing.T) {
 func TestDetectVersion_RespectsTimeout(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "slow-cli")
-	os.WriteFile(script, []byte("#!/bin/sh\nsleep 10\necho slow\n"), 0755)
+	// `exec` replaces the shell with sleep so the cancel signal hits the
+	// sleep process directly (same PID). Without `exec`, sh is the parent
+	// and orphaned sleep keeps the stdout/stderr pipes open until it
+	// finishes naturally, blocking CombinedOutput on Linux. macOS appears
+	// to behave differently, hence local-pass / CI-fail.
+	os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 10\n"), 0755)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
