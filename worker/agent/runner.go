@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -176,18 +177,44 @@ func (r *Runner) runOne(ctx context.Context, logger *slog.Logger, agent config.A
 	}
 	logger.Info("Agent process 已啟動", "phase", "處理中", "command", agent.Command, "pid", cmd.Process.Pid)
 
+	// Inactivity timer fires SIGTERM when no stream event arrives within
+	// agent.InactivityTimeout. Streaming agents only — non-stream CLIs emit
+	// no events and would be killed prematurely. Disabled when timeout <= 0.
+	var inactivityKilled atomic.Bool
+	eventCallback := opts.OnEvent
+	if agent.InactivityTimeout > 0 && agent.Stream {
+		inactivityTimer := time.AfterFunc(agent.InactivityTimeout, func() {
+			inactivityKilled.Store(true)
+			logger.Warn("Inactivity timeout 觸發，發送 SIGTERM",
+				"phase", "失敗",
+				"command", agent.Command,
+				"timeout", agent.InactivityTimeout)
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		})
+		defer inactivityTimer.Stop()
+		eventCallback = func(evt queue.StreamEvent) {
+			inactivityTimer.Reset(agent.InactivityTimeout)
+			if opts.OnEvent != nil {
+				opts.OnEvent(evt)
+			}
+		}
+	}
+
 	// Read stdout in a goroutine; wait for it before cmd.Wait().
 	var output string
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		output = readOutput(ctx, stdoutPipe, agent.Stream, opts.OnEvent)
+		output = readOutput(ctx, stdoutPipe, agent.Stream, eventCallback)
 	}()
 	wg.Wait()
 
 	err = cmd.Wait()
 	if err != nil {
+		if inactivityKilled.Load() {
+			return "", fmt.Errorf("inactivity timeout after %s (no stream events)", agent.InactivityTimeout)
+		}
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("timeout after %s", timeout)
 		}

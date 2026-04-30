@@ -548,3 +548,123 @@ echo "padding padding padding padding padding padding padding padding"
 		t.Errorf("CLAUDE_CODE_NO_FLICKER did not pass through: %q", output)
 	}
 }
+
+// streamEventLine is one NDJSON line shaped like claude's stream-json
+// `assistant`/`tool_use` event. Used by inactivity-timeout tests to
+// produce real StreamEvents through the runner's parser path.
+const streamEventLine = `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}`
+
+const streamResultLine = `{"type":"result","result":"streamed result with enough characters padding padding padding padding"}`
+
+func TestRunner_InactivityTimeout_Disabled(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "blocking-stream")
+	// Long initial silence; with InactivityTimeout=0 (disabled) this must
+	// still complete successfully because the timer never starts.
+	os.WriteFile(script, []byte(`#!/bin/sh
+sleep 0.5
+echo '`+streamEventLine+`'
+echo '`+streamResultLine+`'
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{{
+		Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
+		Stream: true,
+		// InactivityTimeout: 0 — explicitly disabled.
+	}})
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err != nil {
+		t.Fatalf("disabled inactivity timeout should not kill: %v", err)
+	}
+	if !strings.Contains(output, "streamed result") {
+		t.Errorf("output: %q", output)
+	}
+}
+
+func TestRunner_InactivityTimeout_FiresOnIdleStream(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "idle-stream")
+	// One event then a long silence well past the timeout. `exec sleep`
+	// replaces sh with sleep at the same PID so the inactivity timer's
+	// SIGTERM reaches the actual sleep process. Without exec, orphaned
+	// sleep keeps stdout/stderr pipes open and blocks cmd.Wait on Linux
+	// until natural completion — same trap PR1 fixed in version_test.go
+	// (commit 8acb83c).
+	os.WriteFile(script, []byte(`#!/bin/sh
+echo '`+streamEventLine+`'
+exec sleep 3
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{{
+		Command: script, Args: []string{"{prompt}"}, Timeout: 10 * time.Second,
+		Stream:            true,
+		InactivityTimeout: 300 * time.Millisecond,
+	}})
+	start := time.Now()
+	_, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected inactivity timeout error")
+	}
+	if !strings.Contains(err.Error(), "inactivity timeout") {
+		t.Errorf("err = %q, want substring \"inactivity timeout\"", err.Error())
+	}
+	// Should kill within ~timeout + stream-startup latency, not wait for full sleep.
+	if elapsed > 2*time.Second {
+		t.Errorf("inactivity should fire quickly, elapsed=%v", elapsed)
+	}
+}
+
+func TestRunner_InactivityTimeout_ResetsOnEvent(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "active-stream")
+	// Emit an event every 100ms for ~1s. With timeout=500ms, every event
+	// resets the timer well before expiry, so the run completes normally.
+	os.WriteFile(script, []byte(`#!/bin/sh
+i=0
+while [ $i -lt 8 ]; do
+    echo '`+streamEventLine+`'
+    sleep 0.1
+    i=$((i+1))
+done
+echo '`+streamResultLine+`'
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{{
+		Command: script, Args: []string{"{prompt}"}, Timeout: 10 * time.Second,
+		Stream:            true,
+		InactivityTimeout: 500 * time.Millisecond,
+	}})
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err != nil {
+		t.Fatalf("inactivity timer should reset on each event: %v", err)
+	}
+	if !strings.Contains(output, "streamed result") {
+		t.Errorf("output: %q", output)
+	}
+}
+
+func TestRunner_InactivityTimeout_NotAppliedToNonStream(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "blocking-non-stream")
+	// Non-stream agent that takes longer than the inactivity timeout. Must
+	// complete because the timer is gated on Stream=true.
+	os.WriteFile(script, []byte(`#!/bin/sh
+sleep 0.5
+echo "non-stream output with enough characters padding padding padding padding"
+`), 0755)
+
+	runner := NewRunner([]config.AgentConfig{{
+		Command: script, Args: []string{"{prompt}"}, Timeout: 5 * time.Second,
+		// Stream defaults to false
+		InactivityTimeout: 100 * time.Millisecond, // would fire if applied
+	}})
+	output, err := runner.Run(context.Background(), slog.Default(), dir, "test", RunOptions{})
+	if err != nil {
+		t.Fatalf("inactivity timeout must be no-op for non-stream agents: %v", err)
+	}
+	if !strings.Contains(output, "non-stream output") {
+		t.Errorf("output: %q", output)
+	}
+}
