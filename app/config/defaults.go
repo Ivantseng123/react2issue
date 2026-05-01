@@ -132,7 +132,7 @@ const (
 ===ASK_RESULT===
 {"answer": "<your full markdown answer as a single JSON string>"}
 
-The JSON key MUST be literally "answer" (six letters: a-n-s-w-e-r). Do NOT use "text", "content", "response", "result", "message", or any synonym. Any other key causes a parse failure.`
+The JSON key MUST be literally "answer" — any other key fails to parse.`
 
 	// Mirrors app/workflow/pr_review_parser.go:ReviewResult and the
 	// github-pr-review skill's "Emit the result marker" section. Keep the
@@ -199,32 +199,45 @@ The app strips those sections in degraded runs (low files_found / high open_ques
 // detection log added at the same time.
 const cwdOnlySandboxRule = "All temporary files and shell redirections MUST be written inside the current working directory (e.g. `./fp.json`, `./screenshot.png`). Never write to `/tmp/`, `/var/`, `$HOME`, `~`, or any other path outside cwd — opencode's sandbox treats those as external_directory and headless `opencode run` auto-rejects the write, silently failing the task with no result marker."
 
+// noXMLWrappingRule prevents the model from mirroring the prompt's XML
+// envelope into its reply. The prompt is XML-heavy (security_rules /
+// output_rules / response_schema as nested tags); some models — observed
+// 2026-05-01 with opencode/minimax-m2.5-free — treat that structure as a
+// tool-call template and emit `<parameter>...</parameter>` or
+// `<answer>...</answer>` around their output, escaping the closing JSON
+// quote in the process and breaking the marker-block parsers (ask,
+// issue, pr_review). Shared across workflows because the failure mode is
+// model-side, not workflow-specific.
+const noXMLWrappingRule = "Reply in plain markdown. Do NOT wrap your output in XML tags like `<answer>`, `<parameter>`, or `<response>` — the XML in this prompt is for structuring input to you, not a template for your reply."
+
 var (
+	// Slack mrkdwn syntax detail and self-reference handling are owned by
+	// ask-assistant SKILL.md (§7 and §1 respectively); previous output_rules
+	// duplicated both. Output_rules keeps only the prompt-time hard
+	// constraints that aren't load-bearing in the skill body: the headline
+	// Slack-mrkdwn directive (belt-and-suspenders against models that skip
+	// the skill), the heading ban, and the length cap.
 	defaultAskOutputRules = []string{
-		"Format the answer in Slack mrkdwn — NOT GitHub markdown. Use *text* (single asterisk) for bold, _text_ for italic, ~text~ for strikethrough, <url|label> for links. Do not use # / ## / ### headings; use *bold* as section labels. Triple-backtick fenced code blocks and single-backtick inline code both render correctly.",
-		// Old rule was "No title, no labels — output the answer content only."
-		// That directly contradicted Rule 1 above and SKILL.md §4a, which both
-		// expect *bold* section labels (e.g. *簡答* / *依據*). Agents (correctly)
-		// prioritised this hard-sounding rule and dropped skill structure.
-		// Now: only ban opening heading/title lines, keep the length cap, and
-		// explicitly bless inline *bold* labels so skill structure survives.
-		"Do not open with an H1/H2/H3 heading or standalone title line — start directly with the answer content. *bold* section labels inside the body (e.g. *簡答*, *依據*, *延伸*) are encouraged per the ask-assistant skill. Keep the total answer ≤30000 chars.",
-		"When referring to yourself, use the exact Slack handle from the <bot> tag in <issue_context> (e.g. 'ai_trigger_issue_bot') verbatim. Do NOT invent shorthand like '@bot ask', 'Ask 助理', 'AI 助理', '程式碼助手'. If a sentence doesn't need self-reference, just answer without name-dropping.",
+		"Output Slack mrkdwn (not GitHub markdown): no `#`/`##`/`###` headings — use *bold* as section labels (e.g. *簡答*). Start directly with answer content. Keep total ≤30000 chars.",
 		cwdOnlySandboxRule,
+		noXMLWrappingRule,
 	}
 	defaultPRReviewOutputRules = []string{
 		"Focus on correctness, security, style",
 		"Summary ≤ 2000 chars",
 		cwdOnlySandboxRule,
+		noXMLWrappingRule,
 	}
 	// Issue.OutputRules used to be intentionally empty — formatting rules live
 	// in the triage-issue skill's SKILL.md body template, machine schema lives
 	// in Issue.ResponseSchema. The cwd-only rule is the one exception: it's a
 	// sandbox guard that applies regardless of the skill in use, so it's
 	// promoted from skill text to a hard output_rule per the project convention
-	// "硬規則直接升格到 output_rules".
+	// "硬規則直接升格到 output_rules". noXMLWrappingRule joins it for the
+	// same reason — model-side failure, applies regardless of skill content.
 	defaultIssueOutputRules = []string{
 		cwdOnlySandboxRule,
+		noXMLWrappingRule,
 	}
 )
 
