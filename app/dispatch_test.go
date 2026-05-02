@@ -30,6 +30,8 @@ func (f *fakeTokenSource) MintFresh() (string, error) {
 	return f.token, nil
 }
 
+func (f *fakeTokenSource) IsAccessible(_ string) bool { return true }
+
 func newSecretKey(t *testing.T) []byte {
 	t.Helper()
 	key := make([]byte, 32)

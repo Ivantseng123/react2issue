@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -30,16 +31,27 @@ func newTestSource(t *testing.T, srv *httptest.Server, key *rsa.PrivateKey, nowF
 	}
 }
 
-// mintHandler returns a handler that responds with sequential tokens
-// (token-1, token-2, ...) and expiry = now + 60min, counting hits.
+// mintHandler returns a handler that responds to mint requests with
+// sequential tokens (token-1, token-2, ...) and expiry = now + 60min,
+// counting only mint hits. Other endpoints (notably
+// /installation/repositories called from mintLocked) are answered with
+// an empty list and do not count toward the mint counter.
 func mintHandler(now func() time.Time, hits *atomic.Int32) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		n := hits.Add(1)
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			n := hits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			expires := now().Add(60 * time.Minute).UTC().Format(time.RFC3339)
+			body := fmt.Sprintf(`{"token":"token-%d","expires_at":%q}`, n, expires)
+			_, _ = w.Write([]byte(body))
+			return
+		}
+		// /installation/repositories — return empty list so mintLocked's
+		// accessibleRepos refresh succeeds without affecting the counter.
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		expires := now().Add(60 * time.Minute).UTC().Format(time.RFC3339)
-		body := fmt.Sprintf(`{"token":"token-%d","expires_at":%q}`, n, expires)
-		_, _ = w.Write([]byte(body))
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"repositories":[]}`))
 	}
 }
 
@@ -181,6 +193,106 @@ func TestAppInstallationSource_ConcurrentGetMintFreshNoRace(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestStaticPATSource_IsAccessibleAlwaysTrue(t *testing.T) {
+	s := &staticPATSource{token: "p"}
+	if !s.IsAccessible("any/repo") {
+		t.Error("staticPATSource.IsAccessible should always return true")
+	}
+}
+
+func TestAppInstallationSource_IsAccessibleNilSetReturnsTrue(t *testing.T) {
+	src := &appInstallationSource{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if !src.IsAccessible("acme/repo") {
+		t.Error("nil accessibleRepos should not block dispatch — defer to worker-side error")
+	}
+}
+
+func TestAppInstallationSource_IsAccessiblePopulatedAfterMint(t *testing.T) {
+	now := time.Date(2026, 5, 2, 12, 0, 0, 0, time.UTC)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/access_tokens") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			expires := now.Add(60 * time.Minute).UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"token":"ghs_x","expires_at":%q}`, expires)))
+			return
+		}
+		// /installation/repositories — return two repos on first page.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"repositories":[{"full_name":"Acme/Service"},{"full_name":"acme/library"}]}`))
+	}))
+	defer srv.Close()
+
+	src := newTestSource(t, srv, generateTestKey(t), func() time.Time { return now })
+
+	if _, err := src.Get(); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if !src.IsAccessible("acme/service") {
+		t.Error("expected acme/service in accessibleRepos (case-insensitive match)")
+	}
+	if !src.IsAccessible("ACME/LIBRARY") {
+		t.Error("expected ACME/LIBRARY in accessibleRepos (case-insensitive match)")
+	}
+	if src.IsAccessible("other/repo") {
+		t.Error("other/repo should not be accessible")
+	}
+}
+
+func TestListInstallationRepos_Pagination(t *testing.T) {
+	page := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch page {
+		case 1:
+			// Build a 100-item first page so pagination is forced.
+			items := make([]string, 100)
+			for i := range items {
+				items[i] = fmt.Sprintf(`{"full_name":"org/repo-%d"}`, i)
+			}
+			_, _ = w.Write([]byte(`{"repositories":[` + strings.Join(items, ",") + `]}`))
+		case 2:
+			_, _ = w.Write([]byte(`{"repositories":[{"full_name":"org/last"}]}`))
+		default:
+			t.Errorf("unexpected page %d", page)
+		}
+	}))
+	defer srv.Close()
+
+	repos, err := listInstallationRepos(srv.Client(), srv.URL, "tok")
+	if err != nil {
+		t.Fatalf("listInstallationRepos: %v", err)
+	}
+	if len(repos) != 101 {
+		t.Errorf("got %d repos, want 101 (100 + 1)", len(repos))
+	}
+	if _, ok := repos["org/last"]; !ok {
+		t.Error("missing org/last from second page")
+	}
+	if page != 2 {
+		t.Errorf("expected 2 page fetches, got %d", page)
+	}
+}
+
+func TestListInstallationRepos_NonOKReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"resource not accessible by integration"}`))
+	}))
+	defer srv.Close()
+	_, err := listInstallationRepos(srv.Client(), srv.URL, "tok")
+	if err == nil {
+		t.Fatal("expected error on 403")
+	}
 }
 
 func TestAppInstallationSource_MintErrorPropagates(t *testing.T) {

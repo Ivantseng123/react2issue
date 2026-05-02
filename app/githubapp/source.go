@@ -2,17 +2,19 @@ package githubapp
 
 import (
 	"crypto/rsa"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
-// TokenSource provides GitHub auth tokens for the app process. Two methods
-// because the two callers have different freshness needs: app-internal
-// clients can tolerate cached tokens (Get), while job dispatch wants a
-// just-minted one so workers receive close to the full 60min TTL
-// (MintFresh).
+// TokenSource provides GitHub auth tokens for the app process. Two
+// freshness modes (Get / MintFresh) plus a coarse accessibility check
+// for the dispatch-time cross-installation guard.
 type TokenSource interface {
 	// Get returns a token, possibly cached. Caller accepts that the
 	// returned token may have as little as 50 minutes remaining TTL.
@@ -21,6 +23,15 @@ type TokenSource interface {
 	// MintFresh always mints a new installation token, bypassing any
 	// cache, and updates the cache with the new value.
 	MintFresh() (string, error)
+
+	// IsAccessible reports whether the source can authenticate against
+	// the given owner/repo slug (case-insensitive). PAT mode always
+	// returns true (PAT scope is opaque to the source). App mode
+	// consults the accessibleRepos set populated during minting; if
+	// the set has not been populated yet (no mint has occurred), App
+	// mode also returns true so the very first dispatch is not
+	// reflexively blocked.
+	IsAccessible(ownerRepo string) bool
 }
 
 // staticPATSource adapts a personal access token to the TokenSource
@@ -28,8 +39,9 @@ type TokenSource interface {
 // without branching.
 type staticPATSource struct{ token string }
 
-func (s *staticPATSource) Get() (string, error)       { return s.token, nil }
-func (s *staticPATSource) MintFresh() (string, error) { return s.token, nil }
+func (s *staticPATSource) Get() (string, error)         { return s.token, nil }
+func (s *staticPATSource) MintFresh() (string, error)   { return s.token, nil }
+func (s *staticPATSource) IsAccessible(_ string) bool   { return true }
 
 // appInstallationSource mints GitHub installation tokens via the
 // /app/installations/{id}/access_tokens endpoint and caches the result
@@ -44,9 +56,10 @@ type appInstallationSource struct {
 	logger         *slog.Logger
 	now            func() time.Time
 
-	mu        sync.Mutex
-	cached    string
-	expiresAt time.Time
+	mu              sync.Mutex
+	cached          string
+	expiresAt       time.Time
+	accessibleRepos map[string]struct{} // lower-cased "owner/repo"; nil = uninitialized
 }
 
 // minCachedTTL is the floor TTL that Get is allowed to hand back. With a
@@ -69,7 +82,10 @@ func (s *appInstallationSource) MintFresh() (string, error) {
 	return s.mintLocked()
 }
 
-// mintLocked must be called with s.mu held. Updates cache on success.
+// mintLocked must be called with s.mu held. Updates cache on success
+// and refreshes the accessibleRepos set so cross-installation checks
+// at dispatch time stay consistent with the App's current install
+// targets (typical lag ≤ TTL = 60min).
 func (s *appInstallationSource) mintLocked() (string, error) {
 	jwtStr, err := signJWT(s.privateKey, s.appID, s.now())
 	if err != nil {
@@ -86,5 +102,83 @@ func (s *appInstallationSource) mintLocked() (string, error) {
 		"installation_id", s.installationID,
 		"expires_at", expiresAt.Format(time.RFC3339),
 	)
+
+	repos, repoErr := listInstallationRepos(s.httpClient, s.baseURL, token)
+	if repoErr != nil {
+		// Don't fail the mint — IsAccessible degrades to "let through"
+		// when the set is unset, and the worker-side fetch error
+		// surfaces the underlying scope problem regardless.
+		s.logger.Warn("installation repository list failed; cross-installation guard disabled",
+			"phase", "降級",
+			"error", repoErr,
+		)
+	} else {
+		s.accessibleRepos = repos
+		s.logger.Info("installation repository list refreshed",
+			"phase", "完成",
+			"count", len(repos),
+		)
+	}
 	return token, nil
+}
+
+// IsAccessible reports whether the source can authenticate against
+// the given owner/repo slug. Returns true when the set is uninitialized
+// so the very first dispatch (before preflight has a chance to mint)
+// is not blocked.
+func (s *appInstallationSource) IsAccessible(ownerRepo string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.accessibleRepos == nil {
+		return true
+	}
+	_, ok := s.accessibleRepos[strings.ToLower(ownerRepo)]
+	return ok
+}
+
+type installationReposResponse struct {
+	Repositories []struct {
+		FullName string `json:"full_name"`
+	} `json:"repositories"`
+}
+
+// listInstallationRepos walks GET /installation/repositories with
+// per_page=100 pagination and returns the lower-cased owner/repo set
+// the App can currently authenticate against.
+func listInstallationRepos(httpClient *http.Client, baseURL, installationToken string) (map[string]struct{}, error) {
+	set := make(map[string]struct{})
+	page := 1
+	for {
+		url := fmt.Sprintf("%s/installation/repositories?per_page=100&page=%d",
+			strings.TrimRight(baseURL, "/"), page)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build list-repos request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+installationToken)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("list-repos request: %w", err)
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("list-repos status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		var parsed installationReposResponse
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return nil, fmt.Errorf("decode list-repos: %w", err)
+		}
+		for _, r := range parsed.Repositories {
+			set[strings.ToLower(r.FullName)] = struct{}{}
+		}
+		if len(parsed.Repositories) < 100 {
+			break
+		}
+		page++
+	}
+	return set, nil
 }

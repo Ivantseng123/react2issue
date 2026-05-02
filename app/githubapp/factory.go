@@ -18,6 +18,14 @@ import (
 // always go through this factory and inherit the public endpoint.
 const productionMintBaseURL = "https://api.github.com"
 
+// NewPATSource wraps a PAT into a TokenSource. Used by the dispatch
+// path's cross-installation fallback: when the App is not installed at
+// the primary repo's owner but cfg.GitHub.Token is set, the job is
+// minted with the PAT instead of the App installation token.
+func NewPATSource(token string) TokenSource {
+	return &staticPATSource{token: token}
+}
+
 // NewFromConfig returns the TokenSource matching the provided config.
 // App config takes priority when fully populated; partial App config
 // is treated as not-set so preflight can surface a field-level error.
